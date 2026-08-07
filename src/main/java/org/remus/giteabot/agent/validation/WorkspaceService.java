@@ -58,7 +58,7 @@ public class WorkspaceService {
             Files.createDirectories(workspaceBaseDir);
             return Files.createTempDirectory(workspaceBaseDir, "agent-workspace-");
         }
-        return createWorkspaceDir();
+        return Files.createTempDirectory("agent-workspace-");
     }
     /**
      * Clones a repository workspace. When a branch-based shallow clone fails and
