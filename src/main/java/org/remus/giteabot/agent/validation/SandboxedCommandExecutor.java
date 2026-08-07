@@ -111,6 +111,9 @@ public class SandboxedCommandExecutor {
         List<String> cmd = new ArrayList<>(List.of(
                 "docker", "run", "--rm",
                 "--name", name,
+                // The toolchain image carries an ENTRYPOINT (tini + java);
+                // clear it so the sandbox runs exactly the given command.
+                "--entrypoint", "",
                 "--network", config.getNetwork(),
                 "--memory", config.getMemoryMb() + "m",
                 "--cpus", String.valueOf(config.getCpus()),
