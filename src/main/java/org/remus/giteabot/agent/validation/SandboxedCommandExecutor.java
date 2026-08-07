@@ -113,7 +113,9 @@ public class SandboxedCommandExecutor {
                 "--name", name,
                 // The toolchain image carries an ENTRYPOINT (tini + java);
                 // clear it so the sandbox runs exactly the given command.
-                "--entrypoint", "",
+                // Note: must be the "--entrypoint=" (equals) form — docker
+                // mis-parses a separate empty-string argument.
+                "--entrypoint=",
                 "--network", config.getNetwork(),
                 "--memory", config.getMemoryMb() + "m",
                 "--cpus", String.valueOf(config.getCpus()),
