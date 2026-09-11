@@ -82,7 +82,10 @@ Configure `APP_ENCRYPTION_KEY` before storing any SSH private key.
    public key on the token's user account, and stores the encrypted private key.
 
 To replace an automatically configured key, switch to HTTP and save first, then
-run automatic setup again. Clearing credentials, changing the endpoint or token,
+run automatic setup again. If you keep SSH selected during a change that removes
+the managed key, provide a replacement private key. Incomplete SSH replacements
+are rejected before the old key is revoked; the transport is not silently changed
+to HTTP. Clearing credentials, changing the endpoint or token,
 replacing the private key, and deleting an integration remove its managed public
 key from Gitea first. The bot commits HTTP-only state before remote cleanup. If
 cleanup fails, it keeps the old endpoint, token, and key tracking, does not save

@@ -88,6 +88,76 @@ class ManagedSshPersistenceTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"token", "endpoint", "clear", "pending-cleanup"})
+    void incompleteSshReplacementDoesNotRevokeKeyOrChangeCommittedState(String change) {
+        makeManaged();
+        if (change.equals("pending-cleanup")) {
+            service.prepareManagedSshKeyRemoval(saved.getId());
+        }
+        GitIntegration before = readCommitted();
+        GitIntegration input = readCommitted();
+        input.setTransport(GitTransport.SSH);
+        input.setToken(null);
+        input.setSshPrivateKey(null);
+        input.setSshKnownHosts("new-hosts");
+        if (change.equals("token") || change.equals("endpoint")) {
+            input.setToken("replacement-token");
+        }
+        if (change.equals("endpoint")) {
+            input.setUrl("https://new.example.com");
+        }
+        var flash = new RedirectAttributesModelMap();
+
+        controller.save(input, input.getToken(), false, null, "new-hosts", change.equals("clear"), flash);
+
+        assertEquals(GitTransport.SSH, input.getTransport());
+        assertTrue(flash.getFlashAttributes().containsKey("error"));
+        assertFalse(flash.getFlashAttributes().containsKey("success"));
+        assertEquals(before, readCommitted());
+        verifyNoInteractions(factory, commands, client);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SSH", "HTTP"})
+    void validReplacementKeepsRequestedTransportAfterHttpFirstCleanup(String transport) {
+        makeManaged();
+        GitIntegration input = readCommitted();
+        input.setTransport(GitTransport.valueOf(transport));
+        input.setToken(null);
+        input.setSshPrivateKey(transport.equals("SSH") ? "replacement-key" : null);
+        input.setSshKnownHosts(null);
+        String storedToken = readCommitted().getToken();
+        when(factory.getApiClient(any())).thenReturn(client);
+        when(client.getCurrentUserId()).thenReturn(17L);
+        when(client.getSshKeyIdsByTitle("tracked-title")).thenReturn(List.of(42L));
+        doAnswer(call -> {
+            GitIntegration pending = readCommitted();
+            assertEquals(GitTransport.HTTP, pending.getTransport());
+            assertNull(pending.getSshPrivateKey());
+            assertTrue(pending.hasManagedSshKeyTracking());
+            return null;
+        }).when(client).deleteSshKey(42L);
+        var flash = new RedirectAttributesModelMap();
+
+        controller.save(input, null, false, input.getSshPrivateKey(), null, false, flash);
+
+        assertTrue(flash.getFlashAttributes().containsKey("success"));
+        assertFalse(flash.getFlashAttributes().containsKey("error"));
+        GitIntegration after = readCommitted();
+        assertEquals(GitTransport.valueOf(transport), after.getTransport());
+        assertFalse(after.hasManagedSshKeyTracking());
+        assertEquals(storedToken, after.getToken());
+        if (transport.equals("SSH")) {
+            assertEquals("replacement-key", service.decryptSshPrivateKey(after));
+            assertEquals("hosts", after.getSshKnownHosts());
+        } else {
+            assertNull(after.getSshPrivateKey());
+            assertNull(after.getSshKnownHosts());
+        }
+        verify(client).deleteSshKey(42L);
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"GITHUB", "BITBUCKET"})
     void preflightHonorsProviderUrlDefaults(String provider) {
         GitIntegration input = readCommitted();

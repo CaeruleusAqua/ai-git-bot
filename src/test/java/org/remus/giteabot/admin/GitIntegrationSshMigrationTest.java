@@ -111,12 +111,10 @@ class GitIntegrationSshMigrationTest {
                 migrateTo(url, "50");
             }
             // PostgreSQL scripts must also add missing columns, not just tolerate an upgraded schema.
-            for (String migration : new String[]{"V48__git_integration_remote_ssh_key.sql",
-                    "V49__git_integration_remote_ssh_key_owner.sql", "V50__git_integration_remote_ssh_key_title.sql"}) {
-                var resource = new ClassPathResource("db/migration/" + dialect + "/" + migration);
-                ScriptUtils.executeSqlScript(connection, resource);
-                ScriptUtils.executeSqlScript(connection, resource);
-            }
+            var resource = new ClassPathResource(
+                    "db/migration/" + dialect + "/V50__git_integration_managed_ssh_keys.sql");
+            ScriptUtils.executeSqlScript(connection, resource);
+            ScriptUtils.executeSqlScript(connection, resource);
             migrateTo(url, "50");
             try (var result = statement.executeQuery("SELECT * FROM git_integrations WHERE name = 'Managed SSH'")) {
                 result.next();
@@ -129,10 +127,7 @@ class GitIntegrationSshMigrationTest {
                 assertNull(result.getString("ssh_remote_key_title"));
             }
             statement.executeUpdate("UPDATE git_integrations SET ssh_remote_key_id = 42, ssh_remote_key_title = 'unique-title'");
-            for (String migration : new String[]{"V48__git_integration_remote_ssh_key.sql",
-                    "V49__git_integration_remote_ssh_key_owner.sql", "V50__git_integration_remote_ssh_key_title.sql"}) {
-                ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/" + dialect + "/" + migration));
-            }
+            ScriptUtils.executeSqlScript(connection, resource);
             try (var result = statement.executeQuery("SELECT * FROM git_integrations WHERE name = 'Managed SSH'")) {
                 result.next();
                 assertEquals(42L, result.getLong("ssh_remote_key_id"));

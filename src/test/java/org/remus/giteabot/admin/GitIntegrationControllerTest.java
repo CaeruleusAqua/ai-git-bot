@@ -344,7 +344,8 @@ class GitIntegrationControllerTest {
         when(gitIntegrationService.prepareManagedSshKeyRemoval(7L)).thenReturn(existing);
         mockMvc.perform(post("/git-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
                         .param("id", "7").param("name", "production").param("providerType", "GITEA")
-                        .param("url", "https://new.example.com").param("transport", "SSH").param("token", "new-token"))
+                        .param("url", "https://new.example.com").param("transport", "SSH").param("token", "new-token")
+                        .param("sshPrivateKey", "replacement-key").param("sshKnownHosts", "new-hosts"))
                 .andExpect(flash().attributeExists("error"));
         verify(giteaSshSetupService).removeManagedKey(existing, null);
         verify(gitIntegrationService, org.mockito.Mockito.never()).save(any(), anyBoolean(), anyBoolean());
@@ -352,14 +353,14 @@ class GitIntegrationControllerTest {
     }
 
     @Test
-    void save_managedTokenChangeUsesReplacementAtSameEndpointAndDisablesSsh() throws Exception {
+    void save_explicitHttpSelectionUsesReplacementTokenForCleanup() throws Exception {
         GitIntegration existing = managedIntegration();
         when(gitIntegrationService.findById(7L)).thenReturn(Optional.of(existing));
         when(gitIntegrationService.prepareManagedSshKeyRemoval(7L)).thenReturn(existing);
         when(giteaSshSetupService.removeManagedKey(existing, "new-token")).thenReturn(true);
         mockMvc.perform(post("/git-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
                         .param("id", "7").param("name", "production").param("providerType", "GITEA")
-                        .param("url", existing.getUrl()).param("transport", "SSH").param("token", "new-token"))
+                        .param("url", existing.getUrl()).param("transport", "HTTP").param("token", "new-token"))
                 .andExpect(flash().attributeExists("success"));
         verify(gitIntegrationService).save(argThat(input -> input.getTransport() == GitTransport.HTTP
                 && "new-token".equals(input.getToken()) && input.getSshPrivateKey() == null), eq(false), eq(true));

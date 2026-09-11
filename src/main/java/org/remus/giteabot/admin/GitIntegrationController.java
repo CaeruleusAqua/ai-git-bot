@@ -143,11 +143,7 @@ public class GitIntegrationController {
                         || clearSshCredentials || integration.getTransport() != GitTransport.SSH;
                 if (cleanup) {
                     // Managed keys cannot be reused after removal. Manual-key edits do not enter this path.
-                    if (!privateKeyChanged) {
-                        integration.setTransport(GitTransport.HTTP);
-                        integration.setSshPrivateKey(null);
-                        integration.setSshKnownHosts(null);
-                    } else if (!endpointChanged && !clearSshCredentials
+                    if (privateKeyChanged && !endpointChanged && !clearSshCredentials
                             && (integration.getSshKnownHosts() == null || integration.getSshKnownHosts().isBlank())) {
                         integration.setSshKnownHosts(existing.getSshKnownHosts());
                     }
