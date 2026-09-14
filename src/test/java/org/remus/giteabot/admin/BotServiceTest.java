@@ -27,6 +27,8 @@ class BotServiceTest {
     @Mock
     private EncryptionService encryptionService;
 
+    @Mock private jakarta.persistence.EntityManager entityManager;
+
     @InjectMocks
     private BotService botService;
 
@@ -173,25 +175,23 @@ class BotServiceTest {
     void incrementWebhookCallCount_incrementsAndSetsTimestamp() {
         Bot bot = new Bot();
         bot.setWebhookCallCount(5);
-        when(botRepository.save(any(Bot.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         botService.incrementWebhookCallCount(bot);
 
         assertEquals(6, bot.getWebhookCallCount());
         assertNotNull(bot.getLastWebhookAt());
-        verify(botRepository).save(bot);
+        verify(botRepository).incrementWebhookCallCount(bot.getId(), bot.getLastWebhookAt());
     }
 
     @Test
     void recordError_setsErrorInfo() {
         Bot bot = new Bot();
-        when(botRepository.save(any(Bot.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         botService.recordError(bot, "Something went wrong");
 
         assertEquals("Something went wrong", bot.getLastErrorMessage());
         assertNotNull(bot.getLastErrorAt());
-        verify(botRepository).save(bot);
+        verify(botRepository).recordError(bot.getId(), "Something went wrong", bot.getLastErrorAt());
     }
 
     @Test

@@ -1,5 +1,7 @@
 package org.remus.giteabot.admin;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.systemsettings.BotToolConfigurationRepository;
@@ -24,6 +26,8 @@ public class BotService {
     private final BotRepository botRepository;
     private final BotToolConfigurationRepository botToolConfigurationRepository;
     private final EncryptionService encryptionService;
+    private final GitIntegrationRepository gitIntegrationRepository;
+    private final EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public List<Bot> findAll() {
@@ -53,6 +57,15 @@ public class BotService {
      * Clear button in the UI).</p>
      */
     public Bot save(Bot bot, boolean clearSigningSecret) {
+        if (bot.getGitIntegration() != null) {
+            GitIntegration integration = gitIntegrationRepository.findByIdForUpdate(bot.getGitIntegration().getId())
+                    .orElseThrow(() -> new IllegalArgumentException("Git Integration not found"));
+            entityManager.refresh(integration, LockModeType.PESSIMISTIC_WRITE);
+            if (integration.isDeletionPending()) {
+                throw new IllegalStateException("Git Integration deletion is pending");
+            }
+            bot.setGitIntegration(integration);
+        }
         if (bot.getWebhookSecret() == null) {
             bot.setWebhookSecret(UUID.randomUUID().toString());
         }
@@ -109,15 +122,22 @@ public class BotService {
     }
 
     public void incrementWebhookCallCount(Bot bot) {
+        // Never merge an old webhook snapshot: it may restore a fenced integration assignment.
+        if (entityManager.contains(bot)) {
+            entityManager.detach(bot);
+        }
         bot.setWebhookCallCount(bot.getWebhookCallCount() + 1);
         bot.setLastWebhookAt(Instant.now());
-        botRepository.save(bot);
+        botRepository.incrementWebhookCallCount(bot.getId(), bot.getLastWebhookAt());
     }
 
     public void recordError(Bot bot, String errorMessage) {
+        if (entityManager.contains(bot)) {
+            entityManager.detach(bot);
+        }
         bot.setLastErrorMessage(errorMessage);
         bot.setLastErrorAt(Instant.now());
-        botRepository.save(bot);
+        botRepository.recordError(bot.getId(), errorMessage, bot.getLastErrorAt());
     }
 
     /**
