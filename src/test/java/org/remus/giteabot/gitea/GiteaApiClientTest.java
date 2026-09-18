@@ -5,6 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -117,6 +118,63 @@ class GiteaApiClientTest {
         server.expect(requestTo(CREDS.baseUrl() + "/api/v1/user/keys?page=1&limit=50"))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
         assertThrows(IllegalStateException.class, client::getSshKeyIds);
+        server.verify();
+    }
+
+    @Test
+    void getPullRequestHead_resolvesForkRepositoryAndBranch() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/base/project/pulls/7"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"head":{"ref":"main","sha":"abc123","repo":{
+                          "name":"project","full_name":"contributor/project",
+                          "owner":{"login":"contributor"}}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        PullRequestHead head = client.getPullRequestHead("base", "project", 7L, "main");
+
+        assertEquals("contributor", head.owner());
+        assertEquals("project", head.repository());
+        assertEquals("main", head.branch());
+        assertEquals("abc123", head.sha());
+        server.verify();
+    }
+
+    @Test
+    void getPullRequestHead_rejectsBranchMismatch() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/base/project/pulls/7"))
+                .andRespond(withSuccess("""
+                        {"head":{"ref":"feature/source","sha":"abc123","repo":{
+                          "name":"project","owner":{"login":"contributor"}}}}
+                        """, MediaType.APPLICATION_JSON));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> client.getPullRequestHead("base", "project", 7L, "main"));
+
+        assertTrue(error.getMessage().contains("does not match"));
+        server.verify();
+    }
+
+    @Test
+    void getPullRequestHead_rejectsMissingSourceRepository() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/base/project/pulls/7"))
+                .andRespond(withSuccess("{" + "\"head\":{\"ref\":\"main\",\"sha\":\"abc123\"}}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThrows(IllegalStateException.class,
+                () -> client.getPullRequestHead("base", "project", 7L, "main"));
         server.verify();
     }
 
