@@ -62,6 +62,7 @@ class AgentLoopToolModeTest {
         LoopOutcome outcome = loop.run(ctx, "go", strategy);
 
         assertThat(outcome.success()).isTrue();
+        assertThat(outcome.payload()).isEqualTo("native");
         verify(aiClient, times(1))
                 .chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
         verify(aiClient, never())
@@ -82,8 +83,9 @@ class AgentLoopToolModeTest {
         AgentStrategy strategy = nativeStrategy(List.of(
                 new ToolDescriptor("ping", "ping", null)));
 
-        loop.run(ctx, "go", strategy);
+        LoopOutcome outcome = loop.run(ctx, "go", strategy);
 
+        assertThat(outcome.payload()).isEqualTo("legacy");
         verify(aiClient, never())
                 .chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
         verify(aiClient, times(1))
@@ -92,7 +94,7 @@ class AgentLoopToolModeTest {
 
     @Test
     void run_nativeStrategyWithoutDescriptors_fallsBackToChat() {
-        // supportsNativeTools is irrelevant when descriptors are empty -> no need to stub it.
+        when(aiClient.supportsNativeTools()).thenReturn(true);
         when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
                 .thenReturn("plain text");
 
@@ -103,8 +105,9 @@ class AgentLoopToolModeTest {
 
         AgentStrategy strategy = nativeStrategy(List.of());
 
-        loop.run(ctx, "go", strategy);
+        LoopOutcome outcome = loop.run(ctx, "go", strategy);
 
+        assertThat(outcome.payload()).isEqualTo("legacy");
         verify(aiClient, never())
                 .chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
         verify(aiClient).chat(anyList(), anyString(), anyString(), isNull(), anyInt());
@@ -151,7 +154,10 @@ class AgentLoopToolModeTest {
         return new AgentStrategy() {
             @Override public String systemPrompt() { return "sys"; }
             @Override public StepDecision step(AgentRunContext c, String r, int round) {
-                return new StepDecision.Finish(LoopOutcome.success(c.baseBranch(), null));
+                return new StepDecision.Finish(LoopOutcome.success(c.baseBranch(), "legacy"));
+            }
+            @Override public StepDecision step(AgentRunContext c, ChatTurn turn, int round) {
+                return new StepDecision.Finish(LoopOutcome.success(c.baseBranch(), "native"));
             }
             @Override public LoopOutcome onBudgetExhausted(AgentRunContext c) {
                 return LoopOutcome.fail(c.baseBranch());
@@ -161,4 +167,3 @@ class AgentLoopToolModeTest {
         };
     }
 }
-
