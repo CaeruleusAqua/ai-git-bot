@@ -472,14 +472,15 @@ public class AnthropicAiClient extends AbstractAiClient {
     }
 
     private ChatTurn interpret(AnthropicRequest request, AnthropicResponse response) {
-        if (response == null || response.getContent() == null || response.getContent().isEmpty()) {
+        if (response == null) {
             log.warn("Empty response from Anthropic tool-call request");
-            return ChatTurn.text("Unable to generate response - empty reply from AI.");
+            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
         }
 
         StringBuilder text = new StringBuilder();
         List<ToolCall> calls = new ArrayList<>();
-        for (AnthropicResponse.ContentBlock block : response.getContent()) {
+        List<AnthropicResponse.ContentBlock> content = response.getContent() == null ? List.of() : response.getContent();
+        for (AnthropicResponse.ContentBlock block : content) {
             if ("text".equals(block.getType()) && block.getText() != null) {
                 text.append(block.getText());
             } else if ("tool_use".equals(block.getType())) {
@@ -491,7 +492,7 @@ public class AnthropicAiClient extends AbstractAiClient {
             }
         }
         StopReason reason = mapStopReason(response.getStopReason());
-        if (!calls.isEmpty()) {
+        if (!calls.isEmpty() && reason == StopReason.END_TURN) {
             reason = StopReason.TOOL_USE;
         }
         long inputTokens = 0L;
@@ -594,4 +595,3 @@ public class AnthropicAiClient extends AbstractAiClient {
         return List.of(block.build());
     }
 }
-

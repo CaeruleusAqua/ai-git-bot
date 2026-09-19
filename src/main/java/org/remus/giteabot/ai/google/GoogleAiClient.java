@@ -242,19 +242,18 @@ public class GoogleAiClient extends AbstractAiClient {
     }
 
     private ChatTurn interpret(GoogleAiRequest request, GoogleAiResponse response) {
-        if (response == null || response.getCandidates() == null || response.getCandidates().isEmpty()) {
+        if (response == null) {
             log.warn("Empty response from Google AI tool-call request");
-            return ChatTurn.text("Unable to generate response - empty reply from AI.");
+            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
         }
-        GoogleAiResponse.Candidate candidate = response.getCandidates().getFirst();
-        if (candidate == null || candidate.getContent() == null
-                || candidate.getContent().getParts() == null) {
-            return ChatTurn.text("");
-        }
+        GoogleAiResponse.Candidate candidate = response.getCandidates() == null || response.getCandidates().isEmpty()
+                ? null : response.getCandidates().getFirst();
+        List<GoogleAiResponse.Part> parts = candidate == null || candidate.getContent() == null
+                || candidate.getContent().getParts() == null ? List.of() : candidate.getContent().getParts();
 
         StringBuilder text = new StringBuilder();
         List<ToolCall> calls = new ArrayList<>();
-        for (GoogleAiResponse.Part part : candidate.getContent().getParts()) {
+        for (GoogleAiResponse.Part part : parts) {
             if (part.getText() != null && !part.getText().isBlank()) {
                 text.append(part.getText());
             } else if (part.getFunctionCall() != null) {
@@ -282,8 +281,8 @@ public class GoogleAiClient extends AbstractAiClient {
                         meta));
             }
         }
-        StopReason reason = mapStopReason(candidate.getFinishReason());
-        if (!calls.isEmpty()) {
+        StopReason reason = mapStopReason(candidate == null ? null : candidate.getFinishReason());
+        if (!calls.isEmpty() && reason == StopReason.END_TURN) {
             reason = StopReason.TOOL_USE;
         }
         long inputTokens = 0L;
@@ -423,4 +422,3 @@ public class GoogleAiClient extends AbstractAiClient {
         }
     }
 }
-

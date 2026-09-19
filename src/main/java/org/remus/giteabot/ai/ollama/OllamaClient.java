@@ -189,7 +189,7 @@ public class OllamaClient extends AbstractAiClient {
     private ChatTurn interpret(OllamaRequest request, OllamaResponse response) {
         if (response == null || response.getMessage() == null) {
             log.warn("Empty response from Ollama tool-call request");
-            return ChatTurn.text("Unable to generate response - empty reply from AI.");
+            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
         }
         String text = response.getMessage().getContent() != null ? response.getMessage().getContent() : "";
 
@@ -210,7 +210,8 @@ public class OllamaClient extends AbstractAiClient {
                 calls.add(new ToolCall(originalName + ":" + (idx++), originalName, args));
             }
         }
-        StopReason reason = mapStopReason(response.getDoneReason(), !calls.isEmpty());
+        StopReason reason = response.isDone()
+                ? mapStopReason(response.getDoneReason(), !calls.isEmpty()) : StopReason.OTHER;
         long inputTokens = 0L;
         long outputTokens = 0L;
         if (response.getPromptEvalCount() != null && response.getEvalCount() != null) {
@@ -224,14 +225,11 @@ public class OllamaClient extends AbstractAiClient {
     }
 
     private StopReason mapStopReason(String doneReason, boolean hasToolCalls) {
-        if (hasToolCalls) {
-            return StopReason.TOOL_USE;
-        }
         if (doneReason == null) {
-            return StopReason.END_TURN;
+            return StopReason.OTHER;
         }
         return switch (doneReason) {
-            case "stop", "end_turn" -> StopReason.END_TURN;
+            case "stop", "end_turn" -> hasToolCalls ? StopReason.TOOL_USE : StopReason.END_TURN;
             case "length" -> StopReason.MAX_TOKENS;
             default -> StopReason.OTHER;
         };
@@ -306,9 +304,8 @@ public class OllamaClient extends AbstractAiClient {
             }
         });
 
-        // 0-chunk stream: reproduce the old empty-response path (body() used to
-        // return null for an empty body), so extractText / interpret apply their
-        // existing "Unable to generate ... empty response" fallback.
+        // Keep an empty transport response distinct from a completed model turn.
+        // The text API retains its legacy fallback; native callers receive OTHER.
         OllamaResponse source = finalRef[0] != null ? finalRef[0] : lastRef[0];
         if (source == null) {
             return null;
@@ -359,5 +356,3 @@ public class OllamaClient extends AbstractAiClient {
         return result;
     }
 }
-
-

@@ -174,14 +174,15 @@ public class OpenAiClient extends AbstractAiClient {
     }
 
     private ChatTurn interpret(OpenAiRequest request, OpenAiResponse response) {
-        if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+        if (response == null) {
             log.warn("Empty response from OpenAI tool-call request");
-            return ChatTurn.text("Unable to generate response - empty reply from AI.");
+            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
         }
-        OpenAiResponse.Choice choice = response.getChoices().getFirst();
-        OpenAiResponse.Message message = choice.getMessage();
+        OpenAiResponse.Choice choice = response.getChoices() == null || response.getChoices().isEmpty()
+                ? null : response.getChoices().getFirst();
+        OpenAiResponse.Message message = choice == null ? null : choice.getMessage();
         String text = message != null && message.getContent() != null ? message.getContent() : "";
-        StopReason reason = mapStopReason(choice.getFinishReason());
+        StopReason reason = mapStopReason(choice == null ? null : choice.getFinishReason());
 
         List<ToolCall> calls = new ArrayList<>();
         if (message != null && message.getToolCalls() != null) {
@@ -203,7 +204,7 @@ public class OpenAiClient extends AbstractAiClient {
                 calls.add(new ToolCall(tcr.getId(),
                         ToolNameSanitizer.desanitize(tcr.getFunction().getName()), args));
             }
-            if (!calls.isEmpty()) {
+            if (!calls.isEmpty() && reason == StopReason.END_TURN) {
                 reason = StopReason.TOOL_USE;
             }
         }
@@ -299,5 +300,3 @@ public class OpenAiClient extends AbstractAiClient {
         return content;
     }
 }
-
-
