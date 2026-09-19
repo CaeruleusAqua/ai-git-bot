@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -46,6 +47,9 @@ class I18nCoverageServiceTest {
         AiClient aiClient = mock(AiClient.class);
         SystemPrompt systemPrompt = new SystemPrompt();
         service = new I18nCoverageService(repoClient, aiClient, systemPrompt, workspaceService, agent);
+        lenient().when(workspaceService.checkAuthoritativePullRequestFromFork(
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new WorkspaceService.ForkCheck(false, null));
     }
 
     private I18nCoverageService.Request request(WebhookPayload payload, SuiteLifecycleMode mode) {
@@ -139,13 +143,30 @@ class I18nCoverageServiceTest {
 
     @Test
     void offerAsPr_onAuthoritativeFork_failsBeforePreparingWorkspace() {
-        when(workspaceService.isAuthoritativePullRequestFromFork(
-                repoClient, "acme", "my-repo", "main", 42L)).thenReturn(true);
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L))
+                .thenReturn(new WorkspaceService.ForkCheck(true, null));
 
         I18nCoverageService.Result result = service.run(
                 request(payloadWithHead("main"), SuiteLifecycleMode.OFFER_AS_PR));
 
         assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void offerAsPr_onUnresolvableHead_failsCleanlyBeforePreparingWorkspace() {
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L))
+                .thenReturn(new WorkspaceService.ForkCheck(false, "provider unavailable"));
+
+        I18nCoverageService.Result result = service.run(
+                request(payloadWithHead("main"), SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.FAILED);
+        assertThat(result.summary()).contains("Failed to resolve pull request source repository");
         verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());

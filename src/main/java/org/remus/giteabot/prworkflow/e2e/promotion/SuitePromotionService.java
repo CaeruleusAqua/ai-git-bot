@@ -106,10 +106,16 @@ public class SuitePromotionService {
         }
 
         long prNumber = suite.getPrNumber();
-        if (mode == SuiteLifecycleMode.OFFER_AS_PR
-                && workspaceService.isAuthoritativePullRequestFromFork(
-                        client, repoOwner, repoName, featureBranch, prNumber)) {
-            return Outcome.failure("offer-as-pr is not supported for fork pull requests; no branch was pushed.");
+        if (mode == SuiteLifecycleMode.OFFER_AS_PR) {
+            WorkspaceService.ForkCheck forkCheck = workspaceService.checkAuthoritativePullRequestFromFork(
+                    client, repoOwner, repoName, featureBranch, prNumber);
+            if (forkCheck.failed()) {
+                return Outcome.failure("Failed to resolve pull request source repository: "
+                        + forkCheck.error());
+            }
+            if (forkCheck.fromFork()) {
+                return Outcome.failure("offer-as-pr is not supported for fork pull requests; no branch was pushed.");
+            }
         }
         String baseBranch = switch (mode) {
             case PROMOTE_ON_MERGE -> client.getDefaultBranch(repoOwner, repoName);

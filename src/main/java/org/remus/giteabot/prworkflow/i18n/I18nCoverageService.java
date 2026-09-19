@@ -104,12 +104,20 @@ public class I18nCoverageService {
 
         Path workspace = null;
         try {
-            if (request.lifecycleMode() == SuiteLifecycleMode.OFFER_AS_PR
-                    && workspaceService.isAuthoritativePullRequestFromFork(
-                            repositoryClient, owner, repo, headBranch, prNumber)) {
-                postComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderFailed(prNumber,
-                        "offer-as-pr is not supported for fork pull requests; no branch was pushed."));
-                return Result.failed("offer-as-pr is not supported for fork pull requests");
+            if (request.lifecycleMode() == SuiteLifecycleMode.OFFER_AS_PR) {
+                WorkspaceService.ForkCheck forkCheck = workspaceService.checkAuthoritativePullRequestFromFork(
+                        repositoryClient, owner, repo, headBranch, prNumber);
+                if (forkCheck.failed()) {
+                    postComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderFailed(prNumber,
+                            "could not resolve the pull request's source repository, so offer-as-pr was "
+                                    + "skipped to avoid pushing to the wrong repository: " + forkCheck.error()));
+                    return Result.failed("Failed to resolve pull request source repository");
+                }
+                if (forkCheck.fromFork()) {
+                    postComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderFailed(prNumber,
+                            "offer-as-pr is not supported for fork pull requests; no branch was pushed."));
+                    return Result.failed("offer-as-pr is not supported for fork pull requests");
+                }
             }
             context.requireActive("before preparing i18n-coverage workspace");
             WorkspaceResult ws = request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR

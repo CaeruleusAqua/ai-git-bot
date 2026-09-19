@@ -112,12 +112,20 @@ public class ReadmeSyncService {
 
         Path workspace = null;
         try {
-            if (request.lifecycleMode() == SuiteLifecycleMode.OFFER_AS_PR
-                    && workspaceService.isAuthoritativePullRequestFromFork(
-                            repositoryClient, owner, repo, headBranch, prNumber)) {
-                postComment(owner, repo, prNumber, ReadmeSyncSummaryRenderer.renderFailed(prNumber,
-                        "offer-as-pr is not supported for fork pull requests; no branch was pushed."));
-                return Result.failed("offer-as-pr is not supported for fork pull requests");
+            if (request.lifecycleMode() == SuiteLifecycleMode.OFFER_AS_PR) {
+                WorkspaceService.ForkCheck forkCheck = workspaceService.checkAuthoritativePullRequestFromFork(
+                        repositoryClient, owner, repo, headBranch, prNumber);
+                if (forkCheck.failed()) {
+                    postComment(owner, repo, prNumber, ReadmeSyncSummaryRenderer.renderFailed(prNumber,
+                            "could not resolve the pull request's source repository, so offer-as-pr was "
+                                    + "skipped to avoid pushing to the wrong repository: " + forkCheck.error()));
+                    return Result.failed("Failed to resolve pull request source repository");
+                }
+                if (forkCheck.fromFork()) {
+                    postComment(owner, repo, prNumber, ReadmeSyncSummaryRenderer.renderFailed(prNumber,
+                            "offer-as-pr is not supported for fork pull requests; no branch was pushed."));
+                    return Result.failed("offer-as-pr is not supported for fork pull requests");
+                }
             }
             context.requireActive("before preparing readme-sync workspace");
             WorkspaceResult ws = request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR

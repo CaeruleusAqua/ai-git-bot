@@ -63,6 +63,9 @@ class SuitePromotionServiceTest {
         when(workspaceService.prepareWritablePullRequestWorkspace(any(RepositoryApiClient.class),
                 anyString(), anyString(), anyString(), any()))
                 .thenReturn(WorkspaceResult.success(workspace));
+        lenient().when(workspaceService.checkAuthoritativePullRequestFromFork(
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new WorkspaceService.ForkCheck(false, null));
         lenient().when(workspaceService.commitAndPush(any(), anyString(), anyString(),
                 anyString(), anyString(), anyBoolean()))
                 .thenReturn(true);
@@ -194,8 +197,9 @@ class SuitePromotionServiceTest {
 
     @Test
     void offerAsPr_onAuthoritativeFork_failsBeforePreparingWorkspace() {
-        when(workspaceService.isAuthoritativePullRequestFromFork(
-                repoClient, "acme", "web", "main", 7L)).thenReturn(true);
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "web", "main", 7L))
+                .thenReturn(new WorkspaceService.ForkCheck(true, null));
         PrTestSuite suite = suite(SuiteLifecycleMode.OFFER_AS_PR, 7L,
                 caseAt("login.spec.ts", "// hi"));
 
@@ -203,6 +207,25 @@ class SuitePromotionServiceTest {
                 bot(), run(99L), suite, "acme", "web", "main");
 
         assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void offerAsPr_onUnresolvableHead_failsCleanlyBeforePreparingWorkspace() {
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "web", "main", 7L))
+                .thenReturn(new WorkspaceService.ForkCheck(false, "provider unavailable"));
+        PrTestSuite suite = suite(SuiteLifecycleMode.OFFER_AS_PR, 7L,
+                caseAt("login.spec.ts", "// hi"));
+
+        SuitePromotionService.Outcome out = service.promote(
+                bot(), run(99L), suite, "acme", "web", "main");
+
+        assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        assertThat(out.message()).contains("Failed to resolve pull request source repository")
+                .contains("provider unavailable");
         verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());

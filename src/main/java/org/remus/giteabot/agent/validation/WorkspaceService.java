@@ -197,12 +197,7 @@ public class WorkspaceService {
         }
         final PullRequestHead head;
         try {
-            head = repositoryClient.getPullRequestHead(owner, repo, prNumber, branch);
-            if (head == null || head.owner() == null || head.owner().isBlank()
-                    || head.repository() == null || head.repository().isBlank()
-                    || head.branch() == null || head.branch().isBlank()) {
-                throw new IllegalStateException("Repository client returned an incomplete pull-request head");
-            }
+            head = requireCompletePullRequestHead(repositoryClient, owner, repo, branch, prNumber);
         } catch (RuntimeException e) {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             log.error("Failed to resolve writable pull-request head for {}/{}#{}: {}",
@@ -213,18 +208,76 @@ public class WorkspaceService {
     }
 
     /**
-     * Returns whether an authoritative PR head belongs to another repository.
-     * Providers without authoritative head resolution retain their existing
-     * offer-as-PR behaviour and return {@code false}.
+     * Outcome of {@link #checkAuthoritativePullRequestFromFork(RepositoryApiClient, String, String, String, Long)}.
+     * Either a definite answer for {@link #fromFork()} or a resolution
+     * {@link #error()} the caller must surface as a workflow failure. A failed
+     * check is never a same-repository confirmation, so callers must fail closed
+     * when {@link #failed()} is {@code true}.
      */
-    public boolean isAuthoritativePullRequestFromFork(RepositoryApiClient repositoryClient,
-                                                      String owner, String repo,
-                                                      String branch, Long prNumber) {
-        if (!repositoryClient.requiresAuthoritativePullRequestHead()) {
-            return false;
+    public record ForkCheck(boolean fromFork, String error) {
+
+        public boolean failed() {
+            return error != null;
         }
+
+        static ForkCheck sameRepository() {
+            return new ForkCheck(false, null);
+        }
+
+        static ForkCheck fork() {
+            return new ForkCheck(true, null);
+        }
+
+        static ForkCheck failure(String error) {
+            return new ForkCheck(false, error);
+        }
+    }
+
+    /**
+     * Resolves whether an authoritative PR head belongs to another repository.
+     * Providers without authoritative head resolution retain their existing
+     * offer-as-PR behaviour and are reported as same-repository. Resolution
+     * failures — API errors or malformed PR data — are returned as a
+     * {@link ForkCheck#error()} instead of propagating an exception, so every
+     * caller reports provider failures the same way it reports a resolution
+     * failure during writable workspace preparation.
+     */
+    public ForkCheck checkAuthoritativePullRequestFromFork(RepositoryApiClient repositoryClient,
+                                                          String owner, String repo,
+                                                          String branch, Long prNumber) {
+        if (!repositoryClient.requiresAuthoritativePullRequestHead()) {
+            return ForkCheck.sameRepository();
+        }
+        final PullRequestHead head;
+        try {
+            head = requireCompletePullRequestHead(repositoryClient, owner, repo, branch, prNumber);
+        } catch (RuntimeException e) {
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            log.error("Failed to resolve pull-request head for fork check on {}/{}#{}: {}",
+                    owner, repo, prNumber, message, e);
+            return ForkCheck.failure(message);
+        }
+        if (!owner.equalsIgnoreCase(head.owner()) || !repo.equalsIgnoreCase(head.repository())) {
+            return ForkCheck.fork();
+        }
+        return ForkCheck.sameRepository();
+    }
+
+    /**
+     * Resolves the authoritative PR head and rejects incomplete provider data,
+     * so both writable workspace preparation and the fork check validate the
+     * same way.
+     */
+    private PullRequestHead requireCompletePullRequestHead(RepositoryApiClient repositoryClient,
+                                                          String owner, String repo,
+                                                          String branch, Long prNumber) {
         PullRequestHead head = repositoryClient.getPullRequestHead(owner, repo, prNumber, branch);
-        return !owner.equalsIgnoreCase(head.owner()) || !repo.equalsIgnoreCase(head.repository());
+        if (head == null || head.owner() == null || head.owner().isBlank()
+                || head.repository() == null || head.repository().isBlank()
+                || head.branch() == null || head.branch().isBlank()) {
+            throw new IllegalStateException("Repository client returned an incomplete pull-request head");
+        }
+        return head;
     }
 
     /**

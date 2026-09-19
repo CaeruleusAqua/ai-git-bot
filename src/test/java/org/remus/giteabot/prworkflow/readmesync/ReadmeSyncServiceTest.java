@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -54,6 +55,9 @@ class ReadmeSyncServiceTest {
 
         when(repoClient.getPullRequestDiff(anyString(), anyString(), anyLong()))
                 .thenReturn("diff --git a/x b/x\n+change");
+        lenient().when(workspaceService.checkAuthoritativePullRequestFromFork(
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), any()))
+                .thenReturn(new WorkspaceService.ForkCheck(false, null));
     }
 
     private ReadmeSyncService.Request request(WebhookPayload payload, SuiteLifecycleMode mode) {
@@ -140,13 +144,34 @@ class ReadmeSyncServiceTest {
         WebhookPayload.Head head = new WebhookPayload.Head();
         head.setRef("main");
         payload.getPullRequest().setHead(head);
-        when(workspaceService.isAuthoritativePullRequestFromFork(
-                repoClient, "acme", "my-repo", "main", 42L)).thenReturn(true);
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L))
+                .thenReturn(new WorkspaceService.ForkCheck(true, null));
 
         ReadmeSyncService.Result result = service.run(
                 request(payload, SuiteLifecycleMode.OFFER_AS_PR));
 
         assertThat(result.status()).isEqualTo(ReadmeSyncService.Result.Status.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void offerAsPr_onUnresolvableHead_failsCleanlyBeforePreparingWorkspace() {
+        WebhookPayload payload = payloadWithoutHeadRef();
+        WebhookPayload.Head head = new WebhookPayload.Head();
+        head.setRef("main");
+        payload.getPullRequest().setHead(head);
+        when(workspaceService.checkAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L))
+                .thenReturn(new WorkspaceService.ForkCheck(false, "provider unavailable"));
+
+        ReadmeSyncService.Result result = service.run(
+                request(payload, SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(ReadmeSyncService.Result.Status.FAILED);
+        assertThat(result.summary()).contains("Failed to resolve pull request source repository");
         verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());

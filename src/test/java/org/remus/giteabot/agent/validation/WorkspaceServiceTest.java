@@ -16,6 +16,7 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -194,6 +195,58 @@ class WorkspaceServiceTest {
         assertThat(runGitCapture(result.workspacePath(), "rev-parse", "--abbrev-ref", "HEAD"))
                 .isEqualTo("missing-branch");
         workspaceService.cleanupWorkspace(result.workspacePath());
+    }
+
+    @Test
+    void checkAuthoritativePullRequestFromFork_reportsForkAndSameRepository() {
+        when(repositoryClient.requiresAuthoritativePullRequestHead()).thenReturn(true);
+        when(repositoryClient.getPullRequestHead("base", "project", 7L, "main"))
+                .thenReturn(new PullRequestHead("contributor", "project", "main", "abc"));
+
+        WorkspaceService.ForkCheck fork = workspaceService.checkAuthoritativePullRequestFromFork(
+                repositoryClient, "base", "project", "main", 7L);
+
+        assertThat(fork.failed()).isFalse();
+        assertThat(fork.fromFork()).isTrue();
+    }
+
+    @Test
+    void checkAuthoritativePullRequestFromFork_providerFailureReturnsErrorNotException() {
+        when(repositoryClient.requiresAuthoritativePullRequestHead()).thenReturn(true);
+        when(repositoryClient.getPullRequestHead("base", "project", 7L, "main"))
+                .thenThrow(new IllegalStateException("missing head repository"));
+
+        WorkspaceService.ForkCheck check = workspaceService.checkAuthoritativePullRequestFromFork(
+                repositoryClient, "base", "project", "main", 7L);
+
+        assertThat(check.failed()).isTrue();
+        assertThat(check.error()).contains("missing head repository");
+        assertThat(check.fromFork()).isFalse();
+    }
+
+    @Test
+    void checkAuthoritativePullRequestFromFork_incompleteHeadReturnsError() {
+        when(repositoryClient.requiresAuthoritativePullRequestHead()).thenReturn(true);
+        when(repositoryClient.getPullRequestHead("base", "project", 7L, "main"))
+                .thenReturn(new PullRequestHead("contributor", "", "main", "abc"));
+
+        WorkspaceService.ForkCheck check = workspaceService.checkAuthoritativePullRequestFromFork(
+                repositoryClient, "base", "project", "main", 7L);
+
+        assertThat(check.failed()).isTrue();
+        assertThat(check.error()).contains("incomplete pull-request head");
+    }
+
+    @Test
+    void checkAuthoritativePullRequestFromFork_nonAuthoritativeProviderIsSameRepository() {
+        when(repositoryClient.requiresAuthoritativePullRequestHead()).thenReturn(false);
+
+        WorkspaceService.ForkCheck check = workspaceService.checkAuthoritativePullRequestFromFork(
+                repositoryClient, "base", "project", "main", 7L);
+
+        assertThat(check.failed()).isFalse();
+        assertThat(check.fromFork()).isFalse();
+        verify(repositoryClient, never()).getPullRequestHead(any(), any(), any(), any());
     }
 
     @Test
