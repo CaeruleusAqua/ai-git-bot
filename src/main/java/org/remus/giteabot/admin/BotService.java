@@ -128,7 +128,8 @@ public class BotService {
         }
         bot.setWebhookCallCount(bot.getWebhookCallCount() + 1);
         bot.setLastWebhookAt(Instant.now());
-        botRepository.incrementWebhookCallCount(bot.getId(), bot.getLastWebhookAt());
+        requireSingleRowUpdated("webhook call count", bot.getId(),
+                botRepository.incrementWebhookCallCount(bot.getId(), bot.getLastWebhookAt()));
     }
 
     public void recordError(Bot bot, String errorMessage) {
@@ -137,7 +138,21 @@ public class BotService {
         }
         bot.setLastErrorMessage(errorMessage);
         bot.setLastErrorAt(Instant.now());
-        botRepository.recordError(bot.getId(), errorMessage, bot.getLastErrorAt());
+        requireSingleRowUpdated("last error", bot.getId(),
+                botRepository.recordError(bot.getId(), errorMessage, bot.getLastErrorAt()));
+    }
+
+    /**
+     * Surfaces audit updates that matched no row instead of dropping them
+     * silently. A zero-row result means the persisted bot vanished (or was
+     * replaced) after the caller loaded the stale snapshot the webhook still
+     * holds; the in-memory update must not be mistaken for a persisted one.
+     */
+    private void requireSingleRowUpdated(String field, Long botId, int updatedRows) {
+        if (updatedRows != 1) {
+            log.error("Bot {} {} update matched {} rows; the persisted bot may have been deleted "
+                    + "or replaced, so the webhook state was not recorded", botId, field, updatedRows);
+        }
     }
 
     /**

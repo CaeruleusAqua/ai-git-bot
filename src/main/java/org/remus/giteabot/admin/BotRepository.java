@@ -37,9 +37,9 @@ public interface BotRepository extends JpaRepository<Bot, Long> {
 
     @Modifying
     @Query("update Bot b set b.webhookCallCount = b.webhookCallCount + 1, b.lastWebhookAt = :at where b.id = :id")
-    void incrementWebhookCallCount(Long id, Instant at);
+    int incrementWebhookCallCount(Long id, Instant at);
 
     @Modifying
     @Query("update Bot b set b.lastErrorMessage = :message, b.lastErrorAt = :at where b.id = :id")
-    void recordError(Long id, String message, Instant at);
+    int recordError(Long id, String message, Instant at);
 }

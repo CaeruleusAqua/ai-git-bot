@@ -1,9 +1,11 @@
 package org.remus.giteabot.admin;
 
+import jakarta.persistence.OptimisticLockException;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.repository.GitTransport;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryType;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -92,6 +94,9 @@ public class GitIntegrationController {
             giteaSshSetupService.setup(id, lockVersion, confirmation, confirmed);
             redirectAttributes.addFlashAttribute("success", messageSource.getMessage(
                     "flash.gitSshSetup", null, LocaleContextHolder.getLocale()));
+        } catch (OptimisticLockException | OptimisticLockingFailureException e) {
+            log.warn("Rejected stale SSH setup for Git Integration {}: {}", id, e.getMessage());
+            addStaleVersionError(redirectAttributes);
         } catch (Exception e) {
             log.error("Failed to configure SSH for Git Integration {}", id);
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage(
@@ -162,6 +167,9 @@ public class GitIntegrationController {
             }
             gitIntegrationService.save(integration, clearToken, clearSshCredentials);
             redirectAttributes.addFlashAttribute("success", messageSource.getMessage("flash.gitSaved", null, LocaleContextHolder.getLocale()));
+        } catch (OptimisticLockException | OptimisticLockingFailureException e) {
+            log.warn("Rejected stale save for Git Integration {}: {}", integration.getId(), e.getMessage());
+            addStaleVersionError(redirectAttributes);
         } catch (Exception e) {
             log.error("Failed to save Git Integration {}", integration.getId());
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage("flash.saveFailed",
@@ -184,6 +192,9 @@ public class GitIntegrationController {
                 gitIntegrationService.completeDelete(id, existing.getLockVersion());
             }
             redirectAttributes.addFlashAttribute("success", messageSource.getMessage("flash.gitDeleted", null, LocaleContextHolder.getLocale()));
+        } catch (OptimisticLockException | OptimisticLockingFailureException e) {
+            log.warn("Rejected stale deletion of Git Integration {}: {}", id, e.getMessage());
+            addStaleVersionError(redirectAttributes);
         } catch (Exception e) {
             log.error("Failed to delete Git Integration {}", id);
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage("flash.deleteFailed",
@@ -205,6 +216,9 @@ public class GitIntegrationController {
                 redirectAttributes.addFlashAttribute("success", messageSource.getMessage(
                         "flash.gitDeleted", null, LocaleContextHolder.getLocale()));
             }
+        } catch (OptimisticLockException | OptimisticLockingFailureException e) {
+            log.warn("Rejected stale deletion retry for Git Integration {}: {}", id, e.getMessage());
+            addStaleVersionError(redirectAttributes);
         } catch (Exception e) {
             log.error("Failed to retry deletion for Git Integration {}", id);
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage("flash.deleteFailed",
@@ -212,6 +226,12 @@ public class GitIntegrationController {
                     LocaleContextHolder.getLocale()));
         }
         return "redirect:/git-integrations";
+    }
+
+    /** Flash message for a stale optimistic-lock version: reload and retry rather than a generic failure. */
+    private void addStaleVersionError(RedirectAttributes redirectAttributes) {
+        redirectAttributes.addFlashAttribute("error",
+                messageSource.getMessage("flash.staleIntegration", null, LocaleContextHolder.getLocale()));
     }
 
     private GitIntegration removeManagedKey(GitIntegration integration, String replacementToken,

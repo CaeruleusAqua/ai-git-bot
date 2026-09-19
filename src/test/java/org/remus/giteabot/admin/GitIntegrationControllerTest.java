@@ -56,6 +56,9 @@ class GitIntegrationControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private org.springframework.context.MessageSource messageSource;
+
     @MockitoBean
     private GitIntegrationService gitIntegrationService;
 
@@ -355,6 +358,35 @@ class GitIntegrationControllerTest {
         mockMvc.perform(post("/git-integrations/7/ssh/setup").with(user("admin").roles("ADMIN")).with(csrf())
                         .param("lockVersion", "3").param("confirmation", "scan"))
                 .andExpect(redirectedUrl("/git-integrations/7/edit")).andExpect(flash().attributeExists("error"));
+    }
+
+    @Test
+    void confirm_staleVersionReportsReloadAndRetry() throws Exception {
+        org.mockito.Mockito.doThrow(new jakarta.persistence.OptimisticLockException("stale"))
+                .when(giteaSshSetupService).setup(7L, 3L, "scan", true);
+        var result = mockMvc.perform(post("/git-integrations/7/ssh/setup")
+                        .with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("lockVersion", "3").param("confirmation", "scan").param("confirmed", "true"))
+                .andExpect(redirectedUrl("/git-integrations/7/edit")).andReturn();
+        org.junit.jupiter.api.Assertions.assertEquals(
+                messageSource.getMessage("flash.staleIntegration", null,
+                        org.springframework.context.i18n.LocaleContextHolder.getLocale()),
+                result.getFlashMap().get("error"));
+    }
+
+    @Test
+    void save_staleVersionReportsReloadAndRetry() throws Exception {
+        org.mockito.Mockito.doThrow(new jakarta.persistence.OptimisticLockException("stale"))
+                .when(gitIntegrationService).save(any(), anyBoolean(), anyBoolean());
+        var result = mockMvc.perform(post("/git-integrations/save")
+                        .with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("id", "7").param("name", "production").param("providerType", "GITEA")
+                        .param("url", "https://gitea.example.com").param("transport", "HTTP"))
+                .andExpect(flash().attributeExists("error")).andReturn();
+        org.junit.jupiter.api.Assertions.assertEquals(
+                messageSource.getMessage("flash.staleIntegration", null,
+                        org.springframework.context.i18n.LocaleContextHolder.getLocale()),
+                result.getFlashMap().get("error"));
     }
 
     @Test

@@ -8,6 +8,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.systemsettings.BotToolConfiguration;
 import org.remus.giteabot.systemsettings.BotToolConfigurationRepository;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.util.Optional;
 
@@ -15,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 class BotServiceTest {
 
     @Mock
@@ -174,7 +176,9 @@ class BotServiceTest {
     @Test
     void incrementWebhookCallCount_incrementsAndSetsTimestamp() {
         Bot bot = new Bot();
+        bot.setId(42L);
         bot.setWebhookCallCount(5);
+        when(botRepository.incrementWebhookCallCount(any(), any())).thenReturn(1);
 
         botService.incrementWebhookCallCount(bot);
 
@@ -184,14 +188,40 @@ class BotServiceTest {
     }
 
     @Test
+    void incrementWebhookCallCount_missingRowIsReportedNotDroppedSilently(CapturedOutput output) {
+        Bot bot = new Bot();
+        bot.setId(42L);
+        when(botRepository.incrementWebhookCallCount(any(), any())).thenReturn(0);
+
+        botService.incrementWebhookCallCount(bot);
+
+        assertTrue(output.getOut().contains("webhook call count"));
+        assertTrue(output.getOut().contains("42"));
+    }
+
+    @Test
     void recordError_setsErrorInfo() {
         Bot bot = new Bot();
+        bot.setId(42L);
+        when(botRepository.recordError(any(), any(), any())).thenReturn(1);
 
         botService.recordError(bot, "Something went wrong");
 
         assertEquals("Something went wrong", bot.getLastErrorMessage());
         assertNotNull(bot.getLastErrorAt());
         verify(botRepository).recordError(bot.getId(), "Something went wrong", bot.getLastErrorAt());
+    }
+
+    @Test
+    void recordError_missingRowIsReportedNotDroppedSilently(CapturedOutput output) {
+        Bot bot = new Bot();
+        bot.setId(42L);
+        when(botRepository.recordError(any(), any(), any())).thenReturn(0);
+
+        botService.recordError(bot, "Something went wrong");
+
+        assertTrue(output.getOut().contains("last error"));
+        assertTrue(output.getOut().contains("42"));
     }
 
     @Test
