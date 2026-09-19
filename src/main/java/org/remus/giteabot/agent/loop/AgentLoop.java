@@ -163,7 +163,9 @@ public final class AgentLoop {
             StepDecision decision;
             long stepStartNanos = System.nanoTime();
             try {
-                decision = strategy.step(ctx, turn, round);
+                decision = resolvedMode == ToolingMode.NATIVE
+                        ? strategy.step(ctx, turn, round)
+                        : strategy.step(ctx, aiResponse, round);
             } catch (RuntimeException e) {
                 log.error("AgentLoop round {}/{} for issue #{}: strategy.step threw {}: {}",
                         round, budget.maxRounds(), ctx.issueNumber(),
