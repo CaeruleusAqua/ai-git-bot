@@ -3,7 +3,6 @@ package org.remus.giteabot.ai.openai;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.ai.AbstractAiClient;
-import org.remus.giteabot.ai.AiClientDelegateSupport;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
@@ -72,34 +71,33 @@ public class OpenAiClient extends AbstractAiClient {
                                   String systemPrompt,
                                   String modelOverride,
                                   Integer maxTokensOverride) {
-        if (!supportsNativeTools() || tools == null || tools.isEmpty()) {
-            return AiClientDelegateSupport.delegateToChat(this, conversationHistory,
-                    newUserMessage, systemPrompt, modelOverride, maxTokensOverride);
-        }
+        boolean useNativeTools = supportsNativeTools() && tools != null && !tools.isEmpty();
+        String effectivePrompt = useNativeTools ? systemPrompt : resolvePrompt(systemPrompt);
         String effectiveModel = (modelOverride != null && !modelOverride.isBlank())
                 ? modelOverride : getModel();
         int effectiveMaxTokens = (maxTokensOverride != null && maxTokensOverride > 0)
                 ? maxTokensOverride : getMaxTokens();
 
         List<AiMessage> fullHistory = new ArrayList<>(conversationHistory);
-        if (newUserMessage != null && !newUserMessage.isBlank()) {
-            fullHistory.add(AiMessage.builder().role("user").content(newUserMessage).build());
+        if (!useNativeTools || (newUserMessage != null && !newUserMessage.isBlank())) {
+            fullHistory.add(AiMessage.builder().role("user")
+                    .content(newUserMessage == null ? "" : newUserMessage).build());
         }
 
-        List<OpenAiRequest.Message> messages = buildMessages(systemPrompt, fullHistory);
-        List<OpenAiRequest.Tool> toolPayloads = tools.stream()
+        List<OpenAiRequest.Message> messages = buildMessages(effectivePrompt, fullHistory);
+        List<OpenAiRequest.Tool> toolPayloads = useNativeTools ? tools.stream()
                 .map(this::toToolPayload)
-                .toList();
+                .toList() : List.of();
 
         OpenAiRequest request = OpenAiRequest.builder()
                 .model(effectiveModel)
                 .maxTokens(effectiveMaxTokens)
                 .reasoningEffort(flavor.reasoningEffort())
                 .messages(messages)
-                .tools(toolPayloads)
+                .tools(useNativeTools ? toolPayloads : null)
                 .build();
 
-        log.info("OpenAI chat-with-tools request: model={}, flavor={}, tools={}, history={}",
+        log.info("OpenAI chat turn request: model={}, flavor={}, tools={}, history={}",
                 effectiveModel, flavor.getId(), toolPayloads.size(), messages.size());
 
         OpenAiResponse response = executeRequest(request);
