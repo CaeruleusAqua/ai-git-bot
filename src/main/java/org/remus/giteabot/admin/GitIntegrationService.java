@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.repository.GitTransport;
 import org.remus.giteabot.repository.RepositoryType;
+import org.remus.giteabot.repository.SshEndpoint;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -350,6 +351,15 @@ public class GitIntegrationService {
                 : clearSshCredentials || existing == null ? null : existing.getSshKnownHosts();
         if (isBlank(privateKey) || isBlank(knownHosts)) {
             throw new IllegalArgumentException("SSH private key and known_hosts are required for SSH transport");
+        }
+        // The SSH clone-URL pin only applies when known_hosts resolves to exactly
+        // one endpoint. Reject newly submitted values that cannot be pinned so a
+        // malformed, hashed, or multi-endpoint entry can never silently disable
+        // the pin. Previously stored values are left untouched.
+        if (hasNewKnownHosts && SshEndpoint.fromKnownHosts(integration.getSshKnownHosts()).isEmpty()) {
+            throw new IllegalArgumentException(
+                    "known_hosts must contain the verified keys of exactly one SSH endpoint "
+                            + "(paste the host keys from SSH setup)");
         }
         String token = !isBlank(integration.getToken()) ? integration.getToken()
                 : clearToken || existing == null ? null : existing.getToken();

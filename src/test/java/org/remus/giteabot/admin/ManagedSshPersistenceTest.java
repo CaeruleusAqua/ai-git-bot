@@ -159,7 +159,7 @@ class ManagedSshPersistenceTest {
         assertEquals(storedToken, after.getToken());
         if (transport.equals("SSH")) {
             assertEquals("replacement-key", service.decryptSshPrivateKey(after));
-            assertEquals("hosts", after.getSshKnownHosts());
+            assertEquals(MANAGED_HOSTS, after.getSshKnownHosts());
         } else {
             assertNull(after.getSshPrivateKey());
             assertNull(after.getSshKnownHosts());
@@ -628,9 +628,11 @@ class ManagedSshPersistenceTest {
         return new TransactionTemplate(transactionManager);
     }
 
+    private static final String MANAGED_HOSTS = "[gitea.example.com]:2222 ssh-ed25519 AQID\n";
+
     private void makeManaged() {
         GitIntegration marker = service.prepareManagedSshKeyCreation(saved.getId(), saved.getLockVersion(), 17L, "tracked-title");
-        service.configureGeneratedSsh(saved.getId(), marker.getLockVersion(), "private", "hosts", 42L, 17L, "tracked-title");
+        service.configureGeneratedSsh(saved.getId(), marker.getLockVersion(), "private", MANAGED_HOSTS, 42L, 17L, "tracked-title");
     }
 
     private GitIntegration readCommitted() {

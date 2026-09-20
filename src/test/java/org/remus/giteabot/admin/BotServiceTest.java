@@ -191,12 +191,15 @@ class BotServiceTest {
     void incrementWebhookCallCount_missingRowIsReportedNotDroppedSilently(CapturedOutput output) {
         Bot bot = new Bot();
         bot.setId(42L);
+        bot.setWebhookCallCount(5);
         when(botRepository.incrementWebhookCallCount(any(), any())).thenReturn(0);
 
         botService.incrementWebhookCallCount(bot);
 
         assertTrue(output.getOut().contains("webhook call count"));
         assertTrue(output.getOut().contains("42"));
+        assertEquals(5, bot.getWebhookCallCount());
+        assertNull(bot.getLastWebhookAt());
     }
 
     @Test
@@ -222,6 +225,8 @@ class BotServiceTest {
 
         assertTrue(output.getOut().contains("last error"));
         assertTrue(output.getOut().contains("42"));
+        assertNull(bot.getLastErrorMessage());
+        assertNull(bot.getLastErrorAt());
     }
 
     @Test

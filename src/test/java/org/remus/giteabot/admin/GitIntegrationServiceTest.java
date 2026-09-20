@@ -45,6 +45,40 @@ class GitIntegrationServiceTest {
     }
 
     @Test
+    void validateSave_rejectsKnownHostsWithoutSingleEndpoint() {
+        GitIntegration integration =
+                sshIntegration("|1|abcdefghijklmnop|qrstuvwxyz012345 ssh-ed25519 AAAA");
+        when(encryptionService.isEncryptionEnabled()).thenReturn(true);
+        when(encryptionService.encrypt("token")).thenReturn("encrypted");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> gitIntegrationService.validateSave(integration, false, false));
+        assertTrue(ex.getMessage().contains("known_hosts"));
+    }
+
+    @Test
+    void validateSave_acceptsSingleEndpointKnownHosts() {
+        GitIntegration integration =
+                sshIntegration("[gitea.example.com]:2222 ssh-ed25519 AQID\n");
+        when(encryptionService.isEncryptionEnabled()).thenReturn(true);
+        when(encryptionService.encrypt("token")).thenReturn("encrypted");
+
+        assertDoesNotThrow(() -> gitIntegrationService.validateSave(integration, false, false));
+    }
+
+    private GitIntegration sshIntegration(String knownHosts) {
+        GitIntegration integration = new GitIntegration();
+        integration.setName("gitea");
+        integration.setProviderType(RepositoryType.GITEA);
+        integration.setUrl("https://gitea.example.com");
+        integration.setTransport(GitTransport.SSH);
+        integration.setToken("token");
+        integration.setSshPrivateKey("private");
+        integration.setSshKnownHosts(knownHosts);
+        return integration;
+    }
+
+    @Test
     void save_blankTokenOnUpdate_keepsStoredTokenWithoutReEncrypting() {
         GitIntegration integration = new GitIntegration();
         integration.setId(7L);

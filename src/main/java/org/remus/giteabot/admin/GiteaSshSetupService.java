@@ -51,7 +51,9 @@ public class GiteaSshSetupService {
             GitIntegration pending = gitIntegrationService.prepareManagedSshKeyRemoval(integrationId, expectedVersion);
             current = removeManagedKey(pending, null);
             if (current == null) {
-                throw new IllegalStateException("Managed SSH key cleanup failed");
+                throw new IllegalStateException(
+                        "Previous managed SSH key could not be removed from Gitea and may still be "
+                                + "registered; retry the cleanup before setting up a new key");
             }
         }
         String title = "AI Git Bot: integration-" + integrationId + "-" + UUID.randomUUID();
@@ -201,7 +203,10 @@ public class GiteaSshSetupService {
             } else if (titleMatches.contains(integration.getSshRemoteKeyId())) {
                 remoteKeyIds.add(integration.getSshRemoteKeyId());
             } else if (client.getSshKeyIds().contains(integration.getSshRemoteKeyId())) {
-                throw new IllegalStateException("The tracked Gitea SSH key ID no longer matches its title");
+                // The ID is the stable handle; a renamed title is still our key.
+                log.warn("Tracked Gitea SSH key {} has an unexpected title; removing it by ID",
+                        integration.getSshRemoteKeyId());
+                remoteKeyIds.add(integration.getSshRemoteKeyId());
             }
         } else if (integration.getSshRemoteKeyId() != null) {
             if (client.getSshKeyIds().contains(integration.getSshRemoteKeyId())) {

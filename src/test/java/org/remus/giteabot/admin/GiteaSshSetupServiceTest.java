@@ -199,13 +199,13 @@ class GiteaSshSetupServiceTest {
     }
 
     @Test
-    void cleanup_titleMismatchRetainsTrackingAndDoesNotDeleteEitherKey() {
+    void cleanup_renamedTitleStillDeletesByStableId() {
         prepareCleanup();
         when(client.getSshKeyIdsByTitle(TITLE)).thenReturn(List.of(43L));
         when(client.getSshKeyIds()).thenReturn(List.of(42L, 43L));
-        assertNull(service.removeManagedKey(integration, null));
-        verify(client, never()).deleteSshKey(anyLong());
-        assertTrue(integration.hasManagedSshKeyTracking());
+        assertNotNull(service.removeManagedKey(integration, null));
+        verify(client).deleteSshKey(42L);
+        verify(client, never()).deleteSshKey(43L);
     }
 
     @Test

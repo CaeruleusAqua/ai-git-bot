@@ -126,33 +126,42 @@ public class BotService {
         if (entityManager.contains(bot)) {
             entityManager.detach(bot);
         }
+        Instant now = Instant.now();
+        if (!requireSingleRowUpdated("webhook call count", bot.getId(),
+                botRepository.incrementWebhookCallCount(bot.getId(), now))) {
+            return;
+        }
         bot.setWebhookCallCount(bot.getWebhookCallCount() + 1);
-        bot.setLastWebhookAt(Instant.now());
-        requireSingleRowUpdated("webhook call count", bot.getId(),
-                botRepository.incrementWebhookCallCount(bot.getId(), bot.getLastWebhookAt()));
+        bot.setLastWebhookAt(now);
     }
 
     public void recordError(Bot bot, String errorMessage) {
         if (entityManager.contains(bot)) {
             entityManager.detach(bot);
         }
+        Instant now = Instant.now();
+        if (!requireSingleRowUpdated("last error", bot.getId(),
+                botRepository.recordError(bot.getId(), errorMessage, now))) {
+            return;
+        }
         bot.setLastErrorMessage(errorMessage);
-        bot.setLastErrorAt(Instant.now());
-        requireSingleRowUpdated("last error", bot.getId(),
-                botRepository.recordError(bot.getId(), errorMessage, bot.getLastErrorAt()));
+        bot.setLastErrorAt(now);
     }
 
     /**
      * Surfaces audit updates that matched no row instead of dropping them
      * silently. A zero-row result means the persisted bot vanished (or was
      * replaced) after the caller loaded the stale snapshot the webhook still
-     * holds; the in-memory update must not be mistaken for a persisted one.
+     * holds. Returns {@code false} without touching the in-memory snapshot so
+     * unpersisted state can never be mistaken for recorded state.
      */
-    private void requireSingleRowUpdated(String field, Long botId, int updatedRows) {
+    private boolean requireSingleRowUpdated(String field, Long botId, int updatedRows) {
         if (updatedRows != 1) {
             log.error("Bot {} {} update matched {} rows; the persisted bot may have been deleted "
                     + "or replaced, so the webhook state was not recorded", botId, field, updatedRows);
+            return false;
         }
+        return true;
     }
 
     /**
