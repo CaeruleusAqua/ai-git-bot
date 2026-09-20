@@ -203,6 +203,19 @@ class OllamaClientStreamingTest {
         assertEquals(5L, turn.outputTokens());
     }
 
+    @Test
+    void nativeStreamWithoutDoneChunkIsNotACompletedToolTurn() {
+        emitNdjson("""
+                {"message":{"content":"partial","tool_calls":[{"function":{"name":"search","arguments":{}}}]},"done":false,"done_reason":"stop"}
+                """);
+
+        ChatTurn turn = client().chatWithTools(List.of(), "please search",
+                List.of(new ToolDescriptor("search", "Search the code base", null)), "sys", null, null);
+
+        assertEquals(StopReason.OTHER, turn.stopReason());
+        assertEquals("partial", turn.assistantText());
+    }
+
     // -----------------------------------------------------------------
     // AC 5: usage parity — recorded totals are the final chunk's counters,
     // not the sum of per-chunk counters.
