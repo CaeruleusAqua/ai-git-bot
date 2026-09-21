@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.ai.AbstractAiClient;
-import org.remus.giteabot.ai.AiClientDelegateSupport;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
@@ -86,19 +85,9 @@ public class GoogleAiClient extends AbstractAiClient {
     @Override
     protected String sendChatRequest(String systemPrompt, String effectiveModel,
                                      int maxTokens, List<AiMessage> messages) {
-        List<GoogleAiRequest.Content> contents = new ArrayList<>();
-        for (AiMessage message : messages) {
-            // Plain-text path: collapse tool-results into user-text content.
-            String text = "tool".equals(message.getRole())
-                    ? (message.getToolResult() != null ? message.getToolResult() : message.getContent())
-                    : message.getContent();
-            contents.add(textContent(toGoogleRole(message.getRole()),
-                    text == null ? "" : text));
-        }
-
         GoogleAiRequest request = GoogleAiRequest.builder()
                 .systemInstruction(textContent(null, systemPrompt))
-                .contents(contents)
+                .contents(buildLegacyContents(messages))
                 .generationConfig(GoogleAiRequest.GenerationConfig.builder()
                         .maxOutputTokens(maxTokens)
                         .build())
@@ -114,37 +103,37 @@ public class GoogleAiClient extends AbstractAiClient {
                                   String systemPrompt,
                                   String modelOverride,
                                   Integer maxTokensOverride) {
-        if (!supportsNativeTools() || tools == null || tools.isEmpty()) {
-            return AiClientDelegateSupport.delegateToChat(this, conversationHistory,
-                    newUserMessage, systemPrompt, modelOverride, maxTokensOverride);
-        }
+        boolean useNativeTools = supportsNativeTools() && tools != null && !tools.isEmpty();
+        String effectivePrompt = useNativeTools ? systemPrompt : resolvePrompt(systemPrompt);
         String effectiveModel = (modelOverride != null && !modelOverride.isBlank())
                 ? modelOverride : getModel();
         int effectiveMaxTokens = (maxTokensOverride != null && maxTokensOverride > 0)
                 ? maxTokensOverride : getMaxTokens();
 
         List<AiMessage> fullHistory = new ArrayList<>(conversationHistory);
-        if (newUserMessage != null && !newUserMessage.isBlank()) {
-            fullHistory.add(AiMessage.builder().role("user").content(newUserMessage).build());
+        if (!useNativeTools || (newUserMessage != null && !newUserMessage.isBlank())) {
+            fullHistory.add(AiMessage.builder().role("user")
+                    .content(newUserMessage == null ? "" : newUserMessage).build());
         }
 
-        List<GoogleAiRequest.Content> contents = buildToolContents(fullHistory);
+        List<GoogleAiRequest.Content> contents = useNativeTools ? buildToolContents(fullHistory)
+                : buildLegacyContents(fullHistory);
 
-        List<GoogleAiRequest.FunctionDeclaration> declarations = tools.stream()
+        List<GoogleAiRequest.FunctionDeclaration> declarations = useNativeTools ? tools.stream()
                 .map(this::toFunctionDeclaration)
-                .toList();
+                .toList() : List.of();
 
         GoogleAiRequest request = GoogleAiRequest.builder()
-                .systemInstruction(textContent(null, systemPrompt))
+                .systemInstruction(textContent(null, effectivePrompt))
                 .contents(contents)
                 .generationConfig(GoogleAiRequest.GenerationConfig.builder()
                         .maxOutputTokens(effectiveMaxTokens)
                         .build())
-                .tools(List.of(GoogleAiRequest.Tool.builder()
-                        .functionDeclarations(declarations).build()))
+                .tools(useNativeTools ? List.of(GoogleAiRequest.Tool.builder()
+                        .functionDeclarations(declarations).build()) : null)
                 .build();
 
-        log.info("Google AI chat-with-tools request: model={}, tools={}, history={}",
+        log.info("Google AI chat turn request: model={}, tools={}, history={}",
                 effectiveModel, declarations.size(), contents.size());
 
         try {
@@ -160,6 +149,19 @@ public class GoogleAiClient extends AbstractAiClient {
             }
             throw new IllegalStateException("Google AI request failed: " + safeErrorMessage(e), e);
         }
+    }
+
+    private List<GoogleAiRequest.Content> buildLegacyContents(List<AiMessage> messages) {
+        List<GoogleAiRequest.Content> contents = new ArrayList<>();
+        for (AiMessage message : messages) {
+            // Plain-text path: collapse tool-results into user-text content.
+            String text = "tool".equals(message.getRole())
+                    ? (message.getToolResult() != null ? message.getToolResult() : message.getContent())
+                    : message.getContent();
+            contents.add(textContent(toGoogleRole(message.getRole()),
+                    text == null ? "" : text));
+        }
+        return contents;
     }
 
     private List<GoogleAiRequest.Content> buildToolContents(List<AiMessage> history) {
