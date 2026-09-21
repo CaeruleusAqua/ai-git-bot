@@ -8,12 +8,11 @@ import java.util.Locale;
 /**
  * Provider-agnostic interface for AI-powered code review and agent chat.
  *
- * <p>As of Step 6 the contract additionally exposes native function/tool
- * calling via {@link #chatWithTools(List, String, List, String, String, Integer)}.
- * Implementations that do not yet support native tools should leave
- * {@link #supportsNativeTools()} returning {@code false}; the default
- * delegation falls back to the textual {@link #chat(List, String, String, String, Integer)}
- * path, which preserves the historical JSON-in-prompt behavior.</p>
+ * <p>{@link #chatWithTools(List, String, List, String, String, Integer)} exposes
+ * completion metadata for both native tools and text-only conversations.
+ * Providers without native tools keep {@link #supportsNativeTools()} false but
+ * can still override the typed API. Its default textual fallback cannot verify
+ * completion and reports {@link StopReason#OTHER}.</p>
  */
 public interface AiClient {
 
@@ -59,10 +58,10 @@ public interface AiClient {
     }
 
     /**
-     * Sends a chat turn with native tool descriptors. The default implementation
-     * falls back to {@link #chat(List, String, String, String, Integer)} so
-     * agents that only expect textual responses keep working without
-     * provider-side tool support.
+     * Sends a typed chat turn with optional native tool descriptors. The default
+     * implementation falls back to {@link #chat(List, String, String, String, Integer)}
+     * with unknown completion status ({@link StopReason#OTHER}) and usage.
+     * Providers should override it to retain their actual response metadata.
      *
      * @param conversationHistory the conversation up to (but not including) the
      *                            new user message
@@ -83,7 +82,7 @@ public interface AiClient {
                                    Integer maxTokensOverride) {
         String text = chat(conversationHistory, newUserMessage, systemPrompt,
                 modelOverride, maxTokensOverride);
-        return ChatTurn.text(text);
+        return new ChatTurn(text, List.of(), StopReason.OTHER, 0L, 0L);
     }
 
     // ---------------------------------------------------------------------

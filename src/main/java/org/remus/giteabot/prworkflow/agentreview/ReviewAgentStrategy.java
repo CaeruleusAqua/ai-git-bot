@@ -48,7 +48,7 @@ import java.util.UUID;
  * the client cannot do native function calling the loop falls back to the
  * legacy JSON protocol ({@code requestFiles}/{@code requestTools}/
  * {@code runTools}) parsed via {@link AiResponseParser}. In both cases the loop
- * accepts a non-empty final text without tool/context requests. In native mode
+ * accepts a non-empty final text without tool/context requests. In both modes
  * its stop reason must also indicate completion. Exhausted budgets and empty
  * or truncated replies are failures, never fallback reviews.</p>
  */
@@ -116,10 +116,7 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     public StepDecision step(AgentRunContext ctx, ChatTurn turn, int round) {
         StopReason expected = turn.hasToolCalls() ? StopReason.TOOL_USE : StopReason.END_TURN;
         if (turn.stopReason() != expected) {
-            log.warn("Agentic review stopped before completion for PR #{}: {}",
-                    ctx.issueNumber(), turn.stopReason());
-            return new StepDecision.Finish(LoopOutcome.fail(ctx.baseBranch(),
-                    "Agentic review stopped before completion: " + turn.stopReason()));
+            return incompleteTurn(ctx, turn.stopReason());
         }
         // Only a completed, non-empty text turn may become the final review.
         if (!turn.hasToolCalls()) {
@@ -134,6 +131,20 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         List<ToolResult> results = executeAll(ctx, requests);
         List<StepDecision.ToolCallResult> packaged = packageResults(requests, results, turn.toolCalls());
         return new StepDecision.ContinueWithToolResults(packaged, null);
+    }
+
+    @Override
+    public StepDecision stepLegacy(AgentRunContext ctx, ChatTurn turn, int round) {
+        if (turn.stopReason() != StopReason.END_TURN || turn.hasToolCalls()) {
+            return incompleteTurn(ctx, turn.stopReason());
+        }
+        return step(ctx, turn.assistantText(), round);
+    }
+
+    private StepDecision incompleteTurn(AgentRunContext ctx, StopReason reason) {
+        log.warn("Agentic review stopped before completion for PR #{}: {}", ctx.issueNumber(), reason);
+        return new StepDecision.Finish(LoopOutcome.fail(ctx.baseBranch(),
+                "Agentic review stopped before completion: " + reason));
     }
 
     @Override
@@ -324,5 +335,4 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         return node.isString() ? node.asString() : node.toString();
     }
 }
-
 

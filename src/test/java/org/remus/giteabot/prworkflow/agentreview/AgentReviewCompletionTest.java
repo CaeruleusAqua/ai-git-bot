@@ -124,6 +124,26 @@ class AgentReviewCompletionTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void legacyIncompleteTurnCannotPublishReviewOrClarification(boolean clarification) {
+        when(aiClient.supportsNativeTools()).thenReturn(false);
+        // A String projection loses the truncation signal; using it would publish this text.
+        lenient().when(aiClient.chat(anyList(), any(), anyString(), isNull(), anyInt()))
+                .thenReturn("A partial review");
+        when(aiClient.chatWithTools(anyList(), any(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(new ChatTurn("A partial review", List.of(), StopReason.MAX_TOKENS, 100, 32));
+
+        AgentReviewService.ReviewResult result = clarification
+                ? service.answerClarification(payload, "Why was this changed?", 1)
+                : service.reviewPullRequest(payload, 1, false, null,
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+
+        assertThat(result).isEqualTo(AgentReviewService.ReviewResult.FAILED);
+        assertNothingPublished();
+        verify(aiClient, never()).chat(anyList(), any(), anyString(), isNull(), anyInt());
+    }
+
+    @ParameterizedTest
     @EnumSource(value = StopReason.class, names = {"MAX_TOKENS", "OTHER"})
     void failedTurnCannotExecuteToolsOrPublishPartialText(StopReason reason) {
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
