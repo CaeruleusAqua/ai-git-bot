@@ -121,28 +121,38 @@ public interface AiClient {
      * {@code overloaded_error} or "high demand". Those spikes clear on their
      * own, so {@link RetryAiClient} repeats the call with backoff.
      *
-     * <p>Deliberately excludes rate limits (HTTP 429 /
-     * {@code RESOURCE_EXHAUSTED}): a quota refusal is not a transient capacity
-     * spike and must surface to the operator.</p>
+     * <p>Body markers are only trusted on 5xx, and a bare
+     * {@code "unavailable"} is not a marker at all: on every other status it
+     * describes something a backoff cannot fix — "model unavailable for this
+     * account", a disabled feature, an unknown model — so retrying would burn
+     * the attempt budget and bury the real error. Rate limits (HTTP 429 /
+     * {@code RESOURCE_EXHAUSTED}) are excluded for the same reason: a quota
+     * refusal is not a transient capacity spike and must surface to the
+     * operator.</p>
      */
     default boolean isProviderUnavailableError(Throwable error) {
         if (error == null) {
             return false;
         }
         RestClientResponseException httpError = findHttpError(error);
-        if (httpError != null) {
-            int status = httpError.getStatusCode().value();
-            if (status == 503 || status == 529) {
-                return true;
-            }
-            String body = httpError.getResponseBodyAsString();
-            return body != null && containsUnavailableMarker(body);
+        if (httpError == null) {
+            // Providers that surface overload without an HTTP status (gRPC-style
+            // messages). The numeric status must appear in the message, so a bare
+            // "unavailable" is an acceptable confirming marker here.
+            String message = compact(error.getMessage());
+            return (message.contains("503") || message.contains("529"))
+                    && (containsOverloadMarker(message) || message.contains("unavailable"));
         }
-        // Providers that surface overload as a plain exception (no HTTP status).
-        String message = error.getMessage();
-        return message != null
-                && (message.contains("503") || message.contains("529"))
-                && containsUnavailableMarker(message);
+        int status = httpError.getStatusCode().value();
+        if (isOverloadStatus(status)) {
+            return true;
+        }
+        if (status < 500) {
+            // A 4xx describes the request or the account (quota, auth, unknown
+            // model, bad payload) — never a capacity spike.
+            return false;
+        }
+        return containsOverloadMarker(compact(httpError.getResponseBodyAsString()));
     }
 
     private static RestClientResponseException findHttpError(Throwable error) {
@@ -160,12 +170,31 @@ public interface AiClient {
         return null;
     }
 
-    private static boolean containsUnavailableMarker(String text) {
-        String normalized = text.toLowerCase(Locale.ROOT);
-        return normalized.contains("unavailable")
-                || normalized.contains("overloaded")
-                || normalized.contains("high demand")
-                || normalized.contains("over capacity");
+    /** Statuses providers use for a temporary capacity spike; Anthropic uses 529. */
+    private static boolean isOverloadStatus(int status) {
+        return status == 503 || status == 529;
+    }
+
+    /**
+     * Matches the phrases that mean "the provider is out of capacity" in
+     * whitespace-stripped, lower-cased text — plus the gRPC-style
+     * {@code "status":"UNAVAILABLE"} token Google sends with a transient
+     * outage. Deliberately narrow: those markers decide whether a failed call is
+     * repeated for up to two minutes, so anything a persistent error could also
+     * carry ("unavailable", "not found", "capacity exceeded for your plan")
+     * must not match.
+     */
+    private static boolean containsOverloadMarker(String compactedText) {
+        return compactedText.contains("overloaded")
+                || compactedText.contains("highdemand")
+                || compactedText.contains("overcapacity")
+                || compactedText.contains("temporarilyunavailable")
+                || compactedText.contains("\"status\":\"unavailable\"");
+    }
+
+    /** Lower-cased text without whitespace, so pretty-printed JSON bodies still match. */
+    private static String compact(String text) {
+        return text == null ? "" : text.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
     /**

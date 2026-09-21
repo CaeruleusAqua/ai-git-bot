@@ -97,11 +97,42 @@ class AiProviderUnavailableClassifierTest {
     }
 
     @Test
-    void overloadMarkersOnAnyStatusAreUnavailable() {
+    void overloadMarkersOnOther5xxAreUnavailable() {
         assertTrue(client.isProviderUnavailableError(
                 serverError(HttpStatus.INTERNAL_SERVER_ERROR, "the model is overloaded, retry later")));
         assertTrue(client.isProviderUnavailableError(
                 serverError(HttpStatus.BAD_GATEWAY, "Service Temporarily Unavailable")));
+        assertTrue(client.isProviderUnavailableError(
+                serverError(HttpStatus.INTERNAL_SERVER_ERROR, "Over capacity — please try again")));
+    }
+
+    @Test
+    void googleStyleUnavailableStatusOnA500IsUnavailable() {
+        // A gateway that downgrades the transient Google status to 500.
+        String body = """
+                { "error": { "code": 503, "message": "This model is currently experiencing high \
+                demand.", "status": "UNAVAILABLE" }}""";
+
+        assertTrue(client.isProviderUnavailableError(
+                serverError(HttpStatus.INTERNAL_SERVER_ERROR, body)));
+    }
+
+    @Test
+    void bareUnavailableOnA500IsNotUnavailable() {
+        assertFalse(client.isProviderUnavailableError(serverError(HttpStatus.INTERNAL_SERVER_ERROR,
+                "{\"error\":{\"message\":\"requested model unavailable\"}}")));
+        assertFalse(client.isProviderUnavailableError(serverError(HttpStatus.INTERNAL_SERVER_ERROR,
+                "{\"error\":{\"message\":\"feature unavailable for this account\"}}")));
+    }
+
+    @Test
+    void fourXxIsNeverUnavailableEvenWithOverloadWording() {
+        assertFalse(client.isProviderUnavailableError(clientError(HttpStatus.BAD_REQUEST,
+                "{\"error\":{\"type\":\"overloaded_error\"}}")));
+        assertFalse(client.isProviderUnavailableError(clientError(HttpStatus.NOT_FOUND,
+                "{\"error\":{\"message\":\"model unavailable\"}}")));
+        assertFalse(client.isProviderUnavailableError(clientError(HttpStatus.TOO_MANY_REQUESTS,
+                "the provider is overloaded — rate limit exceeded")));
     }
 
     @Test
