@@ -1,6 +1,7 @@
 package org.remus.giteabot.ai;
 
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClientResponseException;
 
 import java.util.List;
 import java.util.Locale;
@@ -112,6 +113,59 @@ public interface AiClient {
                 || normalized.contains("context length")
                 || normalized.contains("token limit")
                 || ("400".equals(status) && normalized.contains("too large"));
+    }
+
+    /**
+     * Heuristic check whether a failure means the provider itself is
+     * temporarily overloaded — HTTP 503/529, {@code "status": "UNAVAILABLE"},
+     * {@code overloaded_error} or "high demand". Those spikes clear on their
+     * own, so {@link RetryAiClient} repeats the call with backoff.
+     *
+     * <p>Deliberately excludes rate limits (HTTP 429 /
+     * {@code RESOURCE_EXHAUSTED}): a quota refusal is not a transient capacity
+     * spike and must surface to the operator.</p>
+     */
+    default boolean isProviderUnavailableError(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        RestClientResponseException httpError = findHttpError(error);
+        if (httpError != null) {
+            int status = httpError.getStatusCode().value();
+            if (status == 503 || status == 529) {
+                return true;
+            }
+            String body = httpError.getResponseBodyAsString();
+            return body != null && containsUnavailableMarker(body);
+        }
+        // Providers that surface overload as a plain exception (no HTTP status).
+        String message = error.getMessage();
+        return message != null
+                && (message.contains("503") || message.contains("529"))
+                && containsUnavailableMarker(message);
+    }
+
+    private static RestClientResponseException findHttpError(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            if (current instanceof RestClientResponseException httpError) {
+                return httpError;
+            }
+            Throwable cause = current.getCause();
+            if (cause == current) {
+                break;
+            }
+            current = cause;
+        }
+        return null;
+    }
+
+    private static boolean containsUnavailableMarker(String text) {
+        String normalized = text.toLowerCase(Locale.ROOT);
+        return normalized.contains("unavailable")
+                || normalized.contains("overloaded")
+                || normalized.contains("high demand")
+                || normalized.contains("over capacity");
     }
 
     /**

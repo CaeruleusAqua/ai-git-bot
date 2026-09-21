@@ -83,6 +83,8 @@ class BotWebhookServiceTest {
     @Mock private org.remus.giteabot.prworkflow.config.WorkflowSelectionService workflowSelectionService;
     @Mock private ReviewChunkingProperties chunkingProperties;
     @Mock private org.remus.giteabot.eventhook.EventHookPublisher eventHookPublisher;
+    @Mock private org.remus.giteabot.notification.WorkflowRetryNotices retryNotices;
+    @Mock private org.remus.giteabot.notification.IssueCommentAcknowledgement commentAcknowledgement;
 
     private BotWebhookService botWebhookService;
     private org.remus.giteabot.prworkflow.config.WorkflowConfiguration codingIssueConfiguration;
@@ -109,7 +111,7 @@ class BotWebhookServiceTest {
         org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator issueWorkflowOrchestrator =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator(
                         issueWorkflowRegistry, workflowSelectionService, botService, eventHookPublisher,
-                        giteaClientFactory);
+                        retryNotices, commentAcknowledgement);
         botWebhookService = new BotWebhookService(giteaClientFactory,
                 agentSessionService, botService,
                 prWorkflowOrchestrator, e2eTestPrCloseHandler,
