@@ -98,8 +98,21 @@ endpoint and for the recorded Gitea user. A title/ID mismatch is not treated as
 successful cleanup. Do not rename managed keys in Gitea. Integrations referenced
 by bots must be unassigned before deletion.
 
-Lifecycle concurrency fencing is not included: avoid simultaneous setup, edit,
-or deletion of the same integration, including from multiple application instances.
+Edit and SSH confirmation forms carry a version; reload stale forms before retrying.
+Deletion commits a fence that blocks edits, SSH setup, and new bot assignments.
+For expired-token cleanup during deletion, reopen **Edit** and retry deletion with
+a replacement token for the recorded Gitea user. This cleanup-only token is neither
+stored nor used to change the endpoint or reactivate SSH.
+
+An undispatched setup cancels only its own owner/title marker, even if deletion
+has started. Before deleting title-discovered keys, cleanup commits verification
+evidence so a successful remote deletion followed by a failed local commit remains
+retryable. An uncertain POST with no observed key remains fenced: absence alone
+does not prove that the request cannot still complete. If it never resolves, an
+operator must first establish that no upstream registration can still complete,
+verify the saved endpoint, owner and exact title, and reconcile only that marker
+under the integration row lock with a current version check. Do not clear other
+markers or lift the deletion fence as a shortcut.
 
 #### Manual Setup
 

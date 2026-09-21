@@ -34,10 +34,11 @@ public class GiteaSshSetupService {
     }
 
     /** Registers a new key only when a fresh scan matches the operator's confirmed preview. */
-    public GitIntegration setup(Long integrationId, String expectedConfirmation, boolean confirmed) {
+    public GitIntegration setup(Long integrationId, Long expectedVersion, String expectedConfirmation, boolean confirmed) {
         if (!confirmed) {
             throw new IllegalArgumentException("SSH host key confirmation is required");
         }
+        gitIntegrationService.requireActiveVersion(integrationId, expectedVersion);
         SetupContext context = context(integrationId);
         SshCommandService.HostKeyScan hostKeys = sshCommandService.scanHostKeys(
                 context.client().getAnySshCloneUrl());
@@ -45,38 +46,88 @@ public class GiteaSshSetupService {
             throw new IllegalStateException("SSH host keys changed; inspect and confirm them again");
         }
         long ownerId = context.client().getCurrentUserId();
+        GitIntegration current = gitIntegrationService.requireActiveVersion(integrationId, expectedVersion);
         if (context.integration().hasManagedSshKeyTracking()) {
-            GitIntegration pending = gitIntegrationService.prepareManagedSshKeyRemoval(integrationId);
-            deleteTrackedRemoteKeys(context.client(), pending);
-            gitIntegrationService.finishManagedSshKeyRemoval(integrationId);
+            GitIntegration pending = gitIntegrationService.prepareManagedSshKeyRemoval(integrationId, expectedVersion);
+            current = removeManagedKey(pending, null);
+            if (current == null) {
+                throw new IllegalStateException(
+                        "Previous managed SSH key could not be removed from Gitea and may still be "
+                                + "registered; retry the cleanup before setting up a new key");
+            }
         }
         String title = "AI Git Bot: integration-" + integrationId + "-" + UUID.randomUUID();
         SshCommandService.SshKeyPair keyPair = sshCommandService.generateKeyPair(title);
-        gitIntegrationService.prepareManagedSshKeyCreation(integrationId, ownerId, title);
-        // A failed or lost response may still have created the key. Keep the marker for retry.
-        long remoteKeyId = context.client().createSshKey(title, keyPair.publicKey());
+        GitIntegration marker = gitIntegrationService.prepareManagedSshKeyCreation(
+                integrationId, current.getLockVersion(), ownerId, title);
+        Long markerVersion = marker.getLockVersion();
+        // Keep the committed marker even if registration or the local commit has an ambiguous outcome.
+        long[] remoteKeyId = {0};
+        boolean[] dispatched = {false};
         try {
-            return gitIntegrationService.configureGeneratedSsh(integrationId, keyPair.privateKey(),
-                    hostKeys.knownHosts(), remoteKeyId, ownerId, title);
+            return gitIntegrationService.withLockedVersion(integrationId, markerVersion, locked -> {
+                gitIntegrationService.requireActiveVersion(integrationId, markerVersion);
+                dispatched[0] = true;
+                remoteKeyId[0] = context.client().createSshKey(title, keyPair.publicKey());
+                return gitIntegrationService.configureGeneratedSsh(integrationId, markerVersion,
+                        keyPair.privateKey(), hostKeys.knownHosts(), remoteKeyId[0], ownerId, title);
+            });
         } catch (RuntimeException failure) {
-            try {
-                deleteRemoteKey(context.client(), remoteKeyId);
-                gitIntegrationService.finishManagedSshKeyRemoval(integrationId);
-            } catch (RuntimeException cleanupError) {
-                log.warn("Failed to roll back tracked Gitea SSH key {} for integration {}", remoteKeyId, integrationId);
+            if (!dispatched[0]) {
+                try {
+                    gitIntegrationService.cancelUndispatchedSshCreation(integrationId, ownerId, title);
+                } catch (RuntimeException cleanupError) {
+                    log.warn("Failed to cancel undispatched SSH setup for integration {}", integrationId);
+                }
+            } else if (remoteKeyId[0] > 0) {
+                try {
+                    GitIntegration verified = gitIntegrationService.withLockedVersion(integrationId, markerVersion, locked -> {
+                        locked.setSshCleanupVerified(true);
+                        return locked;
+                    });
+                    Long cleanupVersion = verified.getLockVersion();
+                    gitIntegrationService.withLockedVersion(integrationId, cleanupVersion, locked -> {
+                        deleteRemoteKey(context.client(), remoteKeyId[0]);
+                        return gitIntegrationService.finishManagedSshKeyRemoval(integrationId, cleanupVersion);
+                    });
+                } catch (RuntimeException cleanupError) {
+                    log.warn("Failed to roll back tracked Gitea SSH key {} for integration {}", remoteKeyId[0], integrationId);
+                }
             }
             throw failure;
         }
     }
 
     /** Removes a tracked key, using a replacement token only for the same Gitea owner. */
-    public boolean removeManagedKey(GitIntegration integration, String replacementToken) {
-        if (integration == null || !integration.hasManagedSshKeyTracking()) {
-            return true;
+    public GitIntegration removeManagedKey(GitIntegration integration, String replacementToken) {
+        GitIntegration verified = gitIntegrationService.withLockedVersion(integration.getId(), integration.getLockVersion(), locked -> {
+            if (locked.getTransport() != GitTransport.HTTP || locked.getSshPrivateKey() != null) {
+                throw new IllegalStateException("Disable SSH before remote cleanup");
+            }
+            if (!locked.hasManagedSshKeyTracking()) {
+                return locked;
+            }
+            if (!removeRemoteManagedKey(locked, replacementToken, true)) {
+                return null;
+            }
+            return locked;
+        });
+        if (verified == null) {
+            return null;
         }
+        // Commit evidence of a resolved title before DELETE. A failed local clear can then retry absence.
+        return gitIntegrationService.withLockedVersion(verified.getId(), verified.getLockVersion(), locked -> {
+            if (locked.hasManagedSshKeyTracking() && !removeRemoteManagedKey(locked, replacementToken, false)) {
+                return null;
+            }
+            return gitIntegrationService.finishManagedSshKeyRemoval(locked.getId(), locked.getLockVersion());
+        });
+    }
+
+    private boolean removeRemoteManagedKey(GitIntegration integration, String replacementToken, boolean verifyOnly) {
         try {
             try {
-                deleteTrackedRemoteKeys(giteaClient(integration), integration);
+                deleteTrackedRemoteKeys(giteaClient(integration), integration, verifyOnly);
             } catch (RuntimeException e) {
                 boolean authenticationFailed = e instanceof GiteaOwnerMismatchException
                         || e instanceof HttpClientErrorException httpError
@@ -87,7 +138,7 @@ public class GiteaSshSetupService {
                     throw e;
                 }
                 deleteTrackedRemoteKeys(requireGiteaClient(
-                        giteaClientFactory.createApiClient(integration, replacementToken)), integration);
+                        giteaClientFactory.createApiClient(integration, replacementToken)), integration, verifyOnly);
             }
             return true;
         } catch (RuntimeException e) {
@@ -103,6 +154,9 @@ public class GiteaSshSetupService {
         }
         GitIntegration integration = gitIntegrationService.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Git Integration not found"));
+        if (integration.isDeletionPending()) {
+            throw new IllegalStateException("Git Integration deletion is pending");
+        }
         if (integration.getProviderType() != RepositoryType.GITEA) {
             throw new IllegalArgumentException("Automatic SSH setup is supported for Gitea integrations only");
         }
@@ -128,7 +182,7 @@ public class GiteaSshSetupService {
         throw new IllegalStateException("The Git integration did not create a Gitea API client");
     }
 
-    private void deleteTrackedRemoteKeys(GiteaApiClient client, GitIntegration integration) {
+    private void deleteTrackedRemoteKeys(GiteaApiClient client, GitIntegration integration, boolean verifyOnly) {
         Set<Long> remoteKeyIds = new LinkedHashSet<>();
         if (integration.getSshRemoteKeyOwnerId() != null
                 && integration.getSshRemoteKeyOwnerId() != client.getCurrentUserId()) {
@@ -137,11 +191,22 @@ public class GiteaSshSetupService {
         if (integration.getSshRemoteKeyTitle() != null) {
             List<Long> titleMatches = client.getSshKeyIdsByTitle(integration.getSshRemoteKeyTitle());
             if (integration.getSshRemoteKeyId() == null) {
+                // A timed-out POST may still finish upstream after our DB lock is released.
+                // Absence alone cannot prove that an ambiguous registration was cancelled.
+                if (titleMatches.isEmpty() && !integration.isSshCleanupVerified()) {
+                    throw new IllegalStateException("SSH registration outcome is unresolved; retain its recovery marker");
+                }
                 remoteKeyIds.addAll(titleMatches);
+                if (verifyOnly && !titleMatches.isEmpty()) {
+                    integration.setSshCleanupVerified(true);
+                }
             } else if (titleMatches.contains(integration.getSshRemoteKeyId())) {
                 remoteKeyIds.add(integration.getSshRemoteKeyId());
             } else if (client.getSshKeyIds().contains(integration.getSshRemoteKeyId())) {
-                throw new IllegalStateException("The tracked Gitea SSH key ID no longer matches its title");
+                // The ID is the stable handle; a renamed title is still our key.
+                log.warn("Tracked Gitea SSH key {} has an unexpected title; removing it by ID",
+                        integration.getSshRemoteKeyId());
+                remoteKeyIds.add(integration.getSshRemoteKeyId());
             }
         } else if (integration.getSshRemoteKeyId() != null) {
             if (client.getSshKeyIds().contains(integration.getSshRemoteKeyId())) {
@@ -149,6 +214,9 @@ public class GiteaSshSetupService {
             }
         } else {
             throw new IllegalStateException("The managed SSH key marker has no recoverable ID or title");
+        }
+        if (verifyOnly) {
+            return;
         }
         for (Long remoteKeyId : remoteKeyIds) {
             deleteRemoteKey(client, remoteKeyId);

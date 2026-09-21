@@ -20,6 +20,16 @@ public class GitIntegration {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Version
+    @Column(nullable = false)
+    private Long lockVersion;
+
+    @Column(nullable = false)
+    private boolean deletionPending;
+
+    @Column(nullable = false)
+    private boolean sshCleanupVerified;
+
     @Column(nullable = false, unique = true)
     private String name;
 

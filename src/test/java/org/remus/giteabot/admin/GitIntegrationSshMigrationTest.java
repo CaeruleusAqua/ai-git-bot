@@ -137,6 +137,37 @@ class GitIntegrationSshMigrationTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"h2", "postgresql"})
+    void concurrencyMigrationDefaultsExistingRowsAndPreservesFencesOnRerun(String dialect) throws Exception {
+        String url = "jdbc:h2:mem:ssh-concurrency-" + dialect + ";DB_CLOSE_DELAY=-1";
+        migrateTo(url, "50");
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    INSERT INTO git_integrations (name, provider_type, url, created_at, updated_at)
+                    VALUES ('Existing', 'GITEA', 'https://example.com', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """);
+            var resource = new ClassPathResource("db/migration/" + dialect + "/V51__git_integration_concurrency.sql");
+            ScriptUtils.executeSqlScript(connection, resource);
+            try (var result = statement.executeQuery("SELECT lock_version, deletion_pending, ssh_cleanup_verified FROM git_integrations")) {
+                result.next();
+                assertEquals(0L, result.getLong(1));
+                assertEquals(false, result.getBoolean(2));
+                assertEquals(false, result.getBoolean(3));
+            }
+            statement.executeUpdate("UPDATE git_integrations SET lock_version = 9, deletion_pending = true, ssh_cleanup_verified = true");
+            ScriptUtils.executeSqlScript(connection, resource);
+            migrateTo(url, "51");
+            try (var result = statement.executeQuery("SELECT lock_version, deletion_pending, ssh_cleanup_verified FROM git_integrations")) {
+                result.next();
+                assertEquals(9L, result.getLong(1));
+                assertEquals(true, result.getBoolean(2));
+                assertEquals(true, result.getBoolean(3));
+            }
+        }
+    }
+
     private static void migrateTo(String url, String target) {
         Flyway.configure()
                 .dataSource(url, "sa", "")
