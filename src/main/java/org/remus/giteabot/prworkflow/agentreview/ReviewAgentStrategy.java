@@ -135,6 +135,9 @@ public final class ReviewAgentStrategy implements AgentStrategy {
 
     @Override
     public StepDecision stepLegacy(AgentRunContext ctx, ChatTurn turn, int round) {
+        // Reject any turn carrying tool calls, even with END_TURN: the legacy
+        // JSON protocol has no native-call envelope, so such a mix can only be
+        // provider metadata leaking into a text turn — never accept its text.
         if (turn.stopReason() != StopReason.END_TURN || turn.hasToolCalls()) {
             return incompleteTurn(ctx, turn.stopReason());
         }
