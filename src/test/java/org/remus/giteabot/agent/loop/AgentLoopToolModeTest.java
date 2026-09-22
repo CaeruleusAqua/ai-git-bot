@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -70,10 +71,10 @@ class AgentLoopToolModeTest {
     }
 
     @Test
-    void run_nativeStrategyButLegacyClient_fallsBackToChat() {
+    void run_nativeStrategyButLegacyClient_usesTypedTextTurnAndLegacyHandler() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("plain text");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("plain text"));
 
         AgentLoop loop = new AgentLoop(aiClient, sessionService,
                 new AgentBudget(3, 2, 2, 4000,
@@ -86,17 +87,17 @@ class AgentLoopToolModeTest {
         LoopOutcome outcome = loop.run(ctx, "go", strategy);
 
         assertThat(outcome.payload()).isEqualTo("legacy");
+        verify(aiClient)
+                .chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt());
         verify(aiClient, never())
-                .chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
-        verify(aiClient, times(1))
                 .chat(anyList(), anyString(), anyString(), isNull(), anyInt());
     }
 
     @Test
-    void run_nativeStrategyWithoutDescriptors_fallsBackToChat() {
+    void run_nativeStrategyWithoutDescriptors_usesTypedTextTurnAndLegacyHandler() {
         when(aiClient.supportsNativeTools()).thenReturn(true);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("plain text");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("plain text"));
 
         AgentLoop loop = new AgentLoop(aiClient, sessionService,
                 new AgentBudget(3, 2, 2, 4000,
@@ -108,9 +109,8 @@ class AgentLoopToolModeTest {
         LoopOutcome outcome = loop.run(ctx, "go", strategy);
 
         assertThat(outcome.payload()).isEqualTo("legacy");
-        verify(aiClient, never())
-                .chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
-        verify(aiClient).chat(anyList(), anyString(), anyString(), isNull(), anyInt());
+        verify(aiClient).chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt());
+        verify(aiClient, never()).chat(anyList(), anyString(), anyString(), isNull(), anyInt());
     }
 
     @Test

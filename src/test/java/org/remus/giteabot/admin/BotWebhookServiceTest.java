@@ -98,6 +98,9 @@ class BotWebhookServiceTest {
 
     @BeforeEach
     void setUp() {
+        // This legacy-only fixture keeps its String scripts through the default typed fallback.
+        lenient().when(aiClient.chatWithTools(any(), any(), eq(java.util.List.of()), any(), any(), any()))
+                .thenCallRealMethod();
         // Real catalog – classification taxonomy is no longer mocked through TES.
         org.remus.giteabot.agent.tools.ToolCatalog toolCatalog =
                 new org.remus.giteabot.agent.tools.ToolCatalog(new AgentConfigProperties());
