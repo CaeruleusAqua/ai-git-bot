@@ -2,6 +2,8 @@ package org.remus.giteabot.ai;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * Thread-local comment target for provider-overload retry notices: the
@@ -9,8 +11,12 @@ import java.time.Instant;
  * installs a {@link Notice}, so {@link RetryAiClient} can tell the affected
  * pull request or issue when the next attempt happens.
  *
- * <p>Like {@link AiAuditContext}, callers that install a notice must
- * {@link #clear()} it in a {@code finally} block. When no notice is installed
+ * <p>The notices are <em>stacked</em>, not single-slot: a flow that starts
+ * inside another one on the same thread installs its own level, so its
+ * {@link #clear()} restores the enclosing notice instead of dropping it.
+ * Callers that install a notice must still {@link #clear()} it in a
+ * {@code finally} block — and must install it <em>inside</em> the guarded
+ * region, so the level can never outlive the run. When no notice is installed
  * (e.g. an admin "test connection" call), retries still happen — only the
  * comment is skipped.</p>
  */
@@ -31,27 +37,50 @@ public final class AiRetryContext {
     public record Notice(String label, NoticeSink sink) {
     }
 
-    private static final ThreadLocal<State> CURRENT = new ThreadLocal<>();
+    /** Nesting levels of this thread; the head is the active notice. */
+    private static final ThreadLocal<Deque<State>> LEVELS = new ThreadLocal<>();
 
     private AiRetryContext() {
     }
 
+    /**
+     * Installs {@code notice} as the active notice of this thread, in front of
+     * any notice already installed there. Every level owns its own notice
+     * bookkeeping (cooldown window, exhausted flag).
+     */
     public static void install(Notice notice) {
-        CURRENT.set(new State(notice));
+        Deque<State> levels = LEVELS.get();
+        if (levels == null) {
+            levels = new ArrayDeque<>(2);
+            LEVELS.set(levels);
+        }
+        levels.push(new State(notice));
     }
 
-    /** The installed notice, or {@code null} when this thread has none. */
+    /** The active notice, or {@code null} when this thread has none. */
     public static Notice notice() {
-        State state = CURRENT.get();
+        State state = state();
         return state == null ? null : state.notice;
     }
 
+    /**
+     * Drops the active notice and restores the notice that was active when it
+     * was installed, if any. A no-op when this thread has no notice installed.
+     */
     public static void clear() {
-        CURRENT.remove();
+        Deque<State> levels = LEVELS.get();
+        if (levels == null || levels.isEmpty()) {
+            return;
+        }
+        levels.pop();
+        if (levels.isEmpty()) {
+            LEVELS.remove();
+        }
     }
 
     static State state() {
-        return CURRENT.get();
+        Deque<State> levels = LEVELS.get();
+        return levels == null ? null : levels.peek();
     }
 
     /**
