@@ -163,7 +163,7 @@ class TextTurnMetadataTest {
                         {"done":true,"done_reason":"%s","message":{"content":"Review text"},
                          "prompt_eval_count":100,"eval_count":32}
                         """, """
-                        {"model":"override-model","stream":true,"format":"json","options":{"numPredict":64},
+                        {"model":"override-model","stream":true,"format":"json","options":{"num_predict":64},
                          "messages":[{"role":"system","content":"Output JSON"},
                           {"role":"assistant","content":"Checking","tool_calls":[
                            {"function":{"name":"lookup","arguments":{}}}]},
