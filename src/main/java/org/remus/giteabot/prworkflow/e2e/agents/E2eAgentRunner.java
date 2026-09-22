@@ -239,6 +239,7 @@ public final class E2eAgentRunner {
                     .role("assistant")
                     .content(lastAssistantText)
                     .toolCalls(turn.toolCalls())
+                    .reasoningDetails(turn.reasoningDetails())
                     .build());
 
             // Dispatch every tool call to the executor and feed results back.

@@ -140,6 +140,7 @@ public final class ReadmeSyncAgentRunner {
                     .role("assistant")
                     .content(lastAssistantText)
                     .toolCalls(turn.toolCalls())
+                    .reasoningDetails(turn.reasoningDetails())
                     .build());
 
             for (ToolCall call : turn.toolCalls()) {

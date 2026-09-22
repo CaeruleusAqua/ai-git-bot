@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Builder;
 import lombok.Data;
+import lombok.ToString;
+import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 
@@ -19,7 +21,26 @@ public class OpenAiRequest {
     private String model;
 
     @JsonProperty("max_completion_tokens")
-    private int maxTokens;
+    private Integer maxCompletionTokens;
+
+    @JsonProperty("max_tokens")
+    private Integer maxTokens;
+
+    private ProviderPreferences provider;
+
+    private List<Plugin> plugins;
+
+    /** Per-request override of an OpenRouter account-default plugin. */
+    public record Plugin(String id, boolean enabled) {}
+
+    /** OpenRouter routing preserves requested parameters and avoids hidden provider fallback attempts. */
+    public record ProviderPreferences(@JsonProperty("data_collection") String dataCollection, boolean zdr) {
+        @JsonProperty("require_parameters")
+        public boolean requireParameters() { return true; }
+
+        @JsonProperty("allow_fallbacks")
+        public boolean allowFallbacks() { return false; }
+    }
 
     /**
      * Sent only when the provider requires it. Some gateway front-ends inject
@@ -46,6 +67,11 @@ public class OpenAiRequest {
         private String role;
         /** Plain assistant/user/system text. */
         private String content;
+
+        /** Opaque reasoning blocks echoed in their original order for tool continuations. */
+        @JsonProperty("reasoning_details")
+        @ToString.Exclude
+        private List<JsonNode> reasoningDetails;
 
         /** Assistant turns may carry tool_calls instead of (or in addition to) content. */
         @JsonProperty("tool_calls")
@@ -103,5 +129,4 @@ public class OpenAiRequest {
         private String arguments;
     }
 }
-
 

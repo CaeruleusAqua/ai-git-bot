@@ -153,6 +153,7 @@ public final class UnitTestAgentRunner {
                     .role("assistant")
                     .content(lastAssistantText)
                     .toolCalls(turn.toolCalls())
+                    .reasoningDetails(turn.reasoningDetails())
                     .build());
 
             for (ToolCall call : turn.toolCalls()) {
@@ -261,4 +262,3 @@ public final class UnitTestAgentRunner {
         return node.toString();
     }
 }
-

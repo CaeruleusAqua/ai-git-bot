@@ -273,7 +273,7 @@ class OpenAiClientTest {
         // Only forwarded to usage reporting; extractText never reads it.
         return OpenAiRequest.builder()
                 .model("test-model")
-                .maxTokens(1024)
+                .maxCompletionTokens(1024)
                 .build();
     }
 
