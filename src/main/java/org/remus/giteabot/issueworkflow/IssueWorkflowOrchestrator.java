@@ -64,8 +64,8 @@ public class IssueWorkflowOrchestrator {
     public void runAssigned(Bot bot, WebhookPayload payload) {
         IssueRef issue = issueRef(payload);
         for (IssueWorkflow workflow : resolveWorkflows(bot)) {
-            retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
             try {
+                retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
                 workflow.onIssueAssigned(context(bot, payload, workflow.key()));
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_COMPLETED, bot, payload, null, false);
@@ -99,8 +99,10 @@ public class IssueWorkflowOrchestrator {
         commentAcknowledgement.acknowledge(bot, payload);
         IssueRef issue = issueRef(payload);
         for (IssueWorkflow workflow : workflows) {
-            retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
             try {
+                // Installed inside the guarded region (see runAssigned): clearing it in the
+                // finally below is what keeps the notice off the next task on this thread.
+                retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
                 workflow.onIssueComment(context(bot, payload, workflow.key()));
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue comment: {}",

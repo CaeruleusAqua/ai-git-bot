@@ -133,8 +133,8 @@ public class PrWorkflowOrchestrator {
                 hints == null ? Map.of() : hints,
                 toolCallConsumer);
 
-        retryNotices.installForPullRequest(bot, workflow.key(), owner, repoName, prNumber);
         try {
+            retryNotices.installForPullRequest(bot, workflow.key(), owner, repoName, prNumber);
             WorkflowResult result = workflow.run(context);
             if (result == null) {
                 throw new IllegalStateException("PrWorkflow '" + workflow.key() + "' returned null");

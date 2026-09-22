@@ -202,6 +202,25 @@ class PrWorkflowOrchestratorTest {
     }
 
     @Test
+    void runNoticeInstallationFailureStillClearsTheRetryContext() {
+        when(runService.start(anyLong(), any(), any(), anyLong(), any()))
+                .thenReturn(runWithId(11L));
+        doAnswer(invocation -> {
+            AiRetryContext.install(new AiRetryContext.Notice("test-wf", body -> { }));
+            throw new IllegalStateException("notice target blew up");
+        }).when(retryNotices).installForPullRequest(any(), any(), any(), any(), any());
+
+        PrWorkflowOrchestrator orchestrator = newOrchestrator(successWorkflow());
+        Bot bot = new Bot();
+        bot.setId(1L);
+
+        assertThrows(IllegalStateException.class, () ->
+                orchestrator.run(bot, payloadFor("o", "r", 11), "test-wf"));
+
+        assertNull(AiRetryContext.notice(), "retry-notice context must not leak into the next task");
+    }
+
+    @Test
     void runThrowsOnUnknownWorkflow() {
         PrWorkflowOrchestrator orchestrator = newOrchestrator();
         Bot bot = new Bot();

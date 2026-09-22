@@ -75,7 +75,7 @@ public class ProviderRetryCommentNotifier implements ProviderRetryNotifier {
                 _Workflow: `%s`_
                 """.formatted(
                 event.attempt() + 1, event.maxAttempts(), TIMESTAMP.format(next),
-                secondsUntil(next), schedule(event.plannedDelays()),
+                delaySeconds(event.delay()), schedule(event.plannedDelays()),
                 snippet(event.error()), notice.label());
     }
 
@@ -99,8 +99,13 @@ public class ProviderRetryCommentNotifier implements ProviderRetryNotifier {
                 TIMESTAMP.format(Instant.now()), snippet(event.error()), notice.label());
     }
 
-    private static long secondsUntil(Instant next) {
-        return Math.max(0, Duration.between(Instant.now(), next).toSeconds());
+    /**
+     * The wait {@link RetryAiClient} actually sleeps for this attempt. Taken from the
+     * event instead of recomputed from the clock, so a slow comment API can never make
+     * the notice promise a shorter pause than the one that is really scheduled.
+     */
+    private static long delaySeconds(Duration delay) {
+        return delay == null ? 0 : Math.max(0, delay.toSeconds());
     }
 
     /** Renders the backoff plan, e.g. {@code 10s → 20s → 40s → 60s}. */

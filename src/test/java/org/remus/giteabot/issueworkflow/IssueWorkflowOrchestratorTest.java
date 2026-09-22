@@ -245,6 +245,19 @@ class IssueWorkflowOrchestratorTest {
     }
 
     @Test
+    void runComment_noticeInstallationFailure_stillClearsTheRetryContext() {
+        doAnswer(invocation -> {
+            AiRetryContext.install(new AiRetryContext.Notice("issue-x", body -> { }));
+            throw new IllegalStateException("notice target blew up");
+        }).when(retryNotices).installForIssue(any(), any(), any(), any(), any());
+
+        orchestrator.runComment(bot, issuePayload());
+
+        verify(botService).recordError(bot, "notice target blew up");
+        assertNull(AiRetryContext.notice(), "retry-notice context must not leak into the next task");
+    }
+
+    @Test
     void runAssigned_pointsRetryNoticesAtTheIssue() {
         orchestrator.runAssigned(bot, issuePayload());
 

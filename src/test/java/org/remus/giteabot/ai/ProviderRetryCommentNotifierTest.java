@@ -57,6 +57,22 @@ class ProviderRetryCommentNotifierTest {
         assertTrue(comment.contains("10s → 20s → 40s → 1m"), comment);
         assertTrue(comment.contains("high demand"), comment);
         assertTrue(comment.contains("`agentic-review`"), comment);
+        assertTrue(comment.contains("(in 20s)"), comment);
+    }
+
+    @Test
+    void scheduledNoticeReportsTheScheduledDelayNotAFreshClockReading() {
+        install("agentic-review");
+        // nextAttemptAt was taken when the retry was scheduled; a notice posted seconds
+        // later must still report the wait that was actually scheduled.
+        Instant next = Instant.now().plusSeconds(2);
+
+        notifier.retryScheduled(new ProviderRetryNotifier.Event(1, 5, Duration.ofSeconds(20), next,
+                List.of(Duration.ofSeconds(20)),
+                new IllegalStateException("503 Service Unavailable: high demand")));
+
+        assertEquals(1, posted.size());
+        assertTrue(posted.getFirst().contains("(in 20s)"), posted.getFirst());
     }
 
     @Test
