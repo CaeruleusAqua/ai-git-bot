@@ -9,13 +9,21 @@ import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.ai.ToolNameSanitizer;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -271,18 +279,51 @@ public class OpenAiClient extends AbstractAiClient {
                     .retrieve()
                     .body(OpenAiResponse.class);
         } catch (RestClientException e) {
-            if (providerPreferences != null && !(e instanceof RestClientResponseException)) {
-                // Decoder errors can include snippets of opaque reasoning from the response.
-                throw new RestClientException("OpenRouter request failed");
-            }
-            throw e;
+            throw providerPreferences == null ? e : sanitizeOpenRouterError(e);
         }
-        if (providerPreferences != null && response != null && (response.getError() != null
-                || response.getChoices() != null && response.getChoices().stream().anyMatch(choice ->
-                choice != null && (choice.getError() != null || "error".equals(choice.getFinishReason()))))) {
-            throw new RestClientException("OpenRouter returned a completion error");
+        if (providerPreferences != null && response != null) {
+            if (response.getError() != null) {
+                throw openRouterCompletionError(response.getError());
+            }
+            if (response.getChoices() != null) {
+                for (OpenAiResponse.Choice choice : response.getChoices()) {
+                    if (choice != null && (choice.getError() != null || "error".equals(choice.getFinishReason()))) {
+                        throw openRouterCompletionError(choice.getError());
+                    }
+                }
+            }
         }
         return response;
+    }
+
+    private RestClientException openRouterCompletionError(OpenAiResponse.Error error) {
+        if (error != null && error.getCode() >= 400 && error.getCode() < 600) {
+            return sanitizeOpenRouterError(openRouterHttpError(HttpStatusCode.valueOf(error.getCode()), error.getMessage()));
+        }
+        return new RestClientException("OpenRouter returned a completion error");
+    }
+
+    private RestClientException sanitizeOpenRouterError(RestClientException error) {
+        Throwable cause = NestedExceptionUtils.getMostSpecificCause(error);
+        if (error instanceof ResourceAccessException || cause instanceof SocketTimeoutException || cause instanceof SocketException) {
+            return new ResourceAccessException("OpenRouter transport failure");
+        }
+        if (error instanceof RestClientResponseException http) {
+            // Classify before redaction; only these fixed categories may reach retries, logs or audit storage.
+            String category = error instanceof HttpClientErrorException clientError && isPromptTooLongError(clientError)
+                    ? "maximum context length" : isProviderUnavailableError(error) ? "provider overloaded" : "request failed";
+            return openRouterHttpError(http.getStatusCode(), category);
+        }
+        // Decoder errors can include snippets of opaque reasoning from the response.
+        return new RestClientException("OpenRouter request failed");
+    }
+
+    private RestClientResponseException openRouterHttpError(HttpStatusCode status, String description) {
+        byte[] body = description == null ? new byte[0] : description.getBytes(StandardCharsets.UTF_8);
+        String message = "OpenRouter request failed (HTTP " + status.value() + ")";
+        return status.is4xxClientError()
+                ? HttpClientErrorException.create(message, status, "", HttpHeaders.EMPTY, body, StandardCharsets.UTF_8)
+                : HttpServerErrorException.create(message, status, "", HttpHeaders.EMPTY, body, StandardCharsets.UTF_8);
     }
 
     String extractText(OpenAiRequest request, OpenAiResponse response, String context) {

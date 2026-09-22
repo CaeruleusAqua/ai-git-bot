@@ -209,12 +209,7 @@ public final class AgentLoop {
             if (currentMessage != null && !currentMessage.isEmpty()) {
                 history.add(AiMessage.builder().role("user").content(currentMessage).build());
             }
-            history.add(AiMessage.builder()
-                    .role("assistant")
-                    .content(aiResponse)
-                    .toolCalls(turn.toolCalls().isEmpty() ? null : turn.toolCalls())
-                    .reasoningDetails(turn.reasoningDetails())
-                    .build());
+            history.add(turn.toAssistantMessage());
 
             if (decision instanceof StepDecision.ContinueWithToolResults(
                     List<StepDecision.ToolCallResult> results, String follow

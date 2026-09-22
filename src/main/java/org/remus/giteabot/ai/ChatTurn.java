@@ -54,6 +54,13 @@ public record ChatTurn(String assistantText,
         return inputTokens + outputTokens;
     }
 
+    /** Preserves the complete assistant turn for the next in-memory provider request. */
+    public AiMessage toAssistantMessage() {
+        return AiMessage.builder().role("assistant").content(assistantText)
+                .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
+                .reasoningDetails(reasoningDetails).build();
+    }
+
     /** Diagnostics deliberately exclude opaque provider reasoning. */
     @Override
     public String toString() {

@@ -11,13 +11,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder;
 import org.springframework.boot.http.client.HttpClientSettings;
 import org.springframework.boot.http.client.HttpRedirects;
-import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
-import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 
 import java.util.List;
@@ -90,17 +88,7 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
                 .baseUrl(integration.getOpenRouterRegion().getApiRoot())
                 .defaultHeader("Authorization", "Bearer " + decryptedApiKey)
                 .defaultHeader("Content-Type", "application/json")
-                .defaultStatusHandler(status -> status.value() >= 300, (request, response) -> {
-                    // Preserve HTTP status for retry handling without exposing provider error bodies or headers.
-                    String message = "OpenRouter request failed (HTTP " + response.getStatusCode().value() + ")";
-                    if (response.getStatusCode().is4xxClientError()) {
-                        throw HttpClientErrorException.create(message, response.getStatusCode(), "",
-                                HttpHeaders.EMPTY, new byte[0], null);
-                    }
-                    if (response.getStatusCode().is5xxServerError()) {
-                        throw HttpServerErrorException.create(message, response.getStatusCode(), "",
-                                HttpHeaders.EMPTY, new byte[0], null);
-                    }
+                .defaultStatusHandler(HttpStatusCode::is3xxRedirection, (request, response) -> {
                     throw new RestClientException("OpenRouter redirects are not allowed");
                 })
                 .build();

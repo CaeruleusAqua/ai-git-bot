@@ -26,6 +26,7 @@ import org.remus.giteabot.ai.AiAuditRecorder;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ProviderRetryNotifier;
+import org.remus.giteabot.ai.RetryAiClient;
 import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.aiusage.AiUsageService;
@@ -36,11 +37,18 @@ import org.remus.giteabot.prworkflow.agentreview.ReviewAgentStrategy;
 import org.springframework.boot.http.client.HttpClientSettings;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
+import org.springframework.mock.http.client.MockClientHttpResponse;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.test.web.client.ResponseCreator;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientResponseException;
 
+import java.io.InputStream;
+import java.net.SocketTimeoutException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -57,6 +65,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 
 class OpenRouterProviderTest {
     @Test
@@ -233,6 +242,55 @@ class OpenRouterProviderTest {
     }
 
     @ParameterizedTest
+    @CsvSource({"false,network", "true,network", "false,body-network", "true,body-network", "false,context", "true,context",
+            "false,embedded-overload", "true,embedded-overload", "false,http-overload", "true,http-overload"})
+    void existingLoopAndOverloadRetriesStillRecognizeSanitizedFailures(boolean legacy, String failure) {
+        RestClient.Builder http = RestClient.builder();
+        try (var context = providerContext(http)) {
+            var server = MockRestServiceServer.bindTo(http).build();
+            ResponseCreator response = switch (failure) {
+                case "network" -> withException(new SocketTimeoutException("private-provider-data"));
+                case "body-network" -> request -> {
+                    var interrupted = new MockClientHttpResponse(new InputStream() {
+                        @Override public int read() throws SocketTimeoutException {
+                            throw new SocketTimeoutException("private-provider-data");
+                        }
+                    }, HttpStatus.OK);
+                    interrupted.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+                    return interrupted;
+                };
+                case "context" -> withStatus(HttpStatus.BAD_REQUEST).body("maximum context length: private-provider-data");
+                case "embedded-overload" -> withSuccess("""
+                        {"choices":[{"finish_reason":"error","error":{"code":503,"message":"private-provider-data"}}]}
+                        """, MediaType.APPLICATION_JSON);
+                case "http-overload" -> withStatus(HttpStatus.INTERNAL_SERVER_ERROR).body("overloaded: private-provider-data");
+                default -> throw new AssertionError(failure);
+            };
+            server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions")).andRespond(response);
+            server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions")).andRespond(withSuccess("""
+                    {"choices":[{"finish_reason":"stop","message":{"content":"Completed review"}}]}
+                    """, MediaType.APPLICATION_JSON));
+            AiIntegration integration = new AiIntegration();
+            integration.setModel("author/test-model");
+            integration.setUseLegacyToolCalling(legacy);
+            var provider = context.getBean(OpenRouterProviderMetadata.class);
+            var client = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
+            var retries = new AiRetryProperties();
+            retries.setMaxAttempts(2);
+            retries.setInitialDelay(Duration.ZERO);
+            var strategy = new ReviewAgentStrategy("sys", mock(AgentToolRouter.class), new ToolCatalog(new AgentConfigProperties()),
+                    null, Set.of("pr-diff"), new AiResponseParser(), null, null, 1);
+            var run = new AgentRunContext(new AgentSession("owner", "repo", 1L, "test"), "owner", "repo", 1L, null, "main");
+            var loop = new AgentLoop(new RetryAiClient(client, retries, mock(ProviderRetryNotifier.class)),
+                    new AgentSessionService(mock(AgentSessionRepository.class)),
+                    new AgentBudget(2, 1, 1, 32, 8_000, 120_000, 200_000, 0.7));
+
+            assertThat(loop.run(run, "Review the change", strategy).success()).isTrue();
+            server.verify();
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(ints = {200, 400, 401, 402, 404, 429, 503})
     void providerErrorsDoNotExposeResponseBodies(int status) {
         RestClient.Builder http = RestClient.builder();
@@ -247,7 +305,13 @@ class OpenRouterProviderTest {
             var client = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
 
             assertThatThrownBy(() -> client.chatWithTools(List.of(), "Review", List.of(), "sys", null, null))
-                    .hasMessageContaining("OpenRouter").hasMessageNotContaining("private-reasoning-and-key").hasNoCause();
+                    .hasMessageContaining("OpenRouter").hasMessageNotContaining("private-reasoning-and-key").hasNoCause()
+                    .satisfies(error -> {
+                        if (error instanceof RestClientResponseException response) {
+                            assertThat(response.getResponseBodyAsString()).doesNotContain("private-reasoning-and-key");
+                            assertThat(response.getResponseHeaders()).isEqualTo(HttpHeaders.EMPTY);
+                        }
+                    });
             server.verify();
         }
     }

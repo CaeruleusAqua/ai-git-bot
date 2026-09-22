@@ -16,7 +16,7 @@ class ChatTurnTest {
     void opaqueReasoningIsExcludedFromDiagnosticsAndGenericSerialization() {
         var details = List.of(AgentJackson.mapper().readTree("{\"data\":\"private-reasoning\"}"));
         var turn = new ChatTurn("Answer", List.of(), StopReason.END_TURN, 100, 32, details);
-        var message = AiMessage.builder().role("assistant").content("Answer").reasoningDetails(details).build();
+        var message = turn.toAssistantMessage();
 
         assertEquals(details, turn.reasoningDetails());
         for (Object value : List.of(turn, message)) {
@@ -54,6 +54,7 @@ class ChatTurnTest {
         assertTrue(turn.hasToolCalls());
         assertEquals(1, turn.toolCalls().size());
         assertEquals("do_thing", turn.toolCalls().getFirst().name());
+        assertEquals(turn.toolCalls(), turn.toAssistantMessage().getToolCalls());
         assertEquals(100L, turn.inputTokens());
         assertEquals(50L, turn.outputTokens());
         assertEquals(150L, turn.totalTokens());

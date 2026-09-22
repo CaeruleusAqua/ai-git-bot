@@ -35,9 +35,11 @@ public class OpenAiRequest {
 
     /** OpenRouter routing preserves requested parameters and avoids hidden provider fallback attempts. */
     public record ProviderPreferences(@JsonProperty("data_collection") String dataCollection, boolean zdr) {
+        /** Requested parameters must be supported by the chosen endpoint. */
         @JsonProperty("require_parameters")
         public boolean requireParameters() { return true; }
 
+        /** Hidden provider fallback attempts are always disabled. */
         @JsonProperty("allow_fallbacks")
         public boolean allowFallbacks() { return false; }
     }
@@ -129,4 +131,3 @@ public class OpenAiRequest {
         private String arguments;
     }
 }
-

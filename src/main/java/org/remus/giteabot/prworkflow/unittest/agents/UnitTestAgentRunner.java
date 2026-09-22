@@ -149,12 +149,7 @@ public final class UnitTestAgentRunner {
             if (currentMessage != null && !currentMessage.isEmpty()) {
                 history.add(AiMessage.builder().role("user").content(currentMessage).build());
             }
-            history.add(AiMessage.builder()
-                    .role("assistant")
-                    .content(lastAssistantText)
-                    .toolCalls(turn.toolCalls())
-                    .reasoningDetails(turn.reasoningDetails())
-                    .build());
+            history.add(turn.toAssistantMessage());
 
             for (ToolCall call : turn.toolCalls()) {
                 Map<String, Object> mapped = extractArgs(call.args());

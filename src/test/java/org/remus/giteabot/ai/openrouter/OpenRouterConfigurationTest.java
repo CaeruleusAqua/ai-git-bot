@@ -4,9 +4,12 @@ import com.sun.net.httpserver.HttpServer;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.AiIntegration;
 import org.remus.giteabot.admin.AiIntegrationRepository;
 import org.remus.giteabot.admin.AiIntegrationService;
@@ -36,20 +39,18 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+@ExtendWith(MockitoExtension.class)
 class OpenRouterConfigurationTest {
     private MockRestServiceServer server;
-    private AiIntegrationRepository repository;
-    private EncryptionService encryption;
+    @Mock private AiIntegrationRepository repository;
+    @Mock private EncryptionService encryption;
+    @Mock private ObjectProvider<RestClient.Builder> builders;
     private AiIntegrationService service;
 
     @BeforeEach
-    @SuppressWarnings("unchecked")
     void setUp() {
         RestClient.Builder http = RestClient.builder();
-        ObjectProvider<RestClient.Builder> builders = mock(ObjectProvider.class);
         when(builders.getObject()).thenReturn(http);
-        repository = mock(AiIntegrationRepository.class);
-        encryption = mock(EncryptionService.class);
         service = new AiIntegrationService(repository, encryption,
                 new AiProviderRegistry(List.of(new OpenRouterProviderMetadata(builders, HttpClientSettings.defaults()))));
         server = MockRestServiceServer.bindTo(http).build();
