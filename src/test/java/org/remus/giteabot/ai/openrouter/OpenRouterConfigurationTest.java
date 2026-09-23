@@ -1,12 +1,10 @@
 package org.remus.giteabot.ai.openrouter;
 
 import com.sun.net.httpserver.HttpServer;
-import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -25,7 +23,6 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import java.net.InetSocketAddress;
-import java.sql.DriverManager;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -56,10 +53,9 @@ class OpenRouterConfigurationTest {
         server = MockRestServiceServer.bindTo(http).build();
     }
 
-    @ParameterizedTest
-    @EnumSource(OpenRouterRegion.class)
-    void saveChecksTheKeyAtTheSelectedOfficialHost(OpenRouterRegion region) {
-        server.expect(requestTo(region.getApiRoot() + "/v1/key"))
+    @Test
+    void saveChecksTheKeyAtTheOfficialHost() {
+        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-key"))
                 .andRespond(withSuccess("""
                         {"data":{"is_management_key":false,"is_provisioning_key":false,
@@ -68,11 +64,10 @@ class OpenRouterConfigurationTest {
         when(encryption.encrypt("test-key")).thenReturn("encrypted-key");
         when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
         AiIntegration integration = integration();
-        integration.setOpenRouterRegion(region);
 
         AiIntegration saved = service.save(integration);
 
-        assertThat(saved.getApiUrl()).isEqualTo(region.getApiRoot());
+        assertThat(saved.getApiUrl()).isEqualTo("https://openrouter.ai/api");
         assertThat(saved.getApiKey()).isEqualTo("encrypted-key");
         verify(encryption).encrypt("test-key");
         server.verify();
@@ -98,15 +93,14 @@ class OpenRouterConfigurationTest {
     }
 
     @Test
-    void regionalRouteNeedsAccountEligibility() {
-        server.expect(requestTo("https://eu.openrouter.ai/api/v1/key"))
+    void globalRouteNeedsAccountEligibility() {
+        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
                 .andRespond(withSuccess("""
-                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":["global"]}}
+                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":["europe"]}}
                         """, MediaType.APPLICATION_JSON));
         AiIntegration integration = integration();
-        integration.setOpenRouterRegion(OpenRouterRegion.EU);
 
-        assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("selected region");
+        assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("global routing");
 
         verifyNoInteractions(encryption, repository);
         server.verify();
@@ -139,39 +133,11 @@ class OpenRouterConfigurationTest {
         server.verify();
     }
 
-    @Test
-    void migrationAddsDefaultsWithoutChangingExistingProviderCredentials() throws Exception {
-        String url = "jdbc:h2:mem:openrouter-upgrade;DB_CLOSE_DELAY=-1";
-        var flyway = Flyway.configure().dataSource(url, "sa", "")
-                .locations("classpath:db/migration/h2");
-        flyway.target("51").load().migrate();
-        try (var connection = DriverManager.getConnection(url, "sa", "");
-             var statement = connection.createStatement()) {
-            statement.execute("""
-                    INSERT INTO ai_integrations (name, provider_type, api_url, api_key, model, created_at, updated_at)
-                    VALUES ('Existing', 'openai', 'https://proxy.example', 'old-ciphertext', 'old-model', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """);
-            flyway.target("52").load().migrate();
-            try (var row = statement.executeQuery("SELECT * FROM ai_integrations WHERE name = 'Existing'")) {
-                assertThat(row.next()).isTrue();
-                assertThat(row.getString("provider_type")).isEqualTo("openai");
-                assertThat(row.getString("api_url")).isEqualTo("https://proxy.example");
-                assertThat(row.getString("api_key")).isEqualTo("old-ciphertext");
-                assertThat(row.getString("model")).isEqualTo("old-model");
-                assertThat(row.getString("openrouter_region")).isEqualTo("GLOBAL");
-                assertThat(row.getString("openrouter_data_collection")).isEqualTo("DENY");
-                assertThat(row.getBoolean("openrouter_zdr")).isFalse();
-            }
-        }
-    }
-
     @ParameterizedTest
-    @ValueSource(strings = {"region", "privacy", "model", "cap", "context", "flavor", "key"})
+    @ValueSource(strings = {"model", "cap", "context", "flavor", "key"})
     void invalidSettingsDoNotSendCredentialsOrPersist(String invalidSetting) {
         AiIntegration integration = integration();
         switch (invalidSetting) {
-            case "region" -> integration.setOpenRouterRegion(null);
-            case "privacy" -> integration.setOpenRouterDataCollection(null);
             case "model" -> integration.setModel("");
             case "cap" -> integration.setMaxTokens(0);
             case "context" -> integration.setContextWindowTokens(0);

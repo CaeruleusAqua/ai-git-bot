@@ -3,7 +3,6 @@ package org.remus.giteabot.ai.openrouter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.AiIntegration;
@@ -23,12 +22,16 @@ import org.remus.giteabot.agent.tools.AgentToolRouter;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AbstractAiClient;
 import org.remus.giteabot.ai.AiAuditRecorder;
+import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ProviderRetryNotifier;
 import org.remus.giteabot.ai.RetryAiClient;
 import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.ai.openai.OpenAiClient;
+import org.remus.giteabot.ai.openai.OpenAiFlavor;
+import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.aiusage.AiUsageService;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.config.AiRetryProperties;
@@ -68,6 +71,42 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 
 class OpenRouterProviderTest {
+    @Test
+    void genericOpenAiKeepsItsWireContractEvenAtAnOpenRouterUrl() {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andExpect(jsonPath("$.max_completion_tokens").value(32))
+                .andExpect(jsonPath("$.max_tokens").doesNotExist())
+                .andExpect(jsonPath("$.provider").doesNotExist())
+                .andExpect(jsonPath("$.plugins").doesNotExist())
+                .andExpect(jsonPath("$.messages[1].reasoning_details").doesNotExist())
+                .andRespond(withSuccess("""
+                        {"choices":[{"finish_reason":"stop","message":{"content":"Answer"}}]}
+                        """, MediaType.APPLICATION_JSON));
+        var client = new OpenAiClient(http.build(), "author/model", 32, true, OpenAiFlavor.STANDARD);
+        var previous = AiMessage.builder().role("assistant").content("Previous answer")
+                .reasoningDetails(List.of(AgentJackson.mapper().readTree("{\"data\":\"opaque\"}"))).build();
+
+        assertThat(client.chatWithTools(List.of(previous), "Continue", List.of(), "sys", null, null).assistantText())
+                .isEqualTo("Answer");
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{}", "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"Partial answer\"}}]}"})
+    void stringOnlyApiRejectsIncompleteReplies(String response) {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+        var client = new OpenRouterClient(http.build(), "author/model", 32, false);
+
+        assertThatThrownBy(() -> client.chat(List.of(), "Question", "sys", null))
+                .hasMessageContaining("incomplete text").hasMessageNotContaining("Partial answer");
+        server.verify();
+    }
+
     @Test
     void loopReplaysOpaqueReasoningDetailsWithTheToolHistory() {
         RestClient.Builder http = RestClient.builder();
@@ -128,13 +167,12 @@ class OpenRouterProviderTest {
         }
     }
 
-    @ParameterizedTest
-    @EnumSource(OpenRouterRegion.class)
-    void registeredProviderUsesOfficialHostAndOpenRouterRequestDialect(OpenRouterRegion region) {
+    @Test
+    void registeredProviderUsesOfficialHostAndOpenRouterRequestDialect() {
         RestClient.Builder http = RestClient.builder();
         try (var context = providerContext(http)) {
             MockRestServiceServer server = MockRestServiceServer.bindTo(http).build();
-            server.expect(requestTo(region.getApiRoot() + "/v1/chat/completions"))
+            server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
                     .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-key"))
                     .andExpect(jsonPath("$.max_tokens").value(32))
                     .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
@@ -162,7 +200,6 @@ class OpenRouterProviderTest {
             integration.setUpdatedAt(Instant.EPOCH);
             integration.setName("OpenRouter test");
             integration.setProviderType("openrouter");
-            integration.setOpenRouterRegion(region);
             integration.setApiUrl("https://untrusted.example");
             integration.setModel("author/test-model");
             integration.setMaxTokens(32);
@@ -183,7 +220,7 @@ class OpenRouterProviderTest {
     }
 
     @Test
-    void stringApiUsesOpenRouterCapsAndConfiguredPrivacy() {
+    void stringApiUsesOpenRouterCapsAndPolicy() {
         RestClient.Builder http = RestClient.builder();
         try (var context = providerContext(http)) {
             var server = MockRestServiceServer.bindTo(http).build();
@@ -191,15 +228,13 @@ class OpenRouterProviderTest {
                     .andExpect(jsonPath("$.max_tokens").value(64))
                     .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
                     .andExpect(jsonPath("$.tools").doesNotExist())
-                    .andExpect(jsonPath("$.provider.data_collection").value("allow"))
-                    .andExpect(jsonPath("$.provider.zdr").value(true))
+                    .andExpect(jsonPath("$.provider.data_collection").value("deny"))
+                    .andExpect(jsonPath("$.provider.zdr").value(false))
                     .andRespond(withSuccess("""
                             {"choices":[{"finish_reason":"stop","message":{"content":"Answer"}}]}
                             """, MediaType.APPLICATION_JSON));
             AiIntegration integration = new AiIntegration();
             integration.setModel("author/test-model");
-            integration.setOpenRouterDataCollection(OpenRouterDataCollection.ALLOW);
-            integration.setOpenRouterZdr(true);
             var provider = context.getBean(OpenRouterProviderMetadata.class);
             var client = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
 

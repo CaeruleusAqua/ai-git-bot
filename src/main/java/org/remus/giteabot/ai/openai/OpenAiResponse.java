@@ -3,8 +3,6 @@ package org.remus.giteabot.ai.openai;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
-import lombok.ToString;
-import tools.jackson.databind.JsonNode;
 
 import java.util.List;
 import java.util.Map;
@@ -39,10 +37,6 @@ public class OpenAiResponse {
     public static class Message {
         private String role;
         private String content;
-
-        @JsonProperty("reasoning_details")
-        @ToString.Exclude
-        private List<JsonNode> reasoningDetails;
 
         /** Tool calls emitted by the assistant (Step 6, native function calling). */
         @JsonProperty("tool_calls")

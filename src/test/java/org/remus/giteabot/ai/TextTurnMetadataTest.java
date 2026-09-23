@@ -8,7 +8,7 @@ import org.remus.giteabot.ai.google.GoogleAiClient;
 import org.remus.giteabot.ai.ollama.OllamaClient;
 import org.remus.giteabot.ai.openai.OpenAiClient;
 import org.remus.giteabot.ai.openai.OpenAiFlavor;
-import org.remus.giteabot.ai.openai.OpenAiRequest;
+import org.remus.giteabot.ai.openrouter.OpenRouterClient;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
@@ -135,8 +135,7 @@ class TextTurnMetadataTest {
                           {"role":"user","content":"Continue"}]}
                         """),
                 new Provider("OpenRouter", "/v1/chat/completions",
-                        (http, nativeTools) -> new OpenAiClient(http, "test-model", 32, nativeTools,
-                                OpenAiFlavor.STANDARD, new OpenAiRequest.ProviderPreferences("deny", false)),
+                        (http, nativeTools) -> new OpenRouterClient(http, "test-model", 32, nativeTools),
                         "length", "stop", """
                         {"choices":[{"finish_reason":"%s","message":{"content":"Review text"}}],
                          "usage":{"prompt_tokens":100,"completion_tokens":32,"total_tokens":132}}

@@ -3,8 +3,6 @@ package org.remus.giteabot.admin;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.ai.AiProviderRegistry;
-import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
-import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
@@ -62,8 +60,6 @@ public class AiIntegrationController {
         model.addAttribute("suggestedModels", providerRegistry.getSuggestedModels());
         model.addAttribute("apiKeyRequirements", providerRegistry.getApiKeyRequirements());
         model.addAttribute("providerFlavors", providerRegistry.getFlavors());
-        model.addAttribute("openRouterRegions", OpenRouterRegion.values());
-        model.addAttribute("openRouterDataCollections", OpenRouterDataCollection.values());
     }
 
     @PostMapping("/save")
