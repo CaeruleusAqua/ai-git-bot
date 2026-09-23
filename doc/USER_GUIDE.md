@@ -92,7 +92,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
      | `ollama` | `http://localhost:11434` | *(user-configured)* |
      | `llamacpp` | `http://localhost:8081` | *(user-configured)* |
      
-   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups. OpenRouter uses its read-only official URL.
+   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups. OpenRouter uses a read-only, region-derived official URL.
    - **API Key**: Your API key (encrypted at rest when `APP_ENCRYPTION_KEY` is configured; not needed for Ollama or llama.cpp)
    - **API Version**: API version string (Anthropic only, e.g., `2023-06-01`)
    - **Model**: Select from the dropdown for suggested models, or type a custom model name
@@ -119,10 +119,10 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
 #### OpenRouter
 
 - Select **OpenRouter**, enter an **inference API key**, the exact model ID (usually `author/model`), and your response/context limits. No model catalog is needed for inference.
-- The API root is fixed to `https://openrouter.ai/api`; custom proxies use the generic `openai` provider.
-- On save, the server checks `/v1/key` at the official host, rejects management/provisioning keys, and verifies global routing is allowed. HTTP redirects are disabled for key checks and inference.
+- Configure **Routing and privacy**: Global (default), EU or US. EU/US are Enterprise in-region routes and require account eligibility. The API root is fixed by the selected region; custom proxies use the generic `openai` provider.
+- On save, the server checks `/v1/key` at the selected official host, rejects management/provisioning keys, and verifies the region is allowed. HTTP redirects are disabled for key checks and inference.
 - Leave the key blank on edit to keep it **only for the same provider**. A provider change requires a newly entered key or **Clear**. Switching an existing generic OpenRouter integration from `openai` to `openrouter` therefore requires re-entering its key. Keys use the existing encrypted storage when `APP_ENCRYPTION_KEY` is configured.
-- Requests use `data_collection=deny`, `zdr=false`, `require_parameters=true` and `allow_fallbacks=false`. A missing compatible route fails explicitly rather than weakening the policy.
+- **Provider data collection** defaults to **Deny**; **Require zero data retention (ZDR)** defaults to off. Requests always require the configured parameters and disable provider fallbacks. A missing compatible route fails explicitly rather than weakening the settings.
 - Requests explicitly disable the documented OpenRouter plugins, including automatic context compression. Account-level **Prevent overrides** settings can enforce plugins anyway; configure the OpenRouter account without forced plugins and select a concrete model ID for predictable review behavior.
 - Requests use `max_tokens`; the generic OpenAI integration continues to use `max_completion_tokens`. The `standard` flavor leaves reasoning at the provider default. Unsupported explicit flavors are rejected.
 - Native tool continuations preserve opaque `reasoning_details` in memory, separately from visible answers and session history. The existing, explicitly enabled `AI_USAGE_RAW_PAYLOADS_ENABLED` audit option also captures these provider payloads; it is off by default.

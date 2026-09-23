@@ -25,12 +25,20 @@ import java.util.List;
 public final class OpenRouterClient extends AbstractAiClient {
     private final RestClient restClient;
     private final boolean nativeToolsEnabled;
+    private final OpenRouterRequest.ProviderPreferences providerPreferences;
 
     /** Creates an adapter for an authenticated, official-host OpenRouter transport. */
     public OpenRouterClient(RestClient restClient, String model, int maxTokens, boolean nativeToolsEnabled) {
+        this(restClient, model, maxTokens, nativeToolsEnabled,
+                new OpenRouterRequest.ProviderPreferences(true, false, "deny", false));
+    }
+
+    OpenRouterClient(RestClient restClient, String model, int maxTokens, boolean nativeToolsEnabled,
+                     OpenRouterRequest.ProviderPreferences providerPreferences) {
         super(model, maxTokens);
         this.restClient = restClient;
         this.nativeToolsEnabled = nativeToolsEnabled;
+        this.providerPreferences = providerPreferences;
     }
 
     @Override public boolean supportsNativeTools() { return nativeToolsEnabled; }
@@ -43,7 +51,7 @@ public final class OpenRouterClient extends AbstractAiClient {
 
     @Override
     protected String sendChatRequest(String systemPrompt, String model, int maxTokens, List<AiMessage> messages) {
-        ChatTurn turn = execute(OpenRouterRequest.create(model, maxTokens, systemPrompt, messages, List.of()));
+        ChatTurn turn = execute(OpenRouterRequest.create(model, maxTokens, systemPrompt, messages, List.of(), providerPreferences));
         if (turn.stopReason() != StopReason.END_TURN || turn.hasToolCalls() || turn.assistantText().isBlank()) {
             throw new RestClientException("OpenRouter returned incomplete text (" + turn.stopReason() + ")");
         }
@@ -61,7 +69,7 @@ public final class OpenRouterClient extends AbstractAiClient {
         return execute(OpenRouterRequest.create(
                 modelOverride == null || modelOverride.isBlank() ? getModel() : modelOverride,
                 maxTokensOverride == null || maxTokensOverride <= 0 ? getMaxTokens() : maxTokensOverride,
-                resolvePrompt(systemPrompt), messages, nativeTools ? tools : List.of()));
+                resolvePrompt(systemPrompt), messages, nativeTools ? tools : List.of(), providerPreferences));
     }
 
     private ChatTurn execute(OpenRouterRequest request) {

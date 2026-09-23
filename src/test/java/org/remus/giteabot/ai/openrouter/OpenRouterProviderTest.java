@@ -3,6 +3,7 @@ package org.remus.giteabot.ai.openrouter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.AiIntegration;
@@ -167,12 +168,13 @@ class OpenRouterProviderTest {
         }
     }
 
-    @Test
-    void registeredProviderUsesOfficialHostAndOpenRouterRequestDialect() {
+    @ParameterizedTest
+    @EnumSource(OpenRouterRegion.class)
+    void registeredProviderUsesOfficialHostAndOpenRouterRequestDialect(OpenRouterRegion region) {
         RestClient.Builder http = RestClient.builder();
         try (var context = providerContext(http)) {
             MockRestServiceServer server = MockRestServiceServer.bindTo(http).build();
-            server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+            server.expect(requestTo(region.getApiRoot() + "/v1/chat/completions"))
                     .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-key"))
                     .andExpect(jsonPath("$.max_tokens").value(32))
                     .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
@@ -200,6 +202,7 @@ class OpenRouterProviderTest {
             integration.setUpdatedAt(Instant.EPOCH);
             integration.setName("OpenRouter test");
             integration.setProviderType("openrouter");
+            integration.setOpenRouterRegion(region);
             integration.setApiUrl("https://untrusted.example");
             integration.setModel("author/test-model");
             integration.setMaxTokens(32);
@@ -219,26 +222,33 @@ class OpenRouterProviderTest {
         }
     }
 
-    @Test
-    void stringApiUsesOpenRouterCapsAndPolicy() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void chatApisUseOpenRouterCapsAndConfiguredPrivacy(boolean nativeTools) {
         RestClient.Builder http = RestClient.builder();
         try (var context = providerContext(http)) {
             var server = MockRestServiceServer.bindTo(http).build();
             server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
                     .andExpect(jsonPath("$.max_tokens").value(64))
                     .andExpect(jsonPath("$.max_completion_tokens").doesNotExist())
-                    .andExpect(jsonPath("$.tools").doesNotExist())
-                    .andExpect(jsonPath("$.provider.data_collection").value("deny"))
-                    .andExpect(jsonPath("$.provider.zdr").value(false))
+                    .andExpect(nativeTools ? jsonPath("$.tools[0].function.name").value("lookup")
+                            : jsonPath("$.tools").doesNotExist())
+                    .andExpect(jsonPath("$.provider.data_collection").value("allow"))
+                    .andExpect(jsonPath("$.provider.zdr").value(true))
                     .andRespond(withSuccess("""
                             {"choices":[{"finish_reason":"stop","message":{"content":"Answer"}}]}
                             """, MediaType.APPLICATION_JSON));
             AiIntegration integration = new AiIntegration();
             integration.setModel("author/test-model");
+            integration.setOpenRouterDataCollection(OpenRouterDataCollection.ALLOW);
+            integration.setOpenRouterZdr(true);
             var provider = context.getBean(OpenRouterProviderMetadata.class);
             var client = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
 
-            assertThat(client.chat(List.of(), "Question", "sys", null, 64)).isEqualTo("Answer");
+            String answer = nativeTools ? client.chatWithTools(List.of(), "Question",
+                    List.of(new ToolDescriptor("lookup", "Read context", null)), "sys", null, 64).assistantText()
+                    : client.chat(List.of(), "Question", "sys", null, 64);
+            assertThat(answer).isEqualTo("Answer");
             server.verify();
         }
     }
@@ -359,5 +369,38 @@ class OpenRouterProviderTest {
         context.scan("org.remus.giteabot.ai.openrouter");
         context.refresh();
         return context;
+    }
+
+    @Test
+    void existingClientKeepsItsRegionAndPrivacySnapshotAfterAnAdminChange() {
+        RestClient.Builder http = RestClient.builder();
+        try (var context = providerContext(http)) {
+            var server = MockRestServiceServer.bindTo(http).build();
+            server.expect(requestTo("https://eu.openrouter.ai/api/v1/chat/completions"))
+                    .andExpect(jsonPath("$.provider.data_collection").value("deny"))
+                    .andExpect(jsonPath("$.provider.zdr").value(false))
+                    .andRespond(withSuccess("""
+                            {"choices":[{"finish_reason":"stop","message":{"content":"Old policy"}}]}
+                            """, MediaType.APPLICATION_JSON));
+            server.expect(requestTo("https://us.openrouter.ai/api/v1/chat/completions"))
+                    .andExpect(jsonPath("$.provider.data_collection").value("allow"))
+                    .andExpect(jsonPath("$.provider.zdr").value(true))
+                    .andRespond(withSuccess("""
+                            {"choices":[{"finish_reason":"stop","message":{"content":"New policy"}}]}
+                            """, MediaType.APPLICATION_JSON));
+            var provider = context.getBean(OpenRouterProviderMetadata.class);
+            AiIntegration integration = new AiIntegration();
+            integration.setModel("author/test-model");
+            integration.setOpenRouterRegion(OpenRouterRegion.EU);
+            var oldClient = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
+            integration.setOpenRouterRegion(OpenRouterRegion.US);
+            integration.setOpenRouterDataCollection(OpenRouterDataCollection.ALLOW);
+            integration.setOpenRouterZdr(true);
+
+            assertThat(oldClient.chat(List.of(), "Question", "sys", null)).isEqualTo("Old policy");
+            var newClient = provider.createClient(provider.buildRestClient(integration, "test-key"), integration);
+            assertThat(newClient.chat(List.of(), "Question", "sys", null)).isEqualTo("New policy");
+            server.verify();
+        }
     }
 }

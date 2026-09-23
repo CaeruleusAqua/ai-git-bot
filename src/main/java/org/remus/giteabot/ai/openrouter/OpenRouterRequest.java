@@ -13,10 +13,10 @@ import java.util.List;
 /** OpenRouter wire format; routing and opaque reasoning never enter OpenAI DTOs. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens,
-                         List<Message> messages, List<Tool> tools) {
+                         List<Message> messages, List<Tool> tools, ProviderPreferences provider) {
 
     static OpenRouterRequest create(String model, int maxTokens, String systemPrompt,
-                                    List<AiMessage> history, List<ToolDescriptor> tools) {
+                                    List<AiMessage> history, List<ToolDescriptor> tools, ProviderPreferences provider) {
         List<Message> messages = new ArrayList<>();
         messages.add(new Message("system", systemPrompt, null, null, null));
         for (AiMessage message : history) {
@@ -31,12 +31,8 @@ record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens
         }
         var payloads = tools.isEmpty() ? null : tools.stream().map(tool -> new Tool("function",
                 new Function(ToolNameSanitizer.sanitize(tool.name()), tool.description(), tool.jsonSchema()))).toList();
-        return new OpenRouterRequest(model, maxTokens, messages, payloads);
+        return new OpenRouterRequest(model, maxTokens, messages, payloads, provider);
     }
-
-    /** Core-adapter defaults preserve parameters and disable provider fallbacks. */
-    @JsonProperty("provider")
-    public ProviderPreferences provider() { return new ProviderPreferences(true, false, "deny", false); }
 
     /** Per-request opt-outs; enforced account-level plugins must be disabled by the operator. */
     @JsonProperty("plugins")
