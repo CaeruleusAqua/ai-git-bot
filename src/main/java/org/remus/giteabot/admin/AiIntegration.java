@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
+import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
 
 import java.time.Instant;
 
@@ -82,6 +84,17 @@ public class AiIntegration {
      */
     @Column(name = "model_flavor", nullable = false)
     private String modelFlavor = "standard";
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "openrouter_region", nullable = false, length = 16)
+    private OpenRouterRegion openRouterRegion = OpenRouterRegion.GLOBAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "openrouter_data_collection", nullable = false, length = 16)
+    private OpenRouterDataCollection openRouterDataCollection = OpenRouterDataCollection.DENY;
+
+    @Column(name = "openrouter_zdr", nullable = false)
+    private boolean openRouterZdr;
 
     /**
      * UI-facing inverse of {@link #useLegacyToolCalling}. The admin form
