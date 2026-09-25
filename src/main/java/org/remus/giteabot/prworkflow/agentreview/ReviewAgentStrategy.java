@@ -258,6 +258,9 @@ public final class ReviewAgentStrategy implements AgentStrategy {
             for (int i = 0; i < toolRequests.size(); i++) {
                 ImplementationPlan.ToolRequest req = toolRequests.get(i);
                 ToolResult result = results.get(i);
+                if (result.outputTruncated()) {
+                    tools.append("Output is truncated; this is not complete evidence.\n");
+                }
                 tools.append("### `").append(req.getTool());
                 if (req.getArgs() != null && !req.getArgs().isEmpty()) {
                     tools.append(' ').append(String.join(" ", req.getArgs()));
