@@ -614,7 +614,7 @@ public class AgentReviewService {
                 systemPrompt, toolRouter, toolCatalog,
                 context.mcpToolCatalog(), context.allowedBuiltinTools(),
                 responseParser, branchSwitcher, this::fetchFiles,
-                agentConfig.getBudget().getMaxContextRounds());
+                agentConfig.getBudget().getMaxContextRounds(), clamp(maxToolRounds, 1, 30));
 
         AgentConfigProperties.BudgetConfig budgetCfg = agentConfig.getBudget();
         int rounds = clamp(maxToolRounds, 1, 30);

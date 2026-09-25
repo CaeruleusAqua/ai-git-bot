@@ -70,6 +70,8 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     private final AiResponseParser responseParser;
     private final FileFetcher fileFetcher;
     private final int maxContextRounds;
+    private final int maxToolRounds;
+    private int toolRounds;
 
     /** Read-only context-fetch rounds consumed in legacy mode. */
     private int contextRounds = 0;
@@ -83,6 +85,15 @@ public final class ReviewAgentStrategy implements AgentStrategy {
                                BranchSwitcher branchSwitcher,
                                FileFetcher fileFetcher,
                                int maxContextRounds) {
+        this(systemPrompt, toolRouter, catalog, mcpToolCatalog, allowedBuiltinTools, responseParser,
+                branchSwitcher, fileFetcher, maxContextRounds, maxContextRounds);
+    }
+
+    /** Configures independent legacy context and native tool-round limits. */
+    public ReviewAgentStrategy(String systemPrompt, AgentToolRouter toolRouter, ToolCatalog catalog,
+                               McpToolCatalog mcpToolCatalog, Set<String> allowedBuiltinTools,
+                               AiResponseParser responseParser, BranchSwitcher branchSwitcher,
+                               FileFetcher fileFetcher, int maxContextRounds, int maxToolRounds) {
         this.systemPrompt = systemPrompt;
         this.toolRouter = toolRouter;
         this.catalog = catalog;
@@ -92,6 +103,7 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         // Retain the constructor parameter for callers; reviews never switch branches.
         this.fileFetcher = fileFetcher;
         this.maxContextRounds = Math.max(1, maxContextRounds);
+        this.maxToolRounds = Math.max(1, maxToolRounds);
     }
 
     @Override
@@ -120,6 +132,11 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         if (!turn.hasToolCalls()) {
             return finish(ctx, turn.assistantText());
         }
+
+        if (toolRounds >= maxToolRounds) {
+            return new StepDecision.Finish(onBudgetExhausted(ctx));
+        }
+        toolRounds++;
 
         // Execute every requested (read-only) tool and feed the results back.
         List<ImplementationPlan.ToolRequest> requests = new ArrayList<>();
