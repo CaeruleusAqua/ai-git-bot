@@ -382,8 +382,9 @@ public class AgentPromptBuilder {
 
                 If this issue requires no repository change (a question, an analysis, or an \
                 explicitly read-only request), do not call any tool — reply with your complete \
-                final answer as plain text. It is posted as a comment on the issue and no pull \
-                request is opened.
+                final answer as plain text. Write that answer out in full in that reply: do not \
+                refer back to an earlier message and do not reply with only a summary of one. It \
+                is posted as a comment on the issue and no pull request is opened.
 
                 A reply that neither calls tools nor answers the issue ends the run as a failure.""";
     }

@@ -107,6 +107,25 @@ class CodingAgentStrategyTest {
                 StopReason.TOOL_USE, 0L, 0L);
     }
 
+    /** A native round that only writes a file. */
+    private static ChatTurn nativeWriteOnlyTurn() {
+        JsonNodeFactory nodes = JsonNodeFactory.instance;
+        var writeArgs = nodes.objectNode();
+        writeArgs.put("path", "src/X.java");
+        writeArgs.put("content", "class X {}");
+        return new ChatTurn("", List.of(new ToolCall("call-1", "write-file", writeArgs)),
+                StopReason.TOOL_USE, 0L, 0L);
+    }
+
+    /** A native round that only runs the project build — a read-only request's tool call. */
+    private static ChatTurn nativeValidationOnlyTurn() {
+        JsonNodeFactory nodes = JsonNodeFactory.instance;
+        var validationArgs = nodes.objectNode();
+        validationArgs.set("args", nodes.arrayNode().add("test"));
+        return new ChatTurn("", List.of(new ToolCall("call-1", "mvn", validationArgs)),
+                StopReason.TOOL_USE, 0L, 0L);
+    }
+
     @Test
     void step_validationFailsThenSucceeds_continuesAndFinishesAfterRetry() {
         // Round 1: write-file + mvn — mvn fails. Round 2: write-file + mvn — mvn passes.
@@ -204,6 +223,10 @@ class CodingAgentStrategyTest {
         assertThat(nudge).contains("call the tools");
         assertThat(nudge).contains("plain text");
         assertThat(nudge).contains("no pull request is opened");
+        // The nudge asks for a restatement: whatever the model wrote before it is not
+        // published on its own, and a "see above" reply would be the whole answer.
+        assertThat(nudge).contains("Write that answer out in full");
+        assertThat(nudge).contains("do not refer back to an earlier message");
         // The legacy JSON-envelope instruction must not leak into NATIVE mode.
         assertThat(nudge).doesNotContain("runTools");
     }
@@ -237,8 +260,10 @@ class CodingAgentStrategyTest {
 
     @Test
     void step_nativeAnswerAfterNudge_publishesThePostNudgeTurn() {
-        // Only a turn that follows the nudge can be an answer: the nudge is what
-        // offers that exit, so a pre-nudge turn is narration however it reads.
+        // The nudge is what offers the answer exit, so its reply is the answer that gets
+        // published — a shorter restatement beats a longer earlier turn, and it never
+        // resolves to the pre-nudge narration. The nudge asks for the full answer again,
+        // so a complying model does not lose anything by this rule.
         when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
         ctx.setToolingMode(ToolingMode.NATIVE);
         CodingAgentStrategy strategy = newStrategy();
@@ -255,28 +280,38 @@ class CodingAgentStrategyTest {
     }
 
     @Test
-    void step_nativeNarrationFollowedByBlankTurn_failsWithoutPublishingTheNarration() {
-        // The reviewer case: a substantial-looking pre-nudge turn must not become
-        // the answer when the post-nudge turn is unusable — the run fails instead of
-        // claiming the issue needs no change on the strength of earlier narration.
+    void step_nativeUnusableTurnAfterNudge_fallsBackToTheCompletePreNudgeAnswer() {
+        // The reported #417 shape: the correct answer arrives one turn before the nudge,
+        // which then asks for it again. When that second reply is empty or truncated the
+        // earlier complete answer is published rather than failing a run that answered —
+        // and when there is no complete turn at all the run still fails.
         when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
         ctx.setToolingMode(ToolingMode.NATIVE);
-        CodingAgentStrategy strategy = newStrategy();
+        String answer = "docker-compose.yaml starts with version, services, then the ollama service.";
 
-        strategy.step(ctx, textTurn(
-                "Let me look into how the Docker setup works and then decide what to change.",
-                StopReason.END_TURN), 1);
-        StepDecision second = strategy.step(ctx, textTurn("", StopReason.END_TURN), 2);
+        CodingAgentStrategy blankReply = newStrategy();
+        blankReply.step(ctx, textTurn(answer, StopReason.END_TURN), 1);
+        StepDecision afterBlank = blankReply.step(ctx, textTurn("", StopReason.END_TURN), 2);
 
-        assertThat(second).isInstanceOf(StepDecision.Finish.class);
-        LoopOutcome outcome = ((StepDecision.Finish) second).outcome();
-        assertThat(outcome.success()).isFalse();
-        assertThat(outcome.payload()).isNull();
+        assertThat(afterBlank).isInstanceOf(StepDecision.Finish.class);
+        LoopOutcome blankOutcome = ((StepDecision.Finish) afterBlank).outcome();
+        assertThat(blankOutcome.success()).isTrue();
+        assertThat(((LoopOutcome.AgentAnswer) blankOutcome.payload()).text()).isEqualTo(answer);
+
+        CodingAgentStrategy truncatedReply = newStrategy();
+        truncatedReply.step(ctx, textTurn(answer, StopReason.END_TURN), 1);
+        StepDecision afterTruncation = truncatedReply.step(ctx,
+                textTurn("docker-compose.yaml starts with version, services, then the", StopReason.MAX_TOKENS), 2);
+
+        assertThat(afterTruncation).isInstanceOf(StepDecision.Finish.class);
+        assertThat(((LoopOutcome.AgentAnswer) ((StepDecision.Finish) afterTruncation).outcome().payload()).text())
+                .isEqualTo(answer);
     }
 
     @Test
-    void step_nativeTruncatedTurnAfterNudge_failsWithoutPublishingAnAnswer() {
-        // A MAX_TOKENS turn is truncated, so it must never be posted as the answer.
+    void step_nativeTruncatedTurnsOnly_failsWithoutPublishingAnAnswer() {
+        // A MAX_TOKENS turn is truncated, so it must never be posted as the answer, and a
+        // run whose every turn was truncated has no complete turn to fall back to.
         when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
         ctx.setToolingMode(ToolingMode.NATIVE);
         CodingAgentStrategy strategy = newStrategy();
@@ -335,6 +370,52 @@ class CodingAgentStrategyTest {
         LoopOutcome outcome = ((StepDecision.Finish) third).outcome();
         assertThat(outcome.success()).isFalse();
         assertThat(outcome.payload()).isNull();
+    }
+
+    @Test
+    void step_fileOnlyRoundWithoutDiffThenProse_failsInsteadOfAnswering() {
+        // A file write that left no diff is still an implementation attempt, so the run
+        // must report failure rather than publish "nothing needed changing".
+        when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
+        when(toolRouter.execute(eq(AgentToolRouter.Mode.CODING), any(ToolCallContext.class)))
+                .thenReturn(new ToolResult(true, 0, "File written", ""));
+        ctx.setToolingMode(ToolingMode.NATIVE);
+        CodingAgentStrategy strategy = newStrategy();
+
+        assertThat(strategy.step(ctx, nativeWriteOnlyTurn(), 1))
+                .isInstanceOf(StepDecision.ContinueWithToolResults.class);
+        assertThat(strategy.step(ctx, textTurn("Nothing to change after all.", StopReason.END_TURN), 2))
+                .isInstanceOf(StepDecision.Continue.class);
+
+        StepDecision third = strategy.step(ctx, textTurn("Still nothing to change.", StopReason.END_TURN), 3);
+
+        assertThat(third).isInstanceOf(StepDecision.Finish.class);
+        assertThat(((StepDecision.Finish) third).outcome().success()).isFalse();
+    }
+
+    @Test
+    void step_validationOnlyRoundThenProse_answersInsteadOfFailing() {
+        // "run the tests and tell me whether they pass": the model runs the suite, reports
+        // the result and changes no file. A validation call is not an implementation
+        // attempt, so the answer exit stays open and the report is published.
+        when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
+        when(toolRouter.execute(eq(AgentToolRouter.Mode.CODING), any(ToolCallContext.class)))
+                .thenReturn(new ToolResult(true, 0, "BUILD SUCCESS", ""));
+        ctx.setToolingMode(ToolingMode.NATIVE);
+        CodingAgentStrategy strategy = newStrategy();
+
+        assertThat(strategy.step(ctx, nativeValidationOnlyTurn(), 1))
+                .isInstanceOf(StepDecision.ContinueWithToolResults.class);
+        assertThat(strategy.step(ctx, textTurn("Let me check what the suite covers.", StopReason.END_TURN), 2))
+                .isInstanceOf(StepDecision.Continue.class);
+
+        String report = "The suite is green: 2133 tests, 0 failures.";
+        StepDecision third = strategy.step(ctx, textTurn(report, StopReason.END_TURN), 3);
+
+        assertThat(third).isInstanceOf(StepDecision.Finish.class);
+        LoopOutcome outcome = ((StepDecision.Finish) third).outcome();
+        assertThat(outcome.success()).isTrue();
+        assertThat(((LoopOutcome.AgentAnswer) outcome.payload()).text()).isEqualTo(report);
     }
 
     @Test

@@ -1,4 +1,3 @@
-
 -- The coding agent can complete a run by answering the issue instead of changing code
 -- (read-only / question-only issues). The status column carries a CHECK constraint listing
 -- the allowed values, so the constraint has to be re-created with the new value.

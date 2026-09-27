@@ -78,24 +78,22 @@ public final class CodingAgentStrategy implements AgentStrategy {
     private int answerNudges = 0;
 
     /**
-     * Longest plain-language turn recorded <em>after</em> the nudge whose stop
-     * reason was {@link StopReason#END_TURN}, while the workspace stayed clean —
-     * the candidate posted as the issue answer.
-     *
-     * <p>Post-nudge only: a turn from before the nudge is narration ("let me look
-     * into the Docker setup, then decide what to change"), and publishing it would
-     * assert the issue needs no change on the strength of a sentence the model
-     * wrote before it was ever offered that exit. Longest (not last) so a vague
-     * follow-up cannot replace a real answer, and {@code END_TURN} only so a
-     * truncated turn is never posted as one.</p>
+     * Complete plain-language turn recorded before the nudge, used as the fallback
+     * answer when the turn <em>after</em> the nudge is unusable. See
+     * {@link #nativeTextOnlyStep(AgentRunContext, ChatTurn)}.
      */
-    private String bestCompleteAnswer;
+    private String answerBeforeNudge;
 
     /**
-     * {@code true} once a round actually ran a mutation or validation tool, i.e.
+     * {@code true} once a round actually ran a tool that changes the workspace, i.e.
      * the agent tried to implement something. Deliberately not derived from
-     * {@link #attempt}: that counter is also incremented by no-diff tool rounds
-     * and validation retries, so it does not mean "an implementation was tried".
+     * {@link #attempt}: that counter is also incremented by no-diff tool rounds and
+     * validation retries, so it does not mean "an implementation was tried".
+     *
+     * <p>Validation runs do <em>not</em> set this: "run the tests and tell me whether
+     * they pass" is a read-only request, and counting its {@code mvn}/test call would
+     * close the answer exit for it. A file write that leaves no diff still counts, so
+     * an attempt that produced nothing can never be reported as "no change needed".</p>
      */
     private boolean implementationAttempted = false;
 
@@ -220,12 +218,13 @@ public final class CodingAgentStrategy implements AgentStrategy {
         ctx.setBaseBranch(branchSwitchResult.selectedBranch());
         List<ImplementationPlan.ToolRequest> remaining = branchSwitchResult.remainingToolRequests();
 
-        // 2) Distinguish context-only rounds (cat/rg/find/...) from mutation/validation rounds.
-        boolean hasMutationOrValidation = remaining.stream().anyMatch(this::isMutationOrValidation);
-        if (hasMutationOrValidation) {
+        // 2) Distinguish read-only repository lookups (cat/rg/find/...) from rounds that
+        //    change the workspace or run validation.
+        boolean hasWork = remaining.stream().anyMatch(this::isMutationOrValidation);
+        if (remaining.stream().anyMatch(this::isMutation)) {
             implementationAttempted = true;
         }
-        if (!hasMutationOrValidation && fileRequestRounds < maxContextRounds && !remaining.isEmpty()) {
+        if (!hasWork && fileRequestRounds < maxContextRounds && !remaining.isEmpty()) {
             fileRequestRounds++;
             log.info("AI requested native context tools (round {}/{}, {} call(s))",
                     fileRequestRounds, maxContextRounds, remaining.size());
@@ -308,11 +307,12 @@ public final class CodingAgentStrategy implements AgentStrategy {
      * <ol>
      *     <li>workspace changed — the run is done; finish on the unchanged PR path;</li>
      *     <li>clean workspace, no nudge spent — nudge once, naming both exits
-     *         (call tools, or answer without tools); nothing is recorded, because a
-     *         turn that precedes the nudge is not yet an answer;</li>
-     *     <li>clean workspace, nudge spent, no implementation attempted yet — finish
-     *         with the best complete <em>post-nudge</em> answer; the caller posts it
-     *         as an issue comment and opens no pull request;</li>
+     *         (call tools, or answer without tools) and demanding a full restatement;
+     *         the turn itself is only remembered as the fallback for step 3;</li>
+     *     <li>clean workspace, no implementation attempted yet — finish with the
+     *         <em>post-nudge</em> turn, or with the complete turn recorded before the
+     *         nudge when the post-nudge turn is empty or truncated; the caller posts
+     *         that text as an issue comment and opens no pull request;</li>
      *     <li>otherwise — fail. This is also the branch's budget guard: it can
      *         return {@code Continue} at most once, so a model that neither works
      *         nor answers can no longer run the loop to its round cap.</li>
@@ -334,17 +334,22 @@ public final class CodingAgentStrategy implements AgentStrategy {
 
         if (answerNudges == 0) {
             answerNudges++;
+            answerBeforeNudge = completeText(turn);
             log.info("Native turn for issue #{} carried no tool calls and no workspace change; "
                     + "asking for tools or a final answer", ctx.issueNumber());
             return new StepDecision.Continue(promptBuilder.buildNativeNoToolCallFeedback());
         }
-        // Recorded only past this point: the nudge is what offers the answer exit,
-        // so whatever came before it is narration rather than a conclusion.
-        recordAnswerCandidate(turn);
-        if (!implementationAttempted && bestCompleteAnswer != null) {
+        // The nudge offers the answer exit, so its reply is the answer. When that
+        // reply is unusable the earlier complete turn is published instead of
+        // failing a run that already produced an answer.
+        String answer = completeText(turn);
+        if (answer == null) {
+            answer = answerBeforeNudge;
+        }
+        if (!implementationAttempted && answer != null) {
             log.info("Coding agent answered issue #{} without repository changes ({} chars, stopReason={})",
-                    ctx.issueNumber(), bestCompleteAnswer.length(), turn.stopReason());
-            return new StepDecision.Finish(LoopOutcome.answered(ctx.baseBranch(), bestCompleteAnswer));
+                    ctx.issueNumber(), answer.length(), turn.stopReason());
+            return new StepDecision.Finish(LoopOutcome.answered(ctx.baseBranch(), answer));
         }
         log.warn("Native turn for issue #{} stayed without tool calls and without a usable answer "
                         + "(nudges={}, implementationAttempted={}, stopReason={}); failing the run",
@@ -353,19 +358,16 @@ public final class CodingAgentStrategy implements AgentStrategy {
     }
 
     /**
-     * Remembers the longest complete plain-language turn as the answer candidate.
-     * Incomplete turns ({@link StopReason#MAX_TOKENS}) and blank text are ignored,
-     * so a truncated or empty reply is never posted as the issue's answer.
+     * The stripped text of a plain-language turn that is a complete answer, or
+     * {@code null} when the turn is empty or truncated ({@link StopReason#MAX_TOKENS}).
+     * A half sentence or a blank reply is never published as the issue's answer.
      */
-    private void recordAnswerCandidate(ChatTurn turn) {
+    private static String completeText(ChatTurn turn) {
         String text = turn.assistantText();
         if (turn.stopReason() != StopReason.END_TURN || text == null || text.isBlank()) {
-            return;
+            return null;
         }
-        String candidate = text.strip();
-        if (bestCompleteAnswer == null || candidate.length() > bestCompleteAnswer.length()) {
-            bestCompleteAnswer = candidate;
-        }
+        return text.strip();
     }
 
     /** Convert a single native {@link ToolCall} into a positional-args
@@ -436,10 +438,24 @@ public final class CodingAgentStrategy implements AgentStrategy {
         return node.isString() ? node.asString() : node.toString();
     }
 
-    /** Decide whether a tool request mutates the workspace or validates. */
+    /**
+     * Decide whether a tool request is work rather than a read-only repository lookup:
+     * it changes the workspace or validates a change. Keeps validation-only rounds on
+     * the tool-execution path instead of the context-fetch path.
+     */
     private boolean isMutationOrValidation(ImplementationPlan.ToolRequest req) {
-        return catalog.isFile(req.getTool())
-                || catalog.isValidation(req.getTool());
+        return catalog.isFile(req.getTool()) || catalog.isValidation(req.getTool());
+    }
+
+    /**
+     * Decide whether a tool request changes the workspace.
+     *
+     * <p>Validation runs are deliberately excluded: "run the tests and tell me whether
+     * they pass" is a read-only request, so a {@code mvn}/test call must not close the
+     * answer exit. A file write that leaves no diff still counts as an attempt.</p>
+     */
+    private boolean isMutation(ImplementationPlan.ToolRequest req) {
+        return catalog.isFile(req.getTool());
     }
 
     /** Execute {@code requests} and turn the results into
@@ -523,7 +539,7 @@ public final class CodingAgentStrategy implements AgentStrategy {
 
         // 4) Execute the requested tools.
         List<ImplementationPlan.ToolRequest> requests = plan.getEffectiveToolRequests();
-        if (requests.stream().anyMatch(this::isMutationOrValidation)) {
+        if (requests.stream().anyMatch(this::isMutation)) {
             implementationAttempted = true;
         }
         List<ToolResult> results = executeAllTools(ctx.workspaceDir(), requests);

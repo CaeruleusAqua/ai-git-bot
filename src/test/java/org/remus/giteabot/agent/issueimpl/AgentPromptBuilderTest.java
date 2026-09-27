@@ -189,6 +189,10 @@ class AgentPromptBuilderTest {
         assertThat(result).contains("no repository change");
         assertThat(result).contains("plain text");
         assertThat(result).contains("no pull request is opened");
+        // The earlier reply is not published on its own: the model is told to restate the
+        // whole answer instead of referring back to it.
+        assertThat(result).contains("Write that answer out in full");
+        assertThat(result).contains("do not refer back to an earlier message");
         // The legacy JSON envelope instruction must not leak into NATIVE mode.
         assertThat(result).doesNotContain("runTools");
     }

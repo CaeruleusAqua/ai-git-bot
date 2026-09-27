@@ -104,6 +104,12 @@ public class PrometheusMetricsRegistrar {
      * of {@code FAILED}, so this is what to alert on when a weak model starts
      * "answering" instead of working: the comment wording stays neutral and the
      * status carries the signal.
+     *
+     * <p>One {@code COUNT} per status, i.e. seven cheap queries per scrape against an
+     * indexed-by-nothing but small table. A single {@code GROUP BY} would need the row
+     * snapshot to be shared between the gauges of one scrape, which Micrometer's gauge
+     * API does not express (each gauge re-evaluates its own supplier); keeping it as
+     * simple counts avoids caching a snapshot for a query that is not the bottleneck.</p>
      */
     private void registerAgentSessionStatusGauges() {
         for (AgentSession.AgentSessionStatus status : AgentSession.AgentSessionStatus.values()) {

@@ -18,7 +18,7 @@ When the available tools include both repository-exploration helpers (e.g. `cat`
 Some issues ask a question, request an analysis, or are explicitly read-only. Do not invent a change just to satisfy the workflow.
 
 - If the issue needs repository changes: call the tools for them (write/patch the files, then run a validation tool).
-- If the issue needs none: do not call any tool, and reply with your complete final answer as plain text. That answer is posted as a comment on the issue and no pull request is opened.
+- If the issue needs none: do not call any tool, and reply with your complete final answer as plain text. Write that answer out in full in that reply — do not refer back to an earlier message and do not reply with only a summary of one. It is posted as a comment on the issue and no pull request is opened.
 
 A reply that neither calls tools nor answers the issue ends the run as a failure.
 

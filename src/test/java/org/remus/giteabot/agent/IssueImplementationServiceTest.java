@@ -163,8 +163,8 @@ class IssueImplementationServiceTest {
         verify(repositoryClient, atLeast(2)).postIssueComment(eq("testowner"), eq("testrepo"), eq(42L), anyString());
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(aiClient, times(1)).chat(anyList(), promptCaptor.capture(), anyString(), isNull(), anyInt());
-        assertThat(promptCaptor.getAllValues().get(0)).contains("Please keep backward compatibility");
-        assertThat(promptCaptor.getAllValues().get(0)).contains("Also add a migration note");
+        assertThat(promptCaptor.getAllValues().getFirst()).contains("Please keep backward compatibility");
+        assertThat(promptCaptor.getAllValues().getFirst()).contains("Also add a migration note");
     }
 
     @Test
@@ -213,8 +213,8 @@ class IssueImplementationServiceTest {
 
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(aiClient, times(1)).chat(anyList(), promptCaptor.capture(), anyString(), isNull(), anyInt());
-        assertThat(promptCaptor.getAllValues().get(0)).contains("Human clarification that must be implemented");
-        assertThat(promptCaptor.getAllValues().get(0)).doesNotContain("I've been assigned to this issue");
+        assertThat(promptCaptor.getAllValues().getFirst()).contains("Human clarification that must be implemented");
+        assertThat(promptCaptor.getAllValues().getFirst()).doesNotContain("I've been assigned to this issue");
     }
 
     @Test
@@ -671,8 +671,8 @@ class IssueImplementationServiceTest {
         verify(workspaceService).cleanupWorkspace(FAKE_WORKSPACE);
         ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
         verify(aiClient, times(2)).chat(anyList(), promptCaptor.capture(), anyString(), isNull(), anyInt());
-        assertThat(promptCaptor.getAllValues().get(0)).contains("Existing clarification from issue author");
-        assertThat(promptCaptor.getAllValues().get(0)).contains("Please trace where Config is used");
+        assertThat(promptCaptor.getAllValues().getFirst()).contains("Existing clarification from issue author");
+        assertThat(promptCaptor.getAllValues().getFirst()).contains("Please trace where Config is used");
     }
 
     @Test
@@ -899,7 +899,95 @@ class IssueImplementationServiceTest {
         verify(workspaceService, never()).commitAndPush(any(), any(), any(), any(), any(), anyBoolean());
     }
 
+    /**
+     * The full reported sequence, driven through the real {@link
+     * org.remus.giteabot.agent.loop.AgentLoop} + strategy: {@code cat} -> the answer ->
+     * the nudge -> a re-answer. The post-nudge reply is what gets published, which is
+     * why the nudge demands the answer be written out again in full.
+     */
+    @Test
+    void handleIssueAssigned_readOnlySequence_publishesThePostNudgeReply() {
+        WebhookPayload payload = createIssuePayload();
+        stubReadOnlyRun();
+        String answer = "docker-compose.yaml declares ollama, gitea and postgres; ollama publishes no port.";
+        doReturn(catTurn("docker-compose.yaml"),
+                new ChatTurn(answer, List.of(), StopReason.END_TURN, 100L, 20L),
+                new ChatTurn("As stated above, see the file listing.", List.of(), StopReason.END_TURN, 120L, 6L))
+                .when(aiClient).chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
+
+        service.handleIssueAssigned(payload);
+
+        assertThat(postedComments()).anySatisfy(comment -> {
+            assertThat(comment).contains("I did not make any code changes");
+            assertThat(comment).contains("As stated above, see the file listing.");
+        });
+        assertThat(postedComments()).noneSatisfy(comment -> assertThat(comment).contains(answer));
+        verify(sessionService).setStatus(any(), eq(AgentSession.AgentSessionStatus.ANSWERED));
+        verify(workspaceService, never()).commitAndPush(any(), any(), any(), any(), any(), anyBoolean());
+        verify(repositoryClient, never()).createPullRequest(any(), any(), any(), any(), any(), any());
+        // The cat round really ran against the workspace.
+        verify(toolExecutionService).executeContextTool(eq(FAKE_WORKSPACE), eq("cat"),
+                eq(List.of("docker-compose.yaml")));
+    }
+
+    /**
+     * The same sequence with an unusable re-answer: the complete answer given before the
+     * nudge is published instead of failing a run that had already answered.
+     */
+    @Test
+    void handleIssueAssigned_readOnlySequenceWithBlankReAnswer_publishesThePreNudgeAnswer() {
+        WebhookPayload payload = createIssuePayload();
+        stubReadOnlyRun();
+        String answer = "docker-compose.yaml declares ollama, gitea and postgres; ollama publishes no port.";
+        doReturn(catTurn("docker-compose.yaml"),
+                new ChatTurn(answer, List.of(), StopReason.END_TURN, 100L, 20L),
+                new ChatTurn("", List.of(), StopReason.END_TURN, 120L, 0L))
+                .when(aiClient).chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt());
+
+        service.handleIssueAssigned(payload);
+
+        assertThat(postedComments()).anySatisfy(comment -> {
+            assertThat(comment).contains("I did not make any code changes");
+            assertThat(comment).contains(answer);
+        });
+        verify(sessionService).setStatus(any(), eq(AgentSession.AgentSessionStatus.ANSWERED));
+        verify(workspaceService, never()).commitAndPush(any(), any(), any(), any(), any(), anyBoolean());
+        verify(repositoryClient, never()).createPullRequest(any(), any(), any(), any(), any(), any());
+    }
+
+    /** Wiring common to the read-only runs above: clean workspace, native client, real cat. */
+    private void stubReadOnlyRun() {
+        when(repositoryClient.getDefaultBranch("testowner", "testrepo")).thenReturn("main");
+        when(repositoryClient.getRepositoryTree("testowner", "testrepo", "main")).thenReturn(List.of());
+        when(promptService.getSystemPrompt("agent")).thenReturn("You are an agent");
+        when(workspaceService.prepareWorkspace(eq(repositoryClient), any(), any(), any(), any()))
+                .thenReturn(WorkspaceResult.success(FAKE_WORKSPACE));
+        when(workspaceService.hasUncommittedChanges(any())).thenReturn(false);
+        when(aiClient.supportsNativeTools()).thenReturn(true);
+        lenient().when(toolExecutionService.executeContextTool(eq(FAKE_WORKSPACE), eq("cat"), anyList()))
+                .thenReturn(new ToolResult(true, 0, "version: '3'\nservices:\n  ollama:\n", ""));
+    }
+
+    /** Every comment posted on the test issue, in order. */
+    private List<String> postedComments() {
+        ArgumentCaptor<String> comments = ArgumentCaptor.forClass(String.class);
+        verify(repositoryClient, atLeastOnce()).postIssueComment(eq("testowner"), eq("testrepo"),
+                any(), comments.capture());
+        return comments.getAllValues();
+    }
+
     // ---- helpers ----
+
+    /**
+     * A native round that reads one file with {@code cat} — the read-only first step of the
+     * reported issue #417 sequence.
+     */
+    private static ChatTurn catTurn(String path) {
+        var args = tools.jackson.databind.node.JsonNodeFactory.instance.objectNode();
+        args.put("path", path);
+        return new ChatTurn("", List.of(new org.remus.giteabot.ai.ToolCall("call-cat", "cat", args)),
+                StopReason.TOOL_USE, 100L, 10L);
+    }
 
     private WebhookPayload createCommentPayload(String commentBody) {
         WebhookPayload payload = new WebhookPayload();

@@ -4,7 +4,9 @@
 **Scope:** Coding agent (`CodingAgentStrategy`) in **NATIVE** tool mode only. One new session
 status (migration V52, `h2` + `postgresql`). No new configuration, no new budget knob.
 **Settled decisions:** default-on, no feature flag; NATIVE only (legacy keeps its hard-fail);
-new `ANSWERED` session status instead of reusing `IN_PROGRESS`.
+new `ANSWERED` session status instead of reusing `IN_PROGRESS`; only a file-changing round closes the
+answer path; the post-nudge turn is the answer, with the complete pre-nudge turn as the fallback
+(both revised after the branch review).
 **Origin:** bug report against `tmseidel/ai-git-bot:latest`, mode NATIVE, qwen3.6-35B-A3B,
 context 16384, CPU-only. Issue: *"Read docker-compose.yaml. Do not modify anything. Tell me the
 first 10 lines."*
@@ -66,9 +68,9 @@ that branch.
 | # | condition | decision |
 |---|-----------|----------|
 | R1 | workspace has uncommitted changes | unchanged: `Finish(success)` -> commit + PR |
-| R2 | clean, `answerNudges == 0` | `answerNudges++`; `Continue(native two-way nudge)` — records nothing: a pre-nudge turn is not yet an answer |
-| R3 | clean, `answerNudges >= 1`, `!implementationAttempted`, candidate != null | `Finish(LoopOutcome.answered(branch, candidate))` |
-| R4 | anything else — blank text, truncated-only, or an implementation was attempted and produced nothing | `Finish(fail)` |
+| R2 | clean, `answerNudges == 0` | `answerNudges++`, keep the turn as the fallback answer, `Continue(native two-way nudge)` |
+| R3 | clean, `answerNudges >= 1`, `!implementationAttempted`, and this turn or the pre-nudge turn is a complete answer | `Finish(LoopOutcome.answered(branch, text))` |
+| R4 | anything else — no complete turn at all, or a file-changing round was attempted and produced nothing | `Finish(fail)` |
 
 R4 is also where the missing budget guard (root cause 2) lands: the branch can no longer return
 `Continue` more than once.
@@ -78,28 +80,36 @@ R4 is also where the missing budget guard (root cause 2) lands: the branch can n
 * `int answerNudges` — prose-only rounds spent; bounded at 1 by construction, so it needs no
   configuration and cannot interact with `attempt`.
 * `boolean implementationAttempted` — set when a tool-execution round actually executes a
-  mutation or validation request. **Not** expressed as `attempt > 1`: `attempt` is also bumped by
+  *file-changing* request (`ToolCatalog#isFile`: `write-file`, `patch-file`, `mkdir`,
+  `delete-file`). A validation-only round does not set it, so a read-only request that runs
+  the build or test suite to report on it still reaches R3. **Not** expressed as `attempt > 1`: `attempt` is also bumped by
   no-diff tool rounds and by validation retries, so it does not mean "the agent tried to
   implement". The explicit flag is what keeps R3 honest.
 * Prose rounds no longer touch `attempt` at all (fixes root cause 4, and R3 depends on it).
 
 ### 4.3 Answer candidate selection
 
-The candidate is the **longest prose turn *after the nudge* whose `stopReason` is `END_TURN`**,
-seen while the workspace was clean.
+The answer is the **complete plain-language turn *after the nudge***, with the complete turn
+recorded *before* the nudge as the fallback. Both are read while the workspace is clean.
 
-- *Post-nudge only*: the nudge is what offers the answer exit, so anything the model wrote
-  before it is narration ("let me look into the Docker setup, then decide what to change").
-  Recording it would let a blank or truncated post-nudge turn fall back to that narration and
-  publish it as the answer to an issue the model never actually concluded anything about.
-  Cost: a model that *did* answer pre-nudge and then replies "see above" after the nudge gets
-  that one-liner published instead of the good text. Accepted — the nudge asks for "your
-  complete final answer", so a complying model restates it, and a short answer is a much smaller
-  miss than a published false claim about the issue.
-- *Longest, not last*: a model that answers well and then replies "Understood, nothing needed"
-  still yields the good text, and no arbitrary minimum-length constant is needed. Lengths are
-  compared on the stripped text — the same form that gets posted.
-- *`END_TURN` only*: a `MAX_TOKENS` turn is truncated, so a half sentence is never posted.
+- *Post-nudge preferred*: the nudge is what offers the answer exit, so its reply is the answer
+  whenever the model answered at all. The nudge demands the answer be written out again in full
+  ("do not refer back to an earlier message"), which is what keeps a "see above" reply from
+  standing in for the real text on a complying model.
+- *Pre-nudge fallback*: when the post-nudge turn is empty or truncated, the complete turn
+  recorded at nudge time is published instead of failing a run that already produced an answer.
+  Only when neither turn is complete does the run fail (R4).
+- *Not "longest wins"*: an earlier revision compared candidate lengths and kept the longest, but
+  a pre-nudge turn can be narration ("let me look into the Docker setup, then decide what to
+  change"), so a usable post-nudge reply always wins over a longer earlier one. The revision
+  after that accepted only post-nudge turns, which threw away a correct pre-nudge answer — hence
+  the split above: preference plus fallback, no cross-turn length comparison (there is at most
+  one post-nudge candidate anyway, since every text-only turn after the nudge ends the run).
+  Consequence accepted by the review: a model that answers pre-nudge and then replies "As stated
+  above, …" has only that reply published. The fallback covers the unusable case and the nudge
+  wording the complying one; a short answer beats a published false claim about the issue.
+- *`END_TURN` only*: a `MAX_TOKENS` turn is truncated, so a half sentence is never posted — it
+  counts as "no complete post-nudge turn" and triggers the fallback.
 - *Clean workspace only*: a prose turn with a dirty workspace is the existing "I'm done" signal
   (R1) and must not be collected as an answer.
 
@@ -213,8 +223,10 @@ operator content. The text is LLM-facing, so it stays English (UI copy only is l
 | read-only question, model answers (the report) | 32 rounds, FAILED, answer invisible | 3 rounds, `ANSWERED`, answer posted |
 | read-only question, model narrates before answering | nudge loop | nudge, then either answer or R4 fail |
 | `MAX_TOKENS` truncation only | nudge loop | R4 fail, nothing posted |
+| read-only request that runs the build/tests to report on them | nudge loop → `FAILED` (the validation call counted as an implementation attempt) | answer posted (`ANSWERED`) |
+| answer given before the nudge, empty or truncated reply after it | R4 fail, answer lost | the pre-nudge complete answer is posted |
 | empty prose, no tool calls | nudge loop | R4 fail |
-| implementation attempted, then prose, no diff | nudge loop | R4 fail (unchanged signal, bounded cost) |
+| file-changing round without a diff, then prose | nudge loop | R4 fail (unchanged signal, bounded cost) |
 | changes exist, then prose | PR | PR (unchanged) |
 | follow-up comment on an issue with an open PR that needs no change | nudge loop | answer posted, status stays `PR_CREATED` |
 | LEGACY mode | hard fail on unparseable text | unchanged |
@@ -237,20 +249,22 @@ repository tree in the first user message).
 * rewrite `step_nativeTextOnlyTurnWithoutChanges_nudgesInsteadOfFailing` — it currently asserts
   only `Continue`; pin that the nudge names both exits.
 * answer after the nudge -> `Finish` with an `AgentAnswer` payload carrying the prose.
-* only the post-nudge turn is published: a pre-nudge narration is ignored, and a blank post-nudge
-  turn fails instead of falling back to it.
-* longest-turn-wins among eligible turns: a short follow-up does not replace a substantial
-  earlier *post-nudge* answer.
+* the post-nudge turn wins over a longer pre-nudge narration, and a shorter post-nudge reply is
+  still the published answer.
+* a blank or truncated post-nudge turn falls back to the complete pre-nudge answer, and fails only
+  when the run never produced a complete turn.
+* a validation-only tool round does not close the answer path (the "run the tests and report"
+  case), while a file write without a diff still does.
 * prose rounds do not consume the retry budget (a real tool round after prose still executes).
 * `MAX_TOKENS`-only run -> fail, nothing posted.
-* blank prose after the nudge -> fail (the earlier narration is not published).
-* implementation attempted, then prose, no diff -> fail (not an answer).
+* file-changing round without a diff, then prose -> fail (not an answer).
 
 `IssueImplementationServiceTest`
 
 * `handleIssueAssigned` answer path: comment posted, status `ANSWERED`, `commitAndPush` and
   `createPullRequest` never called, critic not consulted.
 * `handleIssueComment` answer path with an existing PR: status stays `PR_CREATED`.
+* end-to-end sequence (`cat` -> pre-nudge answer -> nudge -> shorter re-answer) and its blank-re-answer variant: the comment carries the post-nudge reply respectively the earlier complete answer, and no PR is opened.
 * `handleIssueAssigned_aiReturnsNoTools_postsFailure` (legacy) stays green.
 
 `AgentPromptBuilderTest`: the native feedback names both exits; the legacy feedback is unchanged.
@@ -276,9 +290,15 @@ Migration gate test: `AgentSessionAnsweredStatusTest` (see 4.6).
   `giteabot.agent_sessions{status="answered"}` and on the deliberately neutral comment wording.
 * Every read-only task now costs one extra round (~12K prompt tokens locally). That is the price
   of distinguishing "let me think first" from an answer, and it replaces a 30-round burn.
-* Answer quality is model-dependent. The post-nudge/longest-complete-turn rule keeps a vague
-  one-liner or pre-work narration from standing in for an answer, but it cannot make a small local
-  model answer well.
+* Answer quality is model-dependent. Preferring the complete post-nudge turn keeps pre-work
+  narration from standing in for an answer and the fallback keeps a real answer from being thrown
+  away, but neither can make a small local model answer well.
+* The fallback publishes the pre-nudge turn when the post-nudge reply is empty or truncated, so a
+  model that narrated its plan and then went silent is published as an answer instead of
+  `FAILED`. Stated explicitly because it loosens the earlier rule: the alternative (fail and post
+  nothing) loses the runs that did answer, and the comment wording reports what the agent did, so
+  a narration line reads as what it is. Delete the fallback branch in `nativeTextOnlyStep` to go
+  back to failing those runs.
 
 ## 10. Follow-ups (not in this change)
 
