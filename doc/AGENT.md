@@ -48,6 +48,31 @@ The answer outcome exists because an issue that needs no code change can never p
 
 The answer is the reply that follows that nudge, and the nudge asks for the complete answer to be written out again instead of referring back to an earlier message. A reply that is empty or was cut off at the token limit is not retried: the run publishes the complete reply the model gave *before* the nudge when there was one, and fails otherwise — a truncated sentence is never posted, and neither is a run that never answered at all. A reply that follows a change to the repository (a file write, however small) always fails when it left no diff, because "nothing needed changing" is not a conclusion the agent can verify. Only *file-changing* tools count as such an attempt: a read-only request that runs the build or test suite to report on it ("run the tests and tell me whether they pass") still ends as an answer. The comment names what the agent did, not what the issue needs, because a weak model can talk itself out of the work — watch the outcome instead: `giteabot.agent_sessions{status="answered"}` (see `doc/DEPLOYMENT.md`) climbs when runs start answering instead of working.
 
+## How a writer run ends
+
+A writer run reads repository context, then ends in exactly one of three ways:
+
+| Outcome | When | What you see |
+|---------|------|--------------|
+| **Improved issue** | the model has enough information | a new issue created from the discussion, linked back in a comment |
+| **Clarifying questions** | a fact is missing that only the author can supply | the questions as a comment, and the session stays open for the next reply |
+| **More context needed** | the model still asks for repository context after the wrap-up round was offered | *"I need more context before I can continue…"* |
+
+The wrap-up round exists for that last case. A run has `agent.writer.max-tool-rounds`
+repository-context rounds (default 5); the round after them is the **wrap-up round** — no tool is
+executed any more, every pending call is answered with *"not executed — the writer's
+repository-context budget is exhausted for this run"*, and the model is told the budget is spent and
+asked for its final answer from what it has already read (a revised issue draft, or the specific
+question it could not verify). The round after that is the model's answer. Before that round
+existed, a run whose tool calls arrived at the limit discarded them and ended, throwing away
+everything the model had gathered; the output contract now names the limit so the model can spend
+its rounds deliberately.
+
+A follow-up comment starts a new run, which replays the previous tool exchanges — the assistant
+turns with their calls and the tool results — from the session history, so the model does not read
+the same files twice. Sessions written before that payload was persisted (Flyway `V53`) drop those
+exchanges on replay instead and answer from a shorter history.
+
 ## Setup
 
 ### 1. Create the integrations
@@ -103,6 +128,7 @@ Common issue-agent settings can be set as environment variables or Spring proper
 | `AGENT_BUDGET_MAX_TOOL_RESULT_CHARS` | `agent.budget.max-tool-result-chars` | `8000` | Both | Maximum characters for tool execution results |
 | `AGENT_TRIAGE_MAX_TOOL_ROUNDS` | `agent.triage.max-tool-rounds` | `5` | Triage | Context-gathering rounds before a routing decision is required |
 | `AGENT_TRIAGE_MAX_INITIAL_TREE_FILES` | `agent.triage.max-initial-tree-files` | `100` | Triage | Repository tree entries in the initial triage prompt |
+| `AGENT_WRITER_MAX_TOOL_ROUNDS` | `agent.writer.max-tool-rounds` | `5` | Writer | Repository-context rounds before the wrap-up round requires an answer |
 
 Additional advanced properties include `agent.validation.max-tool-executions`, `agent.validation.tool-timeout-seconds`, `agent.validation.available-tools`, `agent.schema.enforce`, and the opt-in `agent.critic.*` settings. Keep defaults unless you are tuning cost, reliability, or the installed toolchain.
 
