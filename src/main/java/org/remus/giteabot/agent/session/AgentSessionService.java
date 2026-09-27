@@ -1,7 +1,9 @@
 package org.remus.giteabot.agent.session;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.ai.AiMessage;
+import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.session.ConversationMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,8 +12,10 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Service for managing agent coding sessions.
@@ -99,6 +103,10 @@ public class AgentSessionService {
      * reference rows deleted by a prior compaction is never traversed by
      * {@code merge()}. Callers must rebind to the returned managed entity.</p>
      *
+     * <p>Native tool-call payloads are persisted with their message, so a later
+     * run can replay an assistant turn together with the tool rows that answer
+     * it.</p>
+     *
      * @param sessionId         id of the session to update
      * @param messages          the round's pending messages, in order
      * @param totalInputTokens  cumulative input tokens to persist
@@ -117,11 +125,34 @@ public class AgentSessionService {
         Instant base = Instant.now();
         for (int i = 0; i < messages.size(); i++) {
             PendingMessage msg = messages.get(i);
-            managed.addMessage(msg.role(), msg.content(), base.plus(i, ChronoUnit.MICROS));
+            managed.addMessage(msg.role(), msg.content(), base.plus(i, ChronoUnit.MICROS),
+                    toolCallsJson(msg.payload()), toolCallId(msg.payload()));
         }
         managed.setTotalInputTokens(totalInputTokens);
         managed.setTotalOutputTokens(totalOutputTokens);
         return managed; // dirty checking flushes inserts + token counts on commit
+    }
+
+    /**
+     * Serialises an assistant turn's tool calls for storage. Returns {@code null}
+     * when the message carries none; a serialisation failure degrades to
+     * {@code null} as well — the exchange is then dropped on replay, which is
+     * the same outcome as a pre-V53 row and never a broken request.
+     */
+    private static String toolCallsJson(PendingMessage.ToolPayload payload) {
+        if (payload == null || payload.toolCalls() == null || payload.toolCalls().isEmpty()) {
+            return null;
+        }
+        try {
+            return AgentJackson.mapper().writeValueAsString(payload.toolCalls());
+        } catch (Exception e) {
+            log.warn("Could not serialise tool_calls payload: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private static String toolCallId(PendingMessage.ToolPayload payload) {
+        return payload == null ? null : payload.toolCallId();
     }
 
     /**
@@ -238,9 +269,11 @@ public class AgentSessionService {
      * triggers a new coding round) to prevent the DB-persisted history from
      * growing without bound across sessions.</p>
      *
-     * <p>Tool-role messages and blank-content assistant messages are already
-     * dropped by {@link #toAiMessages} during replay, so this method only
-     * operates on the meaningful user/assistant messages.</p>
+     * <p>The retained window never starts inside a tool exchange: the same rows
+     * back {@link #toAiMessages}' replay, so cutting between an assistant turn and
+     * the tool rows that answer it would leave them unpaired. The size counted
+     * against the threshold includes the persisted tool-call payload, which is
+     * replayed as well.</p>
      *
      * @param sessionId id of the session to compact
      * @return the managed (compacted) entity; callers must rebind to it because
@@ -265,9 +298,7 @@ public class AgentSessionService {
             return managed;
         }
 
-        int totalChars = sorted.stream()
-                .mapToInt(m -> m.getContent() != null ? m.getContent().length() : 0)
-                .sum();
+        int totalChars = sorted.stream().mapToInt(AgentSessionService::messageChars).sum();
 
         if (totalChars < COMPACT_THRESHOLD_CHARS) {
             log.debug("Agent session {} has {} chars, below threshold {}, no compaction needed",
@@ -278,8 +309,13 @@ public class AgentSessionService {
         log.info("Compacting agent session {} context window: {} messages, {} chars -> keeping last {}",
                 managed.getId(), sorted.size(), totalChars, MAX_MESSAGES_AFTER_COMPACT);
 
-        // Identify messages to remove (all but the most recent N)
+        // Identify messages to remove (all but the most recent N). A window that
+        // would start on a tool row is widened back onto the assistant turn that
+        // announced the call, so the replay never sees an unanswered pair.
         int removeCount = sorted.size() - MAX_MESSAGES_AFTER_COMPACT;
+        while (removeCount > 0 && "tool".equalsIgnoreCase(sorted.get(removeCount).getRole())) {
+            removeCount--;
+        }
         List<ConversationMessage> toRemove = sorted.subList(0, removeCount);
 
         // Build a summary of what was removed
@@ -294,13 +330,23 @@ public class AgentSessionService {
         }
 
         int newTotalChars = managed.getMessages().stream()
-                .mapToInt(m -> m.getContent() != null ? m.getContent().length() : 0)
-                .sum();
+                .mapToInt(AgentSessionService::messageChars).sum();
 
         log.info("Agent session {} compacted: {} messages, {} chars remaining",
                 managed.getId(), managed.getMessages().size(), newTotalChars);
 
         return managed; // dirty checking + orphanRemoval handle the flush
+    }
+
+    /**
+     * Persisted size of a message: its content plus the native tool-call payload,
+     * which is replayed to the provider and therefore counts towards the
+     * compaction threshold.
+     */
+    private static int messageChars(ConversationMessage message) {
+        int contentChars = message.getContent() == null ? 0 : message.getContent().length();
+        int payloadChars = message.getToolCalls() == null ? 0 : message.getToolCalls().length();
+        return contentChars + payloadChars;
     }
 
     /**
@@ -327,37 +373,84 @@ public class AgentSessionService {
 
 
     /**
-     * Converts stored conversation messages to provider-agnostic AI message format.
-     * Messages are sorted by creation time to maintain conversation order.
+     * Converts stored conversation messages to the provider-agnostic AI message
+     * format, sorted by creation time.
      *
-     * <p><strong>Tool-flow messages are intentionally dropped:</strong> the
-     * persisted {@link ConversationMessage} entity only stores {@code role}
-     * and {@code content} — it does <em>not</em> preserve the native
-     * {@code tool_calls} payload of assistant turns nor the
-     * {@code tool_call_id} of {@code role:"tool"} turns. Replaying such
-     * orphaned messages to OpenAI/Anthropic in a follow-up run would fail
-     * with errors like
-     * <em>"messages with role 'tool' must be a response to a preceeding
-     * message with 'tool_calls'"</em>. Since prior tool executions have
-     * already been committed/pushed and the agent can re-discover state via
-     * tools, we strip:
+     * <p>Native tool exchanges are rebuilt from the persisted payload
+     * ({@link ConversationMessage#getToolCalls()} on the assistant turn,
+     * {@link ConversationMessage#getToolCallId()} on the tool row), so a follow-up
+     * run replays the same pairs the previous run produced. Rows that cannot be
+     * paired are dropped, because OpenAI/Anthropic reject a {@code role:"tool"}
+     * message whose call id the preceding assistant turn did not announce:</p>
      * <ul>
-     *   <li>every {@code role:"tool"} message,</li>
-     *   <li>assistant messages whose content is blank (these were
-     *       tool-call-only turns whose {@code tool_calls} payload is lost).</li>
+     *   <li>a tool row without a {@code tool_call_id} (persisted before V53),</li>
+     *   <li>a tool row whose id no preceding assistant turn announced, or that
+     *       this turn already answered,</li>
+     *   <li>an assistant row that is blank <em>and</em> carries no tool calls
+     *       (a pre-V53 tool-call-only turn).</li>
      * </ul>
+     *
+     * <p>Removing an assistant turn therefore removes its tool rows too — a pair is
+     * never replayed half-way.</p>
      */
     public List<AiMessage> toAiMessages(AgentSession session) {
-        return session.getMessages().stream()
-                .sorted(Comparator.comparing(ConversationMessage::getCreatedAt,
-                        Comparator.nullsFirst(Comparator.naturalOrder())))
-                .filter(m -> !"tool".equalsIgnoreCase(m.getRole()))
-                .filter(m -> !("assistant".equalsIgnoreCase(m.getRole())
-                        && (m.getContent() == null || m.getContent().isBlank())))
-                .map(m -> AiMessage.builder()
-                        .role(m.getRole())
-                        .content(m.getContent())
-                        .build())
-                .toList();
+        List<ConversationMessage> ordered = new ArrayList<>(session.getMessages());
+        ordered.sort(Comparator.comparing(ConversationMessage::getCreatedAt,
+                Comparator.nullsFirst(Comparator.naturalOrder())));
+
+        List<AiMessage> replay = new ArrayList<>();
+        // Call ids announced by the most recent assistant turn, not yet answered.
+        Set<String> unanswered = new LinkedHashSet<>();
+        for (ConversationMessage message : ordered) {
+            String role = message.getRole();
+            if ("assistant".equalsIgnoreCase(role)) {
+                List<ToolCall> toolCalls = parseToolCalls(message.getToolCalls());
+                if (!toolCalls.isEmpty()) {
+                    replay.add(AiMessage.builder()
+                            .role(role)
+                            .content(message.getContent())
+                            .toolCalls(toolCalls)
+                            .build());
+                    unanswered.clear();
+                    for (ToolCall call : toolCalls) {
+                        unanswered.add(call.id());
+                    }
+                } else if (message.getContent() != null && !message.getContent().isBlank()) {
+                    replay.add(AiMessage.builder().role(role).content(message.getContent()).build());
+                    unanswered.clear();
+                }
+            } else if ("tool".equalsIgnoreCase(role)) {
+                String callId = message.getToolCallId();
+                if (callId == null || !unanswered.remove(callId)) {
+                    continue;
+                }
+                replay.add(AiMessage.builder()
+                        .role(role)
+                        .content(message.getContent())
+                        .toolResult(message.getContent())
+                        .toolCallId(callId)
+                        .build());
+            } else {
+                replay.add(AiMessage.builder().role(role).content(message.getContent()).build());
+                unanswered.clear();
+            }
+        }
+        return replay;
+    }
+
+    /**
+     * Reads back an assistant turn's persisted tool calls. A payload that cannot be
+     * parsed yields no calls, so the turn is replayed as if it had none.
+     */
+    private static List<ToolCall> parseToolCalls(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return List.of(AgentJackson.mapper().readValue(json, ToolCall[].class));
+        } catch (Exception e) {
+            log.warn("Could not parse persisted tool_calls payload: {}", e.getMessage());
+            return List.of();
+        }
     }
 }

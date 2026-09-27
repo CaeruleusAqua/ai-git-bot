@@ -103,7 +103,9 @@ public final class AgentLoop {
                     round, budget.maxRounds(), ctx.issueNumber(),
                     aiResponse == null ? 0 : aiResponse.length(),
                     turn.toolCalls().size(), turn.stopReason());
-            pending.add(new PendingMessage("assistant", aiResponse));
+            pending.add(new PendingMessage("assistant", aiResponse,
+                    turn.toolCalls().isEmpty() ? null
+                            : new PendingMessage.ToolPayload(turn.toolCalls(), null)));
 
             // Track token usage (accumulated in-memory on the session; persisted by
             // flushRound) and trigger tool-message truncation when the context
@@ -227,10 +229,12 @@ public final class AgentLoop {
                             .toolCallId(r.toolCallId())
                             .toolResult(r.resultText())
                             .build());
-                    // Persist a textual marker in the session log so post-hoc review still shows
-                    // the tool flow. Full structured replay is intentionally out of scope here.
+                    // The row keeps a textual marker for post-hoc review and carries the
+                    // native call id, so a follow-up run can rebuild the pair for the
+                    // provider instead of replaying an orphaned tool message.
                     pending.add(new PendingMessage("tool",
-                            "[" + r.toolCallId() + "] " + r.resultText()));
+                            "[" + r.toolCallId() + "] " + r.resultText(),
+                            new PendingMessage.ToolPayload(null, r.toolCallId())));
                 }
                 currentMessage = (follow == null || follow.isEmpty()) ? "" : follow;
                 if (!currentMessage.isEmpty()) {
