@@ -23,12 +23,30 @@ Writer bots do not mutate repositories. If a coding-agent session already exists
 flowchart LR
     A[Assign bot to issue] --> B{Bot type}
     B -->|Coding bot| C[Reads context, edits workspace, validates]
-    C --> D[Pushes branch and opens PR]
-    B -->|Writer bot| E[Reads context and checks issue quality]
-    E --> F[Asks author questions or creates improved issue]
+    C --> D{Workspace changed?}
+    D -->|Yes| E[Pushes branch and opens PR]
+    D -->|No, the issue needs no change| F[Posts the answer as an issue comment]
+    B -->|Writer bot| G[Reads context and checks issue quality]
+    G --> H[Asks author questions or creates improved issue]
 ```
 
 Both agents post visible progress, error, and completion comments on the issue. Repository context gathering is not posted publicly. For the coding agent, build/test output may be posted when validation fails so users can understand why the bot is retrying.
+
+Treat the model's text in those comments as unreviewed output: an answer is published verbatim, so a model that read a file (a `.env`, a config with credentials) can quote it, and any `@name` it writes lands in a public comment. The bot ignores webhook events from its own user (`BotWebhookService#isBotUser`, checked in every platform handler), so a self-mention cannot make it respond to its own comment.
+
+## How a coding run ends
+
+A coding run ends in exactly one of three ways, and the comment on the issue always says which:
+
+| Outcome | When | What you see |
+|---------|------|--------------|
+| **Pull request** | the agent changed files and validation passed | success comment with the PR link |
+| **Answer** (no PR) | the model concluded the issue needs no repository change — a question, an analysis, or an explicitly read-only request | the model's response as a comment (*"I did not make any code changes…"*) plus a note that no pull request was opened; session status `ANSWERED` |
+| **Failure** | the agent tried to implement and produced no diff, or the model neither called tools nor answered | *"I was unable to produce a valid implementation…"* |
+
+The answer outcome exists because an issue that needs no code change can never produce a diff. The agent asks the model once to either call tools or answer in plain language, and then acts on that decision instead of retrying. Follow-up comments keep working after an answer — mention the bot again and it can still open a PR.
+
+The answer is the reply that follows that nudge, and the nudge asks for the complete answer to be written out again instead of referring back to an earlier message. A reply that is empty or was cut off at the token limit is not retried: the run publishes the complete reply the model gave *before* the nudge when there was one, and fails otherwise — a truncated sentence is never posted, and neither is a run that never answered at all. A reply that follows a change to the repository (a file write, however small) always fails when it left no diff, because "nothing needed changing" is not a conclusion the agent can verify. Only *file-changing* tools count as such an attempt: a read-only request that runs the build or test suite to report on it ("run the tests and tell me whether they pass") still ends as an answer. The comment names what the agent did, not what the issue needs, because a weak model can talk itself out of the work — watch the outcome instead: `giteabot.agent_sessions{status="answered"}` (see `doc/DEPLOYMENT.md`) climbs when runs start answering instead of working.
 
 ## Setup
 
