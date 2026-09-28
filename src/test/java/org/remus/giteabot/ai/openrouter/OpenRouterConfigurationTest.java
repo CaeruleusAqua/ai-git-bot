@@ -206,19 +206,35 @@ class OpenRouterConfigurationTest {
         }
     }
 
+    /** The OpenRouter settings migration version. */
+    private static final int OPENROUTER_MIGRATION_VERSION = 53;
+
+    /** Highest migration version available on this checkout below the OpenRouter migration. */
+    private static String baselineBeforeOpenRouter() throws Exception {
+        try (var files = java.nio.file.Files.list(java.nio.file.Path.of("src/main/resources/db/migration/h2"))) {
+            return files.map(path -> path.getFileName().toString())
+                    .map(name -> name.replaceFirst("^V(\\d+)__.*", "$1"))
+                    .map(Integer::parseInt)
+                    .filter(version -> version < OPENROUTER_MIGRATION_VERSION)
+                    .max(Integer::compareTo)
+                    .orElseThrow()
+                    .toString();
+        }
+    }
+
     @Test
     void migrationAddsDefaultsWithoutChangingExistingProviderCredentials() throws Exception {
         String url = "jdbc:h2:mem:openrouter-upgrade;DB_CLOSE_DELAY=-1";
         var flyway = Flyway.configure().dataSource(url, "sa", "")
                 .locations("classpath:db/migration/h2");
-        flyway.target("51").load().migrate();
+        flyway.target(baselineBeforeOpenRouter()).load().migrate();
         try (var connection = DriverManager.getConnection(url, "sa", "");
              var statement = connection.createStatement()) {
             statement.execute("""
                     INSERT INTO ai_integrations (name, provider_type, api_url, api_key, model, created_at, updated_at)
                     VALUES ('Existing', 'openai', 'https://proxy.example', 'old-ciphertext', 'old-model', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """);
-            flyway.target("52").load().migrate();
+            flyway.target(String.valueOf(OPENROUTER_MIGRATION_VERSION)).load().migrate();
             try (var row = statement.executeQuery("SELECT * FROM ai_integrations WHERE name = 'Existing'")) {
                 assertThat(row.next()).isTrue();
                 assertThat(row.getString("provider_type")).isEqualTo("openai");
