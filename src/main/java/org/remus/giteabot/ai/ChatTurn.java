@@ -27,10 +27,10 @@ public record ChatTurn(String assistantText,
 
     /** Preserves independently present provider counters, including explicit zero. Invalid counters are unavailable. */
     public static ChatTurn withReportedUsage(String text, List<ToolCall> calls, StopReason reason,
-                                             Long input, Long output) {
-        boolean hasInput = input != null && input >= 0;
-        boolean hasOutput = output != null && output >= 0;
-        return new ChatTurn(text, calls, reason, hasInput ? input : 0, hasOutput ? output : 0,
+                                             Number input, Number output) {
+        boolean hasInput = input != null && input.longValue() >= 0;
+        boolean hasOutput = output != null && output.longValue() >= 0;
+        return new ChatTurn(text, calls, reason, hasInput ? input.longValue() : 0, hasOutput ? output.longValue() : 0,
                 hasInput, hasOutput);
     }
 
