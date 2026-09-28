@@ -81,9 +81,14 @@
                                     </select>
                                 </div>
                                 <div class="col-md-4 d-flex align-items-center">
-                                    <div class="form-check">
-                                        <input type="checkbox" class="form-check-input" id="openRouterZdr" th:field="*{openRouterZdr}"/>
-                                        <label for="openRouterZdr" class="form-check-label" th:text="#{label.ai.openRouter.zdr}">Require zero data retention (ZDR)</label>
+                                    <div class="w-100">
+                                        <!-- Reserve the label row of the sibling selects so the
+                                             checkbox line aligns with the select controls. -->
+                                        <label class="form-label invisible" aria-hidden="true">&nbsp;</label>
+                                        <div class="form-check">
+                                            <input type="checkbox" class="form-check-input" id="openRouterZdr" th:field="*{openRouterZdr}"/>
+                                            <label for="openRouterZdr" class="form-check-label" th:text="#{label.ai.openRouter.zdr}">Require zero data retention (ZDR)</label>
+                                        </div>
                                     </div>
                                 </div>
                                 <div class="col-12 form-text" th:text="#{help.ai.openRouter.routing}">
