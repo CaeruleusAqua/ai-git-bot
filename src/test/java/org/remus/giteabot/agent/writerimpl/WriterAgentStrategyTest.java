@@ -6,6 +6,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.agent.loop.AgentRunContext;
+import org.remus.giteabot.agent.loop.LoopOutcome;
 import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.session.AgentSession;
@@ -205,6 +206,29 @@ class WriterAgentStrategyTest {
     private static StepDecision.Continue assertContinued(StepDecision decision) {
         assertThat(decision).isInstanceOf(StepDecision.Continue.class);
         return (StepDecision.Continue) decision;
+    }
+
+    @Test
+    void toolsAreSuppressedOnlyAfterTheWrapUpRound() {
+        // The wrap-up round itself still carries the descriptors: a model that calls them
+        // there gets the "not executed" result plus the instruction, which is what tells it
+        // the budget is spent. Everything after that is prose-only, because a model that
+        // still sees the descriptors reaches for them instead of answering.
+        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS)).isFalse();
+        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS + 1)).isFalse();
+        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS + 2)).isTrue();
+    }
+
+    @Test
+    void exhaustedBudget_postsTheNeedMoreContextComment() {
+        // The loop cap used to end the run silently: the model narrated instead of
+        // answering and the user saw nothing at all.
+        LoopOutcome outcome = strategy.onBudgetExhausted(ctx);
+
+        assertThat(outcome.success()).isTrue();
+        verify(repositoryClient).postIssueComment(eq("o"), eq("r"), eq(ISSUE_NUMBER),
+                contains("need more context"));
+        verify(sessionService).setStatus(any(), eq(AgentSession.AgentSessionStatus.IN_PROGRESS));
     }
 
     private static StepDecision.ContinueWithToolResults assertContinueWithResults(StepDecision decision) {

@@ -12,8 +12,10 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -312,6 +314,9 @@ public class AgentSessionService {
         // Identify messages to remove (all but the most recent N). A window that
         // would start on a tool row is widened back onto the assistant turn that
         // announced the call, so the replay never sees an unanswered pair.
+        // Only the boundary row is inspected, so a window whose every retained row
+        // were a tool row (possible only with a pathological history) could still cut
+        // a pair; toAiMessages then drops the orphans, so the request stays valid.
         int removeCount = sorted.size() - MAX_MESSAGES_AFTER_COMPACT;
         while (removeCount > 0 && "tool".equalsIgnoreCase(sorted.get(removeCount).getRole())) {
             removeCount--;
@@ -379,19 +384,29 @@ public class AgentSessionService {
      * <p>Native tool exchanges are rebuilt from the persisted payload
      * ({@link ConversationMessage#getToolCalls()} on the assistant turn,
      * {@link ConversationMessage#getToolCallId()} on the tool row), so a follow-up
-     * run replays the same pairs the previous run produced. Rows that cannot be
-     * paired are dropped, because OpenAI/Anthropic reject a {@code role:"tool"}
-     * message whose call id the preceding assistant turn did not announce:</p>
+     * run replays the same pairs the previous run produced. A pair is only replayed
+     * <em>complete</em>: the assistant turn keeps its {@code tool_calls} payload only
+     * when the tool rows that follow it answer every announced id, and those rows
+     * are replayed in the order the calls were announced, once each. Everything else
+     * is dropped, because OpenAI and Anthropic both reject a request that breaks the
+     * contract — {@code "assistant message with 'tool_calls' must be followed by tool
+     * messages"} / {@code "tool_use ids were found without tool_result blocks"}:</p>
      * <ul>
-     *   <li>a tool row without a {@code tool_call_id} (persisted before V53),</li>
-     *   <li>a tool row whose id no preceding assistant turn announced, or that
-     *       this turn already answered,</li>
-     *   <li>an assistant row that is blank <em>and</em> carries no tool calls
-     *       (a pre-V53 tool-call-only turn).</li>
+     *   <li>a tool row without a {@code tool_call_id} (persisted before V53), whose
+     *       call id no following row answers, or that arrives twice for one id,</li>
+     *   <li>an assistant turn only <em>partly</em> answered — it is replayed as plain
+     *       content instead, or skipped when its content is blank. This is the shape a
+     *       run leaves behind when it finishes on a tool-call turn (the writer's
+     *       give-up branch, or any strategy returning {@code Finish} without answering
+     *       its calls), and replaying it verbatim would 400 the follow-up run.</li>
      * </ul>
      *
-     * <p>Removing an assistant turn therefore removes its tool rows too — a pair is
-     * never replayed half-way.</p>
+     * <p>Announced ids are rewritten to the {@code [a-zA-Z0-9_-]} alphabet every
+     * provider accepts ({@code cat:0} is what a local Ollama integration hands out,
+     * Anthropic rejects it) on both sides of the pair, so a session that outlives the
+     * integration which wrote it still replays. The {@code "[<id>] "} marker the loop
+     * stores in a tool row for post-hoc review is stripped: it is storage metadata,
+     * not part of the result the model saw.</p>
      */
     public List<AiMessage> toAiMessages(AgentSession session) {
         List<ConversationMessage> ordered = new ArrayList<>(session.getMessages());
@@ -399,49 +414,118 @@ public class AgentSessionService {
                 Comparator.nullsFirst(Comparator.naturalOrder())));
 
         List<AiMessage> replay = new ArrayList<>();
-        // Call ids announced by the most recent assistant turn, not yet answered.
-        Set<String> unanswered = new LinkedHashSet<>();
-        for (ConversationMessage message : ordered) {
+        for (int index = 0; index < ordered.size(); index++) {
+            ConversationMessage message = ordered.get(index);
             String role = message.getRole();
             if ("assistant".equalsIgnoreCase(role)) {
-                List<ToolCall> toolCalls = parseToolCalls(message.getToolCalls());
-                if (!toolCalls.isEmpty()) {
-                    replay.add(AiMessage.builder()
-                            .role(role)
-                            .content(message.getContent())
-                            .toolCalls(toolCalls)
-                            .build());
-                    unanswered.clear();
-                    for (ToolCall call : toolCalls) {
-                        unanswered.add(call.id());
-                    }
-                } else if (message.getContent() != null && !message.getContent().isBlank()) {
-                    replay.add(AiMessage.builder().role(role).content(message.getContent()).build());
-                    unanswered.clear();
-                }
+                appendAssistantTurn(replay, ordered, index);
             } else if ("tool".equalsIgnoreCase(role)) {
-                String callId = message.getToolCallId();
-                if (callId == null || !unanswered.remove(callId)) {
-                    continue;
-                }
-                replay.add(AiMessage.builder()
-                        .role(role)
-                        .content(message.getContent())
-                        .toolResult(message.getContent())
-                        .toolCallId(callId)
-                        .build());
+                // Replayed by the assistant turn that announced the call (if any) and
+                // dropped otherwise — an orphaned tool message is not a valid request.
+                continue;
             } else {
                 replay.add(AiMessage.builder().role(role).content(message.getContent()).build());
-                unanswered.clear();
             }
         }
         return replay;
     }
 
     /**
-     * Reads back an assistant turn's persisted tool calls. A payload that cannot be
-     * parsed yields no calls, so the turn is replayed as if it had none.
+     * Replays one persisted assistant turn together with the tool rows that answer
+     * it. See {@link #toAiMessages} for the pairing contract.
      */
+    private static void appendAssistantTurn(List<AiMessage> replay,
+                                            List<ConversationMessage> ordered, int index) {
+        ConversationMessage turn = ordered.get(index);
+        List<ToolCall> announced = parseToolCalls(turn.getToolCalls());
+        if (announced.isEmpty()) {
+            appendPlainTurn(replay, turn);
+            return;
+        }
+
+        // The rows answering this turn are the run of tool rows right behind it; the
+        // loop writes an assistant turn and its results in one flush batch, so
+        // adjacency is what pairs them.
+        Map<String, ConversationMessage> answers = new LinkedHashMap<>();
+        for (int i = index + 1;
+                i < ordered.size() && "tool".equalsIgnoreCase(ordered.get(i).getRole()); i++) {
+            ConversationMessage row = ordered.get(i);
+            if (row.getToolCallId() != null) {
+                answers.putIfAbsent(row.getToolCallId(), row);
+            }
+        }
+
+        if (!announced.stream().allMatch(call -> answers.containsKey(call.id()))) {
+            // Unanswered (or only partly answered) calls: the payload cannot be
+            // replayed, and the orphaned rows have to go with it.
+            appendPlainTurn(replay, turn);
+            return;
+        }
+
+        Map<String, String> replayedIds = replayedIds(announced);
+        replay.add(AiMessage.builder()
+                .role(turn.getRole())
+                .content(turn.getContent())
+                .toolCalls(announced.stream()
+                        .map(call -> new ToolCall(replayedIds.get(call.id()), call.name(),
+                                call.args(), call.providerMetadata()))
+                        .toList())
+                .build());
+        for (ToolCall call : announced) {
+            String result = stripToolMarker(answers.get(call.id()).getContent(), call.id());
+            replay.add(AiMessage.builder()
+                    .role("tool")
+                    .content(result)
+                    .toolResult(result)
+                    .toolCallId(replayedIds.get(call.id()))
+                    .build());
+        }
+    }
+
+    /** Replays a turn without a payload; a blank turn is skipped entirely. */
+    private static void appendPlainTurn(List<AiMessage> replay, ConversationMessage turn) {
+        if (turn.getContent() != null && !turn.getContent().isBlank()) {
+            replay.add(AiMessage.builder().role(turn.getRole()).content(turn.getContent()).build());
+        }
+    }
+
+    /**
+     * Maps the announced ids onto the {@code [a-zA-Z0-9_-]} alphabet every provider
+     * accepts, leaving already-safe ids untouched and resolving collisions (a real
+     * {@code cat:0} beside a literal {@code cat_0}) with a numeric suffix.
+     */
+    private static Map<String, String> replayedIds(List<ToolCall> announced) {
+        Map<String, String> replayed = new LinkedHashMap<>();
+        Set<String> taken = new LinkedHashSet<>();
+        int suffix = 0;
+        for (ToolCall call : announced) {
+            String id = call.id() == null ? "" : call.id();
+            String safe = id.replaceAll("[^a-zA-Z0-9_-]", "_");
+            if (safe.isEmpty()) {
+                safe = "call";
+            }
+            String unique = safe;
+            while (!taken.add(unique)) {
+                unique = safe + "_" + (++suffix);
+            }
+            replayed.put(id, unique);
+        }
+        return replayed;
+    }
+
+    /**
+     * Drops the {@code "[<id>] "} prefix the loop writes into a persisted tool row for
+     * post-hoc review: the marker is storage metadata, and the replayed result should
+     * read like the one the model got in the run that produced it.
+     */
+    private static String stripToolMarker(String content, String callId) {
+        if (content == null) {
+            return null;
+        }
+        String marker = "[" + callId + "] ";
+        return content.startsWith(marker) ? content.substring(marker.length()) : content;
+    }
+
     private static List<ToolCall> parseToolCalls(String json) {
         if (json == null || json.isBlank()) {
             return List.of();

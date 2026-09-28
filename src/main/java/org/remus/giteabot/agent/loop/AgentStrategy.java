@@ -88,6 +88,20 @@ public interface AgentStrategy {
     }
 
     /**
+     * Whether the request for {@code round} (1-based) should go out without tool
+     * descriptors. Default: tools are offered in every round.
+     *
+     * <p>A strategy that spends a round telling the model it cannot read any more
+     * (see {@code WriterAgentStrategy}'s wrap-up round) overrides this for the rounds
+     * after it. The prose instruction alone is not enough — a local model still
+     * reaches for the descriptors that are sitting in the request — and a turn that
+     * calls tools after the budget is spent can only end on the give-up branch.</p>
+     */
+    default boolean suppressToolsAtRound(int round) {
+        return false;
+    }
+
+    /**
      * Native tool-calling variant of {@link #step(AgentRunContext, String, int)}.
      * The default implementation delegates to the text path using
      * {@link ChatTurn#assistantText()} so existing strategies keep working

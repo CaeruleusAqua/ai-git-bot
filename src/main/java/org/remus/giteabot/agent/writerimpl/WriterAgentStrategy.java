@@ -35,8 +35,12 @@ import java.util.List;
  *
  * <p>Round {@code maxToolRounds} is the wrap-up round: repository-context calls
  * are no longer executed, the model is told the budget is spent, and it gets one
- * final round to answer from what it has already read. Past that round the run
- * ends with the "need more context" comment.</p>
+ * final round to answer from what it has already read. That last round goes out
+ * without tool descriptors ({@link #suppressToolsAtRound}), so "answer from what
+ * you have" is the only thing left to do; a run that still fails to answer — and
+ * any turn that calls tools after the wrap-up, the one thing the provider contract
+ * still has to tolerate — ends with the "need more context" comment, from either
+ * the give-up branch or {@link #onBudgetExhausted}.</p>
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -83,6 +87,18 @@ public final class WriterAgentStrategy implements AgentStrategy {
     }
 
     /**
+     * No tool descriptors once the wrap-up round has been delivered. The instruction
+     * says the calls cannot be executed any more, but a local model that still has the
+     * descriptors in front of it reaches for them anyway and can only end on the
+     * give-up branch; taking them away leaves the model with nothing to do but answer
+     * from what it has read.
+     */
+    @Override
+    public boolean suppressToolsAtRound(int round) {
+        return round - 1 > maxToolRounds;
+    }
+
+    /**
      * Native-mode step: translate the model's read-only {@code tool_calls}
      * into the existing {@link ImplementationPlan.ToolRequest} pipeline.
      * When the model returns text-only (no tool calls), defer to the legacy
@@ -124,11 +140,7 @@ public final class WriterAgentStrategy implements AgentStrategy {
                     promptBuilder.buildWrapUpInstruction());
         }
         if (writerRound > maxToolRounds) {
-            sessionService.setStatus(ctx.session(), AgentSession.AgentSessionStatus.IN_PROGRESS);
-            repositoryClient.postIssueComment(ctx.owner(), ctx.repo(), ctx.issueNumber(),
-                    "⚠️ **AI Technical Writer**: I need more context before I can continue. "
-                            + "Please add more details and mention me again.");
-            return new StepDecision.Finish(LoopOutcome.success(ctx.baseBranch(), null));
+            return new StepDecision.Finish(giveUp(ctx));
         }
 
         List<ImplementationPlan.ToolRequest> requests = new ArrayList<>();
@@ -271,8 +283,23 @@ public final class WriterAgentStrategy implements AgentStrategy {
 
     @Override
     public LoopOutcome onBudgetExhausted(AgentRunContext ctx) {
-        // Historical writer behaviour: the for-loop simply ends after maxToolRounds+1 iterations
-        // without further action when no terminal branch has fired. Mirror that as a no-op success.
+        // Reaching the cap without a terminal branch used to end silently, which left the
+        // user with a run that produced nothing and said nothing. Since the round after
+        // the wrap-up has no tool descriptors, an exhausted run means the model narrated
+        // twice instead of answering (or called tools it no longer has) — the same dead
+        // end as the give-up branch, so it gets the same comment.
+        return giveUp(ctx);
+    }
+
+    /**
+     * Ends the run with the historic "needs more context" comment, leaving the session
+     * resumable: the user adds the missing details and mentions the bot again.
+     */
+    private LoopOutcome giveUp(AgentRunContext ctx) {
+        sessionService.setStatus(ctx.session(), AgentSession.AgentSessionStatus.IN_PROGRESS);
+        repositoryClient.postIssueComment(ctx.owner(), ctx.repo(), ctx.issueNumber(),
+                "⚠️ **AI Technical Writer**: I need more context before I can continue. "
+                        + "Please add more details and mention me again.");
         return LoopOutcome.success(ctx.baseBranch(), null);
     }
 
