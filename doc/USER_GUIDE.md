@@ -743,7 +743,7 @@ Set `GITEABOT_SECURITY_OAUTH_DEBUG_LOGGING_ENABLED=true` and configure the appli
 | `AGENT_VALIDATION_MAX_RETRIES` | `3` | Max iterations for error correction |
 | `AGENT_WRITER_MAX_TOOL_ROUNDS` | `5` | Repository-context rounds the technical-writer agent may spend before it has to answer |
 
-See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows. The writer agent's last round is a *wrap-up* round: it can no longer use tools and must answer from what it has already read. Raise `AGENT_WRITER_MAX_TOOL_ROUNDS` for repositories where the model needs to read more files before it can draft the improved issue.
+See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows. The writer agent's wrap-up round can no longer use tools and must answer from what it has already read, and the round that has to produce that answer goes out without any tool descriptors at all, so the exit cannot be missed. Raise `AGENT_WRITER_MAX_TOOL_ROUNDS` for repositories where the model needs to read more files before it can draft the improved issue.
 
 ### AI Provider Overload Retries
 

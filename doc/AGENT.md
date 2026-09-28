@@ -56,22 +56,39 @@ A writer run reads repository context, then ends in exactly one of three ways:
 |---------|------|--------------|
 | **Improved issue** | the model has enough information | a new issue created from the discussion, linked back in a comment |
 | **Clarifying questions** | a fact is missing that only the author can supply | the questions as a comment, and the session stays open for the next reply |
-| **More context needed** | the model still asks for repository context after the wrap-up round was offered | *"I need more context before I can continue…"* |
+| **More context needed** | the model still asks for repository context after the wrap-up round was offered, or narrates twice instead of answering | *"I need more context before I can continue…"* |
 
 The wrap-up round exists for that last case. A run has `agent.writer.max-tool-rounds`
 repository-context rounds (default 5); the round after them is the **wrap-up round** — no tool is
 executed any more, every pending call is answered with *"not executed — the writer's
 repository-context budget is exhausted for this run"*, and the model is told the budget is spent and
 asked for its final answer from what it has already read (a revised issue draft, or the specific
-question it could not verify). The round after that is the model's answer. Before that round
-existed, a run whose tool calls arrived at the limit discarded them and ended, throwing away
-everything the model had gathered; the output contract now names the limit so the model can spend
-its rounds deliberately.
+question it could not verify). The round after that is the model's answer. The answer round goes
+out **without tool descriptors** (`AgentStrategy#suppressToolsAtRound`): a local model that still
+sees them calls them instead of answering, and that path can only end in the *"more context needed"*
+comment. A run that reaches the round cap without any decision — the model narrated twice instead of
+answering — now posts the same comment rather than ending silently. Before the wrap-up round existed,
+a run whose tool calls arrived at the limit discarded them and ended, throwing away everything the
+model had gathered; the output contract now names the limit so the model can spend its rounds
+deliberately.
 
 A follow-up comment starts a new run, which replays the previous tool exchanges — the assistant
 turns with their calls and the tool results — from the session history, so the model does not read
-the same files twice. Sessions written before that payload was persisted (Flyway `V53`) drop those
-exchanges on replay instead and answer from a shorter history.
+the same files twice. The replay applies to **every** agent on the loop (the coding agent included),
+not just the writer, and a pair is only replayed when it is complete:
+
+- an assistant turn keeps its `tool_calls` only when the tool rows behind it answer *every* announced
+  id; a turn whose calls were never answered — what a run that finishes on a tool-call turn leaves
+  behind, e.g. the writer's give-up branch — is replayed as plain content, or skipped when it has
+  none, because both OpenAI and Anthropic reject an unanswered `tool_calls` message;
+- ids are rewritten to the `[a-zA-Z0-9_-]` alphabet every provider accepts, so a session that
+  outlives the integration which wrote it (a local model hands out ids like `cat:0`, Anthropic
+  rejects them) still replays;
+- the `[<id>]` review marker the loop stores with a result is stripped, and orphaned or duplicated
+  tool rows are dropped.
+
+Sessions written before that payload was persisted (Flyway `V53`) drop those exchanges on replay
+instead and answer from a shorter history.
 
 ## Setup
 
