@@ -13,7 +13,7 @@ services:
       # Encryption key for API keys and SSH private keys stored in the database
       # (optional for tokens, required for SSH private keys)
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://github-bot.gitbot.eu}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
       # Web UI login: native (default) or oauth (OAuth/OIDC discovery).
       GITEABOT_SECURITY_LOGIN_METHOD: ${GITEABOT_SECURITY_LOGIN_METHOD:-native}
       GITEABOT_SECURITY_OAUTH_CLIENT_ID: ${GITEABOT_SECURITY_OAUTH_CLIENT_ID:-}

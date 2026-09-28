@@ -53,12 +53,11 @@ class AgentLoopNativeToolResultTest {
     @Mock private AiClient aiClient;
     @Mock private AgentSessionService sessionService;
 
-    private AgentSession session;
     private AgentRunContext ctx;
 
     @BeforeEach
     void setUp() {
-        session = new AgentSession("owner", "repo", 11L, "issue title");
+        AgentSession session = new AgentSession("owner", "repo", 11L, "issue title");
         session.setId(1L); // persisted session — the loop flushes id-bearing sessions
         ctx = new AgentRunContext(session, "owner", "repo", 11L, Path.of("/tmp/ws"), "main");
         when(sessionService.toAiMessages(session)).thenReturn(List.of());
@@ -156,56 +155,6 @@ class AgentLoopNativeToolResultTest {
                 new PendingMessage("tool", "[call_bbb] rg found 3 matches",
                         new PendingMessage.ToolPayload(null, "call_bbb")))),
                 anyLong(), anyLong());
-    }
-
-    @Test
-    void suppressToolsAtRound_takesTheDescriptorsOutOfTheRequest() {
-        when(aiClient.supportsNativeTools()).thenReturn(true);
-
-        ChatTurn round1 = new ChatTurn("reading", List.of(), StopReason.END_TURN, 0L, 0L);
-        ChatTurn round2 = new ChatTurn("final answer", List.of(), StopReason.END_TURN, 0L, 0L);
-        when(aiClient.chatWithTools(anyList(), anyString(), anyList(), anyString(), isNull(), anyInt()))
-                .thenReturn(round1, round2);
-
-        AgentLoop loop = new AgentLoop(aiClient, sessionService,
-                new AgentBudget(3, 2, 2, 4000, 8_000, 120_000, 200_000, 0.7));
-
-        AtomicInteger callCount = new AtomicInteger();
-        AgentStrategy strategy = new AgentStrategy() {
-            @Override public String systemPrompt() { return "sys"; }
-            @Override public ToolingMode preferredToolMode() { return ToolingMode.NATIVE; }
-            @Override public List<ToolDescriptor> toolDescriptors() {
-                return List.of(new ToolDescriptor("cat", "read", null));
-            }
-            @Override public boolean suppressToolsAtRound(int round) { return round > 1; }
-            @Override
-            public StepDecision step(AgentRunContext ctx, ChatTurn turn, int round) {
-                // Round 1 is the last context round: its follow-up is the wrap-up
-                // instruction, which is what the suppressed round 2 has to answer.
-                if (callCount.incrementAndGet() == 1) {
-                    return new StepDecision.Continue("## Context rounds exhausted\n\nAnswer now.");
-                }
-                return new StepDecision.Finish(LoopOutcome.success(ctx.baseBranch(), null));
-            }
-            @Override
-            public StepDecision step(AgentRunContext ctx, String aiResponse, int round) {
-                throw new AssertionError("text step should not be called in NATIVE mode");
-            }
-            @Override
-            public LoopOutcome onBudgetExhausted(AgentRunContext ctx) {
-                return LoopOutcome.fail(ctx.baseBranch());
-            }
-        };
-
-        loop.run(ctx, "go", strategy);
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<ToolDescriptor>> toolsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(aiClient, times(2)).chatWithTools(anyList(), anyString(), toolsCaptor.capture(),
-                anyString(), isNull(), anyInt());
-
-        assertThat(toolsCaptor.getAllValues().get(0)).hasSize(1);
-        assertThat(toolsCaptor.getAllValues().get(1)).isEmpty();
     }
 
     @Test

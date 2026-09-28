@@ -83,8 +83,8 @@ class WriterAgentStrategyTest {
 
         StepDecision.ContinueWithToolResults continued = assertContinueWithResults(decision);
         assertThat(continued.results()).hasSize(1);
-        assertThat(continued.results().get(0).toolCallId()).isEqualTo("call_1");
-        assertThat(continued.results().get(0).resultText()).contains("file body");
+        assertThat(continued.results().getFirst().toolCallId()).isEqualTo("call_1");
+        assertThat(continued.results().getFirst().resultText()).contains("file body");
         verify(toolRouter).execute(eq(AgentToolRouter.Mode.WRITER), any());
     }
 
@@ -206,17 +206,6 @@ class WriterAgentStrategyTest {
     private static StepDecision.Continue assertContinued(StepDecision decision) {
         assertThat(decision).isInstanceOf(StepDecision.Continue.class);
         return (StepDecision.Continue) decision;
-    }
-
-    @Test
-    void toolsAreSuppressedOnlyAfterTheWrapUpRound() {
-        // The wrap-up round itself still carries the descriptors: a model that calls them
-        // there gets the "not executed" result plus the instruction, which is what tells it
-        // the budget is spent. Everything after that is prose-only, because a model that
-        // still sees the descriptors reaches for them instead of answering.
-        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS)).isFalse();
-        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS + 1)).isFalse();
-        assertThat(strategy.suppressToolsAtRound(MAX_TOOL_ROUNDS + 2)).isTrue();
     }
 
     @Test

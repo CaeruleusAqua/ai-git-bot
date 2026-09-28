@@ -83,22 +83,19 @@ public final class AgentLoop {
                 ctx.issueNumber(), providerTag, resolvedMode, tools.size());
 
         for (int round = 1; round <= budget.maxRounds(); round++) {
-            // A strategy may take the descriptors away for the closing rounds (see
-            // AgentStrategy#suppressToolsAtRound): the model then has nothing to call
-            // and has to answer, which is what the wrap-up instruction asks for.
-            boolean toolsSuppressed = strategy.suppressToolsAtRound(round);
-            List<ToolDescriptor> roundTools = toolsSuppressed ? List.of() : tools;
-
+            // The closing rounds keep their descriptors: empty the list and every client
+            // falls back to its plain-text message shape, which cannot carry the tool
+            // exchanges those rounds replay (see the writer's wrap-up round).
             log.debug("AgentLoop round {}/{} for issue #{}: calling AI (history={} msgs, prompt={} chars, mode={}, tools={})",
                     round, budget.maxRounds(), ctx.issueNumber(), history.size(),
-                    currentMessage == null ? 0 : currentMessage.length(), resolvedMode, roundTools.size());
+                    currentMessage == null ? 0 : currentMessage.length(), resolvedMode, tools.size());
 
             AgentMetricsHolder.recordToolCallMode(modeTag(resolvedMode), providerTag);
 
             long started = System.nanoTime();
             ChatTurn turn;
             try {
-                turn = callAiWithRetry(history, currentMessage, roundTools, systemPrompt);
+                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt);
             } finally {
                 AgentMetricsHolder.recordLatency(modeTag(resolvedMode), providerTag,
                         Duration.ofNanos(System.nanoTime() - started));
@@ -155,7 +152,7 @@ public final class AgentLoop {
                         .sum();
                 int systemPromptChars = systemPrompt != null ? systemPrompt.length() : 0;
                 int currentMessageChars = currentMessage != null ? currentMessage.length() : 0;
-                int toolDescChars = computeToolDescChars(roundTools);
+                int toolDescChars = computeToolDescChars(tools);
                 long estimatedPromptTokens = TokenUsageTracker.estimateTokens(
                         historyChars + systemPromptChars + currentMessageChars + toolDescChars);
                 long thresholdTokens = (long) (budget.contextWindowTokens()

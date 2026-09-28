@@ -63,10 +63,13 @@ repository-context rounds (default 5); the round after them is the **wrap-up rou
 executed any more, every pending call is answered with *"not executed — the writer's
 repository-context budget is exhausted for this run"*, and the model is told the budget is spent and
 asked for its final answer from what it has already read (a revised issue draft, or the specific
-question it could not verify). The round after that is the model's answer. The answer round goes
-out **without tool descriptors** (`AgentStrategy#suppressToolsAtRound`): a local model that still
-sees them calls them instead of answering, and that path can only end in the *"more context needed"*
-comment. A run that reaches the round cap without any decision — the model narrated twice instead of
+question it could not verify). The round after that is the model's answer, and it keeps its tool
+declarations: an empty tool list makes every client fall back to its plain-text message shape, which
+cannot carry the tool exchanges that round replays — the calls collapse into a `[called …]`
+placeholder, the results into user text, and a turn whose only content was its calls used to arrive
+as an empty message, which Anthropic and Gemini reject. A model that keeps calling tools ends on the
+*"more context needed"* comment, the same as a model that never answers; the lever for that is
+`agent.writer.max-tool-rounds`, not a request without tools. A run that reaches the round cap without any decision — the model narrated twice instead of
 answering — now posts the same comment rather than ending silently. Before the wrap-up round existed,
 a run whose tool calls arrived at the limit discarded them and ended, throwing away everything the
 model had gathered; the output contract now names the limit so the model can spend its rounds

@@ -35,12 +35,13 @@ import java.util.List;
  *
  * <p>Round {@code maxToolRounds} is the wrap-up round: repository-context calls
  * are no longer executed, the model is told the budget is spent, and it gets one
- * final round to answer from what it has already read. That last round goes out
- * without tool descriptors ({@link #suppressToolsAtRound}), so "answer from what
- * you have" is the only thing left to do; a run that still fails to answer — and
- * any turn that calls tools after the wrap-up, the one thing the provider contract
- * still has to tolerate — ends with the "need more context" comment, from either
- * the give-up branch or {@link #onBudgetExhausted}.</p>
+ * final round to answer from what it has already read. That round keeps its tool
+ * descriptors on purpose: taking them out of the request makes every client fall
+ * back to its plain-text message shape, which cannot carry the tool exchanges the
+ * round replays — a turn whose only content was its calls becomes an empty message,
+ * which Anthropic and Gemini reject. A model that keeps calling tools therefore
+ * ends with the "need more context" comment, from either the give-up branch or
+ * {@link #onBudgetExhausted}, exactly like a model that never answers.</p>
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -84,18 +85,6 @@ public final class WriterAgentStrategy implements AgentStrategy {
     @Override
     public List<ToolDescriptor> toolDescriptors() {
         return catalog.nativeDescriptors(ToolCatalog.Role.WRITER, mcpToolCatalog, allowedBuiltinTools);
-    }
-
-    /**
-     * No tool descriptors once the wrap-up round has been delivered. The instruction
-     * says the calls cannot be executed any more, but a local model that still has the
-     * descriptors in front of it reaches for them anyway and can only end on the
-     * give-up branch; taking them away leaves the model with nothing to do but answer
-     * from what it has read.
-     */
-    @Override
-    public boolean suppressToolsAtRound(int round) {
-        return round - 1 > maxToolRounds;
     }
 
     /**

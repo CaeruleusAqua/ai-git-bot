@@ -146,6 +146,16 @@ arithmetic).
 | R3 | tool calls, `writerRound > n` | post the existing "I need more context…" comment, `Finish(success)`, status `IN_PROGRESS` (unchanged wording, now reachable only after the wrap-up was offered) |
 | R4 | no tool calls | unchanged paths: one-shot JSON nudge (`:96-104`), then context requests settle into R2/R3 by the same `writerRound` comparison, otherwise the clarifying-questions branch (`:224-229`) or issue creation (`:231-245`) |
 
+**Update (2026-09-28) — the answer round keeps its tools.** An earlier revision sent that round
+without tool descriptors. That only looked safe: an empty tool list makes the clients fall back to
+their plain-text message shape, which cannot represent the replayed tool exchanges — a turn whose only
+content was its calls rendered as an empty message, which Anthropic and Gemini reject — so the round
+failed on the runs it exists to save. The descriptors therefore stay, the wrap-up instruction is what
+asks for the answer, a model that still calls tools lands on R3's comment, and the operator lever is
+`agent.writer.max-tool-rounds` (the cap moves the wrap-up with it). For the other direction — a native
+session replayed in legacy mode — the plain-text converters now name such a turn's calls
+(`[called cat]`, `AiMessage#toolCallSummary`).
+
 R2 and R3 are bounded by construction — R2 can fire only in round `n + 1`, R3 only after it — so no
 new strategy state is required (unlike the coding agent's `answerNudges`, which needed a counter
 because its trigger was a turn *shape*, not a round number).
