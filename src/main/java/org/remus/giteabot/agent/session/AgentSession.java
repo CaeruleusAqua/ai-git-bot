@@ -182,6 +182,21 @@ public class AgentSession {
     }
 
     /**
+     * Adds a message carrying a native tool-call payload: {@code toolCalls} for an
+     * assistant turn, {@code toolCallId} for the {@code role:"tool"} row that
+     * answers it. Required for replay, because a provider rejects a tool message
+     * whose call id the preceding assistant turn did not announce.
+     */
+    public void addMessage(String role, String content, java.time.Instant createdAt,
+                           String toolCalls, String toolCallId) {
+        ConversationMessage message = new ConversationMessage(role, content);
+        message.setCreatedAt(createdAt);
+        message.setToolCalls(toolCalls);
+        message.setToolCallId(toolCallId);
+        messages.add(message);
+    }
+
+    /**
      * Accumulates token usage from a single AI call.
      */
     public void accumulateTokens(long inputTokens, long outputTokens) {
