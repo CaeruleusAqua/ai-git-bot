@@ -41,6 +41,11 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
     }
 
     @Override
+    public boolean requiresRetainedKeyValidation(AiIntegration previous, AiIntegration updated) {
+        return previous.getOpenRouterRegion() != updated.getOpenRouterRegion();
+    }
+
+    @Override
     public void validateConfiguration(AiIntegration integration, String apiKey) {
         validateSettings(integration);
         integration.setApiUrl(integration.getOpenRouterRegion().getApiRoot());

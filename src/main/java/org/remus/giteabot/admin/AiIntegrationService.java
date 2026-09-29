@@ -3,6 +3,7 @@ package org.remus.giteabot.admin;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.ai.AiProviderRegistry;
+import org.remus.giteabot.ai.AiProviderMetadata;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +48,8 @@ public class AiIntegrationService {
         String apiKey = integration.getApiKey();
         boolean newKey = apiKey != null && !apiKey.isBlank();
         String retainedCiphertext = null;
+        String validationKey = newKey ? apiKey : null;
+        AiProviderMetadata provider = providerRegistry.getProviderOrThrow(integration.getProviderType());
         if (!newKey && !clearApiKey && integration.getId() != null) {
             AiIntegration existing = aiIntegrationRepository.findById(integration.getId())
                     .orElseThrow(() -> new IllegalArgumentException("AI integration not found"));
@@ -54,11 +57,16 @@ public class AiIntegrationService {
                 throw new IllegalArgumentException("Enter a new API key or explicitly clear the stored key when changing providers");
             }
             retainedCiphertext = existing.getApiKey();
+            if (provider.requiresRetainedKeyValidation(existing, integration)) {
+                validationKey = decryptApiKey(existing);
+                if (validationKey == null || validationKey.isBlank()) {
+                    throw new IllegalArgumentException("Enter an API key to change provider settings");
+                }
+            }
         }
         // Keep ciphertext available to provider validation without decrypting it on an ordinary edit.
         integration.setApiKey(newKey ? apiKey : retainedCiphertext);
-        providerRegistry.getProviderOrThrow(integration.getProviderType())
-                .validateConfiguration(integration, newKey ? apiKey : null);
+        provider.validateConfiguration(integration, validationKey);
         integration.setApiKey(newKey ? encryptionService.encrypt(apiKey) : retainedCiphertext);
         return aiIntegrationRepository.save(integration);
     }

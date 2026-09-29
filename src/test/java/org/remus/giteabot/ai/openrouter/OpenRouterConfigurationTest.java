@@ -175,6 +175,52 @@ class OpenRouterConfigurationTest {
     }
 
     @Test
+    void regionChangeRechecksRetainedKeyAtSelectedHost() {
+        AiIntegration existing = integration();
+        existing.setId(1L);
+        existing.setApiKey("stored-ciphertext");
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(encryption.decrypt("stored-ciphertext")).thenReturn("retained-key");
+        when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+        AiIntegration updated = integration();
+        updated.setId(1L);
+        updated.setApiKey("");
+        updated.setOpenRouterRegion(OpenRouterRegion.EU);
+        server.expect(requestTo("https://eu.openrouter.ai/api/v1/key"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer retained-key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false,
+                         "allowed_data_regions":["global","europe"]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(service.save(updated).getApiKey()).isEqualTo("stored-ciphertext");
+        assertThat(updated.getApiUrl()).isEqualTo("https://eu.openrouter.ai/api");
+        server.verify();
+    }
+
+    @Test
+    void regionChangeWithoutEntitlementCannotPersist() {
+        AiIntegration existing = integration();
+        existing.setId(1L);
+        existing.setApiKey("stored-ciphertext");
+        when(repository.findById(1L)).thenReturn(Optional.of(existing));
+        when(encryption.decrypt("stored-ciphertext")).thenReturn("retained-key");
+        AiIntegration updated = integration();
+        updated.setId(1L);
+        updated.setApiKey("");
+        updated.setOpenRouterRegion(OpenRouterRegion.EU);
+        server.expect(requestTo("https://eu.openrouter.ai/api/v1/key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false,
+                         "allowed_data_regions":["global"]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> service.save(updated)).hasMessageContaining("selected region");
+        verify(repository, never()).save(any());
+        server.verify();
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void redirectCannotForwardTheKeyEvenWhenGlobalRedirectsAreEnabled() throws Exception {
         HttpServer local = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
