@@ -72,7 +72,9 @@ public final class OpenRouterClient extends AbstractAiClient {
         } catch (RestClientException e) {
             throw sanitizeError(e);
         }
-        if (response == null) return new ChatTurn("", List.of(), StopReason.OTHER, 0, 0);
+        if (response == null) {
+            throw new RestClientException("OpenRouter returned an empty response");
+        }
         if (response.error() != null) throw completionError(response.error());
         if (response.choices() != null) {
             for (var choice : response.choices()) {

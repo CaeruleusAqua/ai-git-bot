@@ -93,11 +93,25 @@ class OpenRouterConfigurationTest {
     }
 
     @Test
-    void globalRouteNeedsAccountEligibility() {
+    void omittedRegionsAllowVerifiedInferenceKeyOnGlobalRoute() {
         server.expect(requestTo("https://openrouter.ai/api/v1/key"))
                 .andRespond(withSuccess("""
-                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":["europe"]}}
+                        {"data":{"is_management_key":false,"is_provisioning_key":false}}
                         """, MediaType.APPLICATION_JSON));
+        when(encryption.encrypt("test-key")).thenReturn("encrypted-key");
+        when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+
+        assertThat(service.save(integration()).getApiKey()).isEqualTo("encrypted-key");
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"[]", "[\"europe\"]", "null", "\"global\"", "{}", "[true]"})
+    void explicitRegionRestrictionsMustAllowGlobalRouting(String regions) {
+        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":%s}}
+                        """.formatted(regions), MediaType.APPLICATION_JSON));
         AiIntegration integration = integration();
 
         assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("global routing");

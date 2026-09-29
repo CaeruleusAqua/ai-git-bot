@@ -71,6 +71,26 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 
 class OpenRouterProviderTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emptyResponseFailsForBothChatApis(boolean nativeTools) {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andRespond(withSuccess("", MediaType.APPLICATION_JSON));
+        var client = new OpenRouterClient(http.build(), "author/model", 32, nativeTools);
+
+        assertThatThrownBy(() -> {
+            if (nativeTools) {
+                client.chatWithTools(List.of(), "Question",
+                        List.of(new ToolDescriptor("lookup", "Read context", null)), "sys", null, null);
+            } else {
+                client.chat(List.of(), "Question", "sys", null);
+            }
+        }).hasMessage("OpenRouter returned an empty response");
+        server.verify();
+    }
+
     @Test
     void genericOpenAiKeepsItsWireContractEvenAtAnOpenRouterUrl() {
         RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");

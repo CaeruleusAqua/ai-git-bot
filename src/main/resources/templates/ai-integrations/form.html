@@ -245,6 +245,7 @@
                     } else if (providerSelect.dataset.previousValue && providerSelect.dataset.previousValue !== provider) {
                         apiUrlInput.value = provider === initialProvider ? initialApiUrl : (defaultApiUrls[provider] || '');
                     }
+                    // Run after provider-switch restoration: fill new-form defaults only, never overwrite an edited URL.
                     // Update API URL hint and set default if empty (only for new integrations)
                     if (defaultApiUrls[provider]) {
                         apiUrlHint.textContent = isOpenRouter ? '' : tDefaultPrefix + defaultApiUrls[provider];

@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -30,6 +31,7 @@ public class AiIntegrationService {
         return aiIntegrationRepository.findById(id);
     }
 
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public AiIntegration save(AiIntegration integration) {
         return save(integration, false);
     }
@@ -43,6 +45,8 @@ public class AiIntegrationService {
      * button in the UI). Re-encrypting the kept ciphertext would corrupt the
      * key, so only freshly provided plaintext keys are encrypted.</p>
      */
+    // Repository methods own their transactions; provider HTTP validation must not hold a database connection.
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public AiIntegration save(AiIntegration integration, boolean clearApiKey) {
         String apiKey = integration.getApiKey();
         boolean newKey = apiKey != null && !apiKey.isBlank();

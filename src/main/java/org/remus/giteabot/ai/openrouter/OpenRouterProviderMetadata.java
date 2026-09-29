@@ -61,16 +61,20 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
         } catch (RestClientException e) {
             throw new IllegalArgumentException("OpenRouter key verification is unavailable");
         }
-        // /key documents both booleans and allowed_data_regions as required; missing fields fail closed.
+        // Key-type flags fail closed; the fixed global route tolerates omitted regional restrictions.
         // https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key
         JsonNode data = response == null ? null : response.get("data");
         if (data == null || !data.path("is_management_key").isBoolean() || data.path("is_management_key").asBoolean()
                 || !data.path("is_provisioning_key").isBoolean() || data.path("is_provisioning_key").asBoolean()) {
             throw new IllegalArgumentException("OpenRouter key is not a verified inference key");
         }
+        JsonNode allowedRegions = data.get("allowed_data_regions");
+        if (allowedRegions == null) {
+            return;
+        }
         boolean allowed = false;
-        if (data.path("allowed_data_regions").isArray()) {
-            for (JsonNode region : data.path("allowed_data_regions")) {
+        if (allowedRegions.isArray()) {
+            for (JsonNode region : allowedRegions) {
                 allowed |= region.isString() && region.asString().equals("global");
             }
         }
