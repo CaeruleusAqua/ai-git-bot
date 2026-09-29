@@ -47,7 +47,6 @@ public class AiIntegrationService {
         String apiKey = integration.getApiKey();
         boolean newKey = apiKey != null && !apiKey.isBlank();
         String retainedCiphertext = null;
-        String resolvedKey = newKey ? apiKey : null;
         if (!newKey && !clearApiKey && integration.getId() != null) {
             AiIntegration existing = aiIntegrationRepository.findById(integration.getId())
                     .orElseThrow(() -> new IllegalArgumentException("AI integration not found"));
@@ -55,9 +54,11 @@ public class AiIntegrationService {
                 throw new IllegalArgumentException("Enter a new API key or explicitly clear the stored key when changing providers");
             }
             retainedCiphertext = existing.getApiKey();
-            resolvedKey = decryptApiKey(existing);
         }
-        providerRegistry.getProviderOrThrow(integration.getProviderType()).validateConfiguration(integration, resolvedKey);
+        // Keep ciphertext available to provider validation without decrypting it on an ordinary edit.
+        integration.setApiKey(newKey ? apiKey : retainedCiphertext);
+        providerRegistry.getProviderOrThrow(integration.getProviderType())
+                .validateConfiguration(integration, newKey ? apiKey : null);
         integration.setApiKey(newKey ? encryptionService.encrypt(apiKey) : retainedCiphertext);
         return aiIntegrationRepository.save(integration);
     }

@@ -73,7 +73,8 @@ class AiIntegrationServiceTest {
         AiIntegration result = aiIntegrationService.save(integration);
 
         assertEquals("stored-encrypted-key", result.getApiKey());
-        verify(encryptionService, never()).encrypt(anyString());
+        verifyNoInteractions(encryptionService);
+        verify(provider).validateConfiguration(integration, null);
     }
 
     @Test

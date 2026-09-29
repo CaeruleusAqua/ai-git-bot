@@ -7,6 +7,7 @@ import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolNameSanitizer;
+import org.springframework.web.client.RestClientException;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -32,9 +33,13 @@ record OpenRouterResponse(String id, String model, List<Choice> choices, Usage u
                 JsonNode args;
                 try {
                     String raw = call.function().arguments();
-                    args = raw == null || raw.isBlank() ? AgentJackson.mapper().createObjectNode() : AgentJackson.mapper().readTree(raw);
+                    args = AgentJackson.mapper().readTree(raw);
+                    if (!args.isObject()) {
+                        throw new IllegalArgumentException("Tool arguments must be an object");
+                    }
                 } catch (Exception e) {
-                    args = AgentJackson.mapper().createObjectNode();
+                    // Never execute a tool with fabricated empty arguments after a malformed response.
+                    throw new RestClientException("OpenRouter returned invalid tool arguments");
                 }
                 calls.add(new ToolCall(call.id(), ToolNameSanitizer.desanitize(call.function().name()), args));
             }
@@ -59,7 +64,10 @@ record OpenRouterResponse(String id, String model, List<Choice> choices, Usage u
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Usage(@JsonProperty("prompt_tokens") long promptTokens, @JsonProperty("completion_tokens") long completionTokens) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Error(int code, String message) {
-        @Override public String toString() { return "Error[code=" + code + "]"; }
+    record Error(JsonNode code, String message) {
+        int httpStatus() {
+            return code != null && code.isIntegralNumber() ? code.asInt() : 0;
+        }
+        @Override public String toString() { return "Error[redacted]"; }
     }
 }

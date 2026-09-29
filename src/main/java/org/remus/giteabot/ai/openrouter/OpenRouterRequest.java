@@ -21,10 +21,7 @@ record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens
         messages.add(new Message("system", systemPrompt, null, null, null));
         for (AiMessage message : history) {
             boolean tool = "tool".equals(message.getRole());
-            var calls = tool || message.getToolCalls() == null || message.getToolCalls().isEmpty() ? null
-                    : message.getToolCalls().stream().map(call -> new ToolCall(call.id(), "function",
-                    new FunctionCall(ToolNameSanitizer.sanitize(call.name()),
-                            call.args() == null ? "{}" : call.args().toString()))).toList();
+            var calls = toolCalls(message);
             messages.add(new Message(message.getRole(),
                     tool && message.getToolResult() != null ? message.getToolResult() : message.getContent(),
                     calls, tool ? message.getToolCallId() : null, tool ? null : message.getReasoningDetails()));
@@ -34,6 +31,16 @@ record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens
         return new OpenRouterRequest(model, maxTokens, messages, payloads);
     }
 
+    private static List<ToolCall> toolCalls(AiMessage message) {
+        if ("tool".equals(message.getRole()) || message.getToolCalls() == null || message.getToolCalls().isEmpty()) {
+            return null;
+        }
+        return message.getToolCalls().stream()
+                .map(call -> new ToolCall(call.id(), "function", new FunctionCall(
+                        ToolNameSanitizer.sanitize(call.name()), call.args() == null ? "{}" : call.args().toString())))
+                .toList();
+    }
+
     /** Core-adapter defaults preserve parameters and disable provider fallbacks. */
     @JsonProperty("provider")
     public ProviderPreferences provider() { return new ProviderPreferences(true, false, "deny", false); }
@@ -41,6 +48,7 @@ record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens
     /** Per-request opt-outs; enforced account-level plugins must be disabled by the operator. */
     @JsonProperty("plugins")
     public List<Plugin> plugins() {
+        // IDs and per-request opt-outs: https://openrouter.ai/docs/guides/features/plugins
         return List.of("web", "file-parser", "response-healing", "context-compression", "pareto-router")
                 .stream().map(id -> new Plugin(id, false)).toList();
     }

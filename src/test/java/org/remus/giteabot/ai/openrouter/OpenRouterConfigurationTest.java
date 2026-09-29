@@ -119,17 +119,15 @@ class OpenRouterConfigurationTest {
     }
 
     @Test
-    void explicitClearRemovesTheKeyWithoutMakingAnAuthenticatedRequest() {
+    void explicitClearOfRequiredOpenRouterKeyIsRejectedBeforeAnAuthenticatedRequest() {
         AiIntegration integration = integration();
         integration.setId(1L);
         integration.setApiKey("");
-        when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
 
-        AiIntegration saved = service.save(integration, true);
+        assertThatThrownBy(() -> service.save(integration, true))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("inference API key");
 
-        assertThat(saved.getApiKey()).isNull();
-        assertThat(saved.getApiUrl()).isEqualTo("https://openrouter.ai/api");
-        verifyNoInteractions(encryption);
+        verifyNoInteractions(encryption, repository);
         server.verify();
     }
 
@@ -153,24 +151,18 @@ class OpenRouterConfigurationTest {
     }
 
     @Test
-    void blankKeyRevalidatesTheStoredKeyWithoutEncryptingItAgain() {
+    void blankKeyKeepsTheStoredKeyWithoutDecryptionOrRemoteVerification() {
         AiIntegration existing = integration();
         existing.setApiKey("stored-ciphertext");
         when(repository.findById(1L)).thenReturn(Optional.of(existing));
-        when(encryption.decrypt("stored-ciphertext")).thenReturn("retained-key");
         when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
-        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
-                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer retained-key"))
-                .andRespond(withSuccess("""
-                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":["global"]}}
-                        """, MediaType.APPLICATION_JSON));
         AiIntegration updated = integration();
         updated.setId(1L);
         updated.setApiKey("");
 
         assertThat(service.save(updated).getApiKey()).isEqualTo("stored-ciphertext");
 
-        verify(encryption, never()).encrypt(any());
+        verifyNoInteractions(encryption);
         server.verify();
     }
 

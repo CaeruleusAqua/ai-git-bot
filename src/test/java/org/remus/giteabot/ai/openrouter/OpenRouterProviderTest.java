@@ -244,6 +244,42 @@ class OpenRouterProviderTest {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = {"", "not-json", "[]", "null"})
+    void invalidToolArgumentsCannotRunAsEmptyObjects(String arguments) {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        String response = """
+                {"choices":[{"finish_reason":"tool_calls","message":{"content":"",
+                  "tool_calls":[{"id":"call-1","function":{"name":"write-file","arguments":%s}}]}}]}
+                """.formatted(AgentJackson.mapper().writeValueAsString(arguments));
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+        var client = new OpenRouterClient(http.build(), "author/model", 32, true);
+
+        assertThatThrownBy(() -> client.chatWithTools(List.of(), "Review", List.of(), "sys", null, null))
+                .hasMessage("OpenRouter returned invalid tool arguments")
+                .hasMessageNotContaining("write-file").hasNoCause();
+        server.verify();
+    }
+
+    @Test
+    void stringChoiceErrorCodeFailsSafelyWithoutBreakingDeserialization() {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andRespond(withSuccess("""
+                        {"choices":[{"finish_reason":"error","error":{"code":"server_error",
+                          "message":"private-provider-data"}}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        var client = new OpenRouterClient(http.build(), "author/model", 32, false);
+        assertThatThrownBy(() -> client.chatWithTools(List.of(), "Review", List.of(), "sys", null, null))
+                .hasMessage("OpenRouter returned a completion error")
+                .hasMessageNotContaining("private-provider-data").hasNoCause();
+        server.verify();
+    }
+
+    @ParameterizedTest
     @CsvSource({"false,length", "true,length", "false,unknown", "true,unknown", "false,empty", "true,empty"})
     void incompleteNativeAndLegacyRepliesCannotFinishTheReviewOrRunTools(boolean legacy, String stop) {
         RestClient.Builder http = RestClient.builder();

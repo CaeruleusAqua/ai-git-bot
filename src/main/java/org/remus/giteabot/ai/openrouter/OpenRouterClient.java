@@ -87,8 +87,8 @@ public final class OpenRouterClient extends AbstractAiClient {
     }
 
     private RestClientException completionError(OpenRouterResponse.Error error) {
-        if (error != null && error.code() >= 400 && error.code() < 600) {
-            return sanitizeError(httpError(HttpStatusCode.valueOf(error.code()), error.message()));
+        if (error != null && error.httpStatus() >= 400 && error.httpStatus() < 600) {
+            return sanitizeError(httpError(HttpStatusCode.valueOf(error.httpStatus()), error.message()));
         }
         return new RestClientException("OpenRouter returned a completion error");
     }
@@ -100,8 +100,12 @@ public final class OpenRouterClient extends AbstractAiClient {
         }
         if (error instanceof RestClientResponseException http) {
             // Only fixed categories reach retries, logs and audit storage; original bodies/causes stay private.
-            String category = error instanceof HttpClientErrorException clientError && isPromptTooLongError(clientError)
-                    ? "maximum context length" : isProviderUnavailableError(error) ? "provider overloaded" : "request failed";
+            String category = "request failed";
+            if (error instanceof HttpClientErrorException clientError && isPromptTooLongError(clientError)) {
+                category = "maximum context length";
+            } else if (isProviderUnavailableError(error)) {
+                category = "provider overloaded";
+            }
             return httpError(http.getStatusCode(), category);
         }
         return new RestClientException("OpenRouter request failed");

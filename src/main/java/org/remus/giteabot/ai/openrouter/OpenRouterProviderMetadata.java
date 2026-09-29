@@ -46,9 +46,10 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
         validateSettings(integration);
         integration.setApiUrl(API_ROOT);
         if (apiKey == null || apiKey.isBlank()) {
-            if (integration.getId() == null) {
+            if (integration.getId() == null || integration.getApiKey() == null || integration.getApiKey().isBlank()) {
                 throw new IllegalArgumentException("OpenRouter requires an inference API key");
             }
+            // A retained ciphertext was already verified on entry; model edits need no network request.
             return;
         }
         JsonNode response;
@@ -60,6 +61,8 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
         } catch (RestClientException e) {
             throw new IllegalArgumentException("OpenRouter key verification is unavailable");
         }
+        // /key documents both booleans and allowed_data_regions as required; missing fields fail closed.
+        // https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key
         JsonNode data = response == null ? null : response.get("data");
         if (data == null || !data.path("is_management_key").isBoolean() || data.path("is_management_key").asBoolean()
                 || !data.path("is_provisioning_key").isBoolean() || data.path("is_provisioning_key").asBoolean()) {
