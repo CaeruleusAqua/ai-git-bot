@@ -755,8 +755,9 @@ Set `GITEABOT_SECURITY_OAUTH_DEBUG_LOGGING_ENABLED=true` and configure the appli
 | `AGENT_BRANCH_PREFIX` | `ai-agent/` | Prefix for branches created by the agent |
 | `AGENT_VALIDATION_ENABLED` | `true` | Enable syntax validation before commit |
 | `AGENT_VALIDATION_MAX_RETRIES` | `3` | Max iterations for error correction |
+| `AGENT_WRITER_MAX_TOOL_ROUNDS` | `5` | Repository-context rounds the technical-writer agent may spend before it has to answer |
 
-See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows.
+See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows. The writer agent's wrap-up round can no longer use tools and must answer from what it has already read, and the round that has to produce that answer keeps its tools declared — sending it without them made every provider fall back to a plain-text request that cannot carry the tool history (the calls and their results have to be rewritten as text), so the exit could be missed. Raise `AGENT_WRITER_MAX_TOOL_ROUNDS` for repositories where the model needs to read more files before it can draft the improved issue.
 
 ### AI Provider Overload Retries
 
