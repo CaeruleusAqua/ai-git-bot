@@ -28,7 +28,7 @@ public class CommitMessagesEnricher implements ContextEnricher {
         try {
             List<PullRequestCommit> commits = repositoryClient.getPullRequestCommits(
                     context.owner(), context.repo(), context.prNumber());
-            if (commits == null || commits.isEmpty()) {
+            if (commits.isEmpty()) {
                 return "";
             }
 

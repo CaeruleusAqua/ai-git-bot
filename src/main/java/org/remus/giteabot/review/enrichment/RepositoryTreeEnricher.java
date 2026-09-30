@@ -28,7 +28,7 @@ public class RepositoryTreeEnricher implements ContextEnricher {
         try {
             List<RepositoryTreeEntry> tree = repositoryClient.getRepositoryTree(
                     context.owner(), context.repo(), context.headRef());
-            if (tree == null || tree.isEmpty()) {
+            if (tree.isEmpty()) {
                 return "";
             }
 
