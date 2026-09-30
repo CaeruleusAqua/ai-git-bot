@@ -1,6 +1,8 @@
 package org.remus.giteabot.repository;
 
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
@@ -291,24 +293,27 @@ public interface RepositoryApiClient {
     }
 
     /**
-     * Fetches the full pull-request payload (head / base refs, SHAs, title, …)
-     * from the provider. Used to "hydrate" webhook payloads that lack the
-     * pull-request object — most notably GitHub {@code issue_comment} events
-     * which carry only the issue, not the PR.
+     * Fetches the pull-request title, body, state and head / base ref and SHA from the provider.
+     * Used to "hydrate" webhook payloads that lack the pull-request object —
+     * most notably GitHub {@code issue_comment} events which carry only the
+     * issue, not the PR.
+     *
+     * @return the details, or empty when the provider does not support this lookup
      */
-    default Map<String, Object> getPullRequestDetails(String owner, String repo, Long pullNumber) {
-        return Map.of();
+    default Optional<PullRequestDetails> getPullRequestDetails(String owner, String repo, Long pullNumber) {
+        return Optional.empty();
     }
 
     /**
-     * Re-fetches whether a PR is open for workflow writes. The default understands
-     * GitHub/Gitea details; other providers override it. Missing state denies
+     * Re-fetches whether a PR is open for workflow writes. The default relies on the
+     * state mapped by {@link #getPullRequestDetails}; other providers override it. Missing state denies
      * writes, and API failures propagate to the workflow.
      */
     default boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
-        Map<String, Object> details = getPullRequestDetails(owner, repo, pullNumber);
-        return details != null && "open".equals(details.get("state"))
-                && Boolean.FALSE.equals(details.get("merged"));
+        return getPullRequestDetails(owner, repo, pullNumber)
+                .map(PullRequestDetails::state)
+                .filter(PullRequestState.OPEN::equals)
+                .isPresent();
     }
 
     /**

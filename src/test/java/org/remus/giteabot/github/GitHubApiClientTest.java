@@ -3,6 +3,8 @@ package org.remus.giteabot.github;
 import org.junit.jupiter.api.Test;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -92,6 +94,28 @@ class GitHubApiClientTest {
 
         client.addPullRequestReaction("owner", "repo", 42L, "eyes");
 
+        server.verify();
+    }
+
+    @Test
+    void getPullRequestDetails_mapsTitleBodyAndHead() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://api.github.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitHubApiClient client = new GitHubApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://api.github.com/repos/owner/repo/pulls/42"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"number":42,"state":"open","merged":false,"title":"Add login","body":"Adds the login page",
+                         "head":{"ref":"feature/login","sha":"abc123","repo":{"full_name":"fork/repo"}},
+                         "base":{"ref":"main","sha":"def456"}}
+                        """, MediaType.APPLICATION_JSON));
+
+        PullRequestDetails details = client.getPullRequestDetails("owner", "repo", 42L).orElseThrow();
+
+        assertEquals(new PullRequestDetails("Add login", "Adds the login page", PullRequestState.OPEN,
+                "feature/login", "abc123", "main", "def456"),
+                details);
         server.verify();
     }
 

@@ -1,12 +1,14 @@
 package org.remus.giteabot.github;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.github.model.GitHubPullRequest;
 import org.remus.giteabot.github.model.GitHubReview;
 import org.remus.giteabot.github.model.GitHubReviewComment;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
+import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
@@ -15,6 +17,7 @@ import org.springframework.web.client.RestClient;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * GitHub-specific implementation of {@link RepositoryApiClient}.
@@ -253,13 +256,13 @@ public class GitHubApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public Map<String, Object> getPullRequestDetails(String owner, String repo, Long pullNumber) {
+    public Optional<PullRequestDetails> getPullRequestDetails(String owner, String repo, Long pullNumber) {
         log.info("Fetching pull-request #{} details in {}/{}", pullNumber, owner, repo);
-        Map<String, Object> pr = restClient.get()
+        GitHubPullRequest pr = restClient.get()
                 .uri("/repos/{owner}/{repo}/pulls/{pull_number}", owner, repo, pullNumber)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        return pr != null ? pr : Map.of();
+                .body(GitHubPullRequest.class);
+        return Optional.ofNullable(pr).map(GitHubPullRequest::toPullRequestDetails);
     }
 
     @Override

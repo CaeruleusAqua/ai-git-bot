@@ -5,6 +5,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.springframework.http.HttpMethod;
@@ -175,6 +177,28 @@ class GiteaApiClientTest {
 
         assertThrows(IllegalStateException.class,
                 () -> client.getPullRequestHead("base", "project", 7L, "main"));
+        server.verify();
+    }
+
+    @Test
+    void getPullRequestDetails_mapsTitleBodyAndHead() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/base/project/pulls/7"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"number":7,"state":"open","merged":false,"title":"Add login","body":"Adds the login page",
+                         "head":{"ref":"feature/login","sha":"abc123","label":"feature/login"},
+                         "base":{"ref":"main","sha":"def456"}}
+                        """, MediaType.APPLICATION_JSON));
+
+        PullRequestDetails details = client.getPullRequestDetails("base", "project", 7L).orElseThrow();
+
+        assertEquals(new PullRequestDetails("Add login", "Adds the login page", PullRequestState.OPEN,
+                "feature/login", "abc123", "main", "def456"),
+                details);
         server.verify();
     }
 

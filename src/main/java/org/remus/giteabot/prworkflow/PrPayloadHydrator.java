@@ -4,8 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.shared.BranchRefs;
 import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
 
-import java.util.Map;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 /**
@@ -24,10 +26,10 @@ public final class PrPayloadHydrator {
     }
 
     /**
-     * Populates {@code payload.pullRequest} (number, title, body, state, head and
-     * base ref / SHA) from the provider API. No-op when the payload already has a
-     * head ref, when the repository or PR number cannot be determined, or when the
-     * provider does not support pull-request details.
+     * Populates {@code payload.pullRequest} (number, title, body, state, head ref / SHA,
+     * base ref / SHA) from the provider API. No-op when the payload already has a head ref, when
+     * the repository or PR number cannot be determined, or when the provider does
+     * not support pull-request details.
      *
      * <p>Never throws: a failure to obtain the client or fetch the details is
      * logged and leaves the payload untouched, so callers can proceed with what
@@ -35,7 +37,6 @@ public final class PrPayloadHydrator {
      *
      * @param clientSupplier supplies the API client; only invoked when a fetch is needed
      */
-    @SuppressWarnings("unchecked")
     public static void hydrate(WebhookPayload payload, Supplier<RepositoryApiClient> clientSupplier) {
         if (hasHeadRef(payload)) {
             return;
@@ -49,37 +50,46 @@ public final class PrPayloadHydrator {
         }
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
-        Map<String, Object> pr;
+        Optional<PullRequestDetails> details;
         try {
-            pr = clientSupplier.get().getPullRequestDetails(owner, repo, prNumber);
+            details = clientSupplier.get().getPullRequestDetails(owner, repo, prNumber);
         } catch (RuntimeException e) {
             log.warn("Could not hydrate PR details for {}/{}#{}: {}", owner, repo, prNumber, e.getMessage());
             return;
         }
-        if (pr == null || pr.isEmpty()) {
+        if (details.isEmpty()) {
             log.debug("getPullRequestDetails returned nothing for {}/{}#{} — provider may not support hydration",
                     owner, repo, prNumber);
             return;
         }
+        PullRequestDetails pr = details.get();
         WebhookPayload.PullRequest target = payload.getPullRequest();
         if (target == null) {
             target = new WebhookPayload.PullRequest();
             payload.setPullRequest(target);
         }
         target.setNumber(prNumber);
-        if (pr.get("title") instanceof String t) target.setTitle(t);
-        if (pr.get("body") instanceof String b) target.setBody(b);
-        if (pr.get("state") instanceof String s) target.setState(s);
-        if (pr.get("head") instanceof Map<?, ?> head) {
-            target.setHead(toHead((Map<String, Object>) head));
+        if (pr.title() != null) target.setTitle(pr.title());
+        if (pr.body() != null) target.setBody(pr.body());
+        if (pr.state() != null) {
+            // The payload uses the Gitea/GitHub convention: merged PRs are "closed" with merged=true
+            target.setState(pr.state() == PullRequestState.OPEN ? "open" : "closed");
+            target.setMerged(pr.state() == PullRequestState.MERGED);
         }
-        if (pr.get("base") instanceof Map<?, ?> base) {
-            target.setBase(toHead((Map<String, Object>) base));
+        if (pr.headRef() != null || pr.headSha() != null) {
+            WebhookPayload.Head head = new WebhookPayload.Head();
+            head.setRef(pr.headRef());
+            head.setSha(pr.headSha());
+            target.setHead(head);
         }
-        log.info("Hydrated PR #{} for {}/{} — head={} sha={}",
-                prNumber, owner, repo,
-                target.getHead() == null ? null : target.getHead().getRef(),
-                target.getHead() == null ? null : target.getHead().getSha());
+        if (pr.baseRef() != null || pr.baseSha() != null) {
+            WebhookPayload.Head base = new WebhookPayload.Head();
+            base.setRef(pr.baseRef());
+            base.setSha(pr.baseSha());
+            target.setBase(base);
+        }
+        log.info("Hydrated PR #{} for {}/{} — head={} sha={} base={}",
+                prNumber, owner, repo, pr.headRef(), pr.headSha(), pr.baseRef());
     }
 
     /**
@@ -90,7 +100,6 @@ public final class PrPayloadHydrator {
      *         determined — callers MUST skip rather than substitute the
      *         repository default branch
      */
-    @SuppressWarnings("unchecked")
     public static String resolveHeadBranch(RepositoryApiClient client, WebhookPayload payload,
                                            String owner, String repo, long prNumber) {
         if (hasHeadRef(payload)) {
@@ -100,24 +109,15 @@ public final class PrPayloadHydrator {
             return null;
         }
         try {
-            Map<String, Object> pr = client.getPullRequestDetails(owner, repo, prNumber);
-            if (pr != null && pr.get("head") instanceof Map<?, ?> head
-                    && ((Map<String, Object>) head).get("ref") instanceof String ref
-                    && !ref.isBlank()) {
-                return BranchRefs.normalize(ref);
-            }
+            return client.getPullRequestDetails(owner, repo, prNumber)
+                    .map(PullRequestDetails::headRef)
+                    .map(BranchRefs::normalize)
+                    .orElse(null);
         } catch (RuntimeException e) {
             log.debug("getPullRequestDetails failed for {}/{}#{}: {}",
                     owner, repo, prNumber, e.getMessage());
+            return null;
         }
-        return null;
-    }
-
-    private static WebhookPayload.Head toHead(Map<String, Object> source) {
-        WebhookPayload.Head head = new WebhookPayload.Head();
-        if (source.get("ref") instanceof String r) head.setRef(r);
-        if (source.get("sha") instanceof String s) head.setSha(s);
-        return head;
     }
 
     private static boolean hasHeadRef(WebhookPayload payload) {
