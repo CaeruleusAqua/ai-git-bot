@@ -163,6 +163,17 @@ public interface RepositoryApiClient {
 
     void addReaction(String owner, String repo, Long commentId, String reaction);
 
+    /**
+     * Best-effort reaction on the issue itself (as opposed to a specific
+     * comment on it) — used to acknowledge triggers, such as an
+     * issue-assigned event, that have no triggering comment to react to.
+     * Default implementation is a no-op for providers without a
+     * straightforward issue-level reaction endpoint.
+     */
+    default void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
     void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                  String filePath, int line, String body);
 

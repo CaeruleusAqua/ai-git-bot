@@ -8,8 +8,10 @@ import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.springframework.stereotype.Component;
 
 /**
- * Best-effort 👀 reaction on the issue comment that triggered an issue
- * workflow — the same acknowledgement the slash-command handlers use.
+ * Best-effort 👀 reaction acknowledging that an issue workflow has started —
+ * on the triggering comment for follow-up comments, or on the issue itself
+ * for events (such as issue-assigned) that have no triggering comment. Same
+ * pattern the slash-command handlers use.
  *
  * <p>Failures (missing permission, provider quirks) are logged and never
  * affect the workflow. Kept out of the orchestrator so it only ever handles
@@ -39,6 +41,28 @@ public class IssueCommentAcknowledgement {
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to add 👀 reaction to comment #{}: {}",
                     bot.getName(), commentId, e.getMessage());
+        }
+    }
+
+    /**
+     * Acknowledges an event with no triggering comment (e.g. issue-assigned)
+     * by reacting on the issue itself instead.
+     */
+    public void acknowledgeIssue(Bot bot, WebhookPayload payload) {
+        if (payload.getRepository() == null || payload.getIssue() == null
+                || payload.getIssue().getNumber() == null) {
+            return;
+        }
+        Long issueNumber = payload.getIssue().getNumber();
+        String owner = payload.getRepository().getOwner() != null
+                ? payload.getRepository().getOwner().getLogin() : null;
+        String repo = payload.getRepository().getName();
+        try {
+            giteaClientFactory.getApiClient(bot.getGitIntegration())
+                    .addIssueReaction(owner, repo, issueNumber, ACKNOWLEDGEMENT_EMOJI);
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Failed to add 👀 reaction to issue #{}: {}",
+                    bot.getName(), issueNumber, e.getMessage());
         }
     }
 }

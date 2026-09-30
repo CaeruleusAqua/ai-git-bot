@@ -167,6 +167,17 @@ public class GitHubApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        log.info("Adding '{}' reaction to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+        restClient.post()
+                .uri("/repos/{owner}/{repo}/issues/{issue_number}/reactions",
+                        owner, repo, issueNumber)
+                .body(new ReactionRequest(reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
     public void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                         String filePath, int line, String body) {
         log.info("Posting inline review comment on PR #{} in {}/{} at {}:{}",

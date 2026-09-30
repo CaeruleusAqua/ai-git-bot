@@ -463,6 +463,16 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        log.info("Adding '{}' reaction to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+        giteaRestClient.post()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/reactions", owner, repo, issueNumber)
+                .body(new ReactionRequest(reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
     public void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                         String filePath, int line, String body) {
         log.info("Posting inline review comment on PR #{} in {}/{} at {}:{}", pullNumber, owner, repo, filePath, line);

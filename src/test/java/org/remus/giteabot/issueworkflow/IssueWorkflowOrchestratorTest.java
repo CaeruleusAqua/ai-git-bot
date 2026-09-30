@@ -185,6 +185,24 @@ class IssueWorkflowOrchestratorTest {
     }
 
     @Test
+    void runAssigned_acknowledgesTheIssueItself() {
+        WebhookPayload payload = issuePayload();
+
+        orchestrator.runAssigned(bot, payload);
+
+        verify(commentAcknowledgement).acknowledgeIssue(bot, payload);
+    }
+
+    @Test
+    void runAssigned_noWorkflowsResolved_noAcknowledgement() {
+        when(workflowSelectionService.enabledWorkflowKeys(5L)).thenReturn(List.of());
+
+        orchestrator.runAssigned(bot, issuePayload());
+
+        verify(commentAcknowledgement, never()).acknowledgeIssue(any(), any());
+    }
+
+    @Test
     void runComment_invokesWorkflow_andPublishesNoEvents() {
         WebhookPayload payload = issuePayload();
 
