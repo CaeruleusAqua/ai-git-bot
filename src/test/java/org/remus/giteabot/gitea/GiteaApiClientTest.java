@@ -5,6 +5,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.PullRequestHead;
@@ -178,6 +179,25 @@ class GiteaApiClientTest {
         assertThrows(IllegalStateException.class,
                 () -> client.getPullRequestHead("base", "project", 7L, "main"));
         server.verify();
+    }
+
+    @Test
+    void getPullRequestCommits_mapsShaAndNestedMessage() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/base/project/pulls/7/commits"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        [{"sha":"abc1234567890","commit":{"message":"Add login","author":{"name":"Jane"}},
+                          "html_url":"https://gitea.example.com/base/project/commit/abc1234567890"}]
+                        """, MediaType.APPLICATION_JSON));
+
+        List<PullRequestCommit> commits = client.getPullRequestCommits("base", "project", 7L);
+
+        server.verify();
+        assertEquals(List.of(new PullRequestCommit("abc1234567890", "Add login")), commits);
     }
 
     @Test

@@ -1,6 +1,7 @@
 package org.remus.giteabot.gitea;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.gitea.model.GiteaCommit;
 import org.remus.giteabot.gitea.model.GiteaPullRequest;
 import org.remus.giteabot.gitea.model.GiteaReview;
 import org.remus.giteabot.gitea.model.GiteaReviewComment;
@@ -12,6 +13,7 @@ import org.remus.giteabot.repository.SshEndpoint;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.Review;
@@ -529,13 +531,15 @@ public class GiteaApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for PR #{} in {}/{}", pullNumber, owner, repo);
-        List<Map<String, Object>> commits = giteaRestClient.get()
+        List<GiteaCommit> commits = giteaRestClient.get()
                 .uri("/api/v1/repos/{owner}/{repo}/pulls/{index}/commits", owner, repo, pullNumber)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
-        return commits != null ? commits : List.of();
+        return commits != null
+                ? commits.stream().map(GiteaCommit::toPullRequestCommit).toList()
+                : List.of();
     }
 
     @Override

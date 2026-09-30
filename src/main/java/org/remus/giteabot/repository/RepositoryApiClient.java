@@ -1,6 +1,7 @@
 package org.remus.giteabot.repository;
 
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.PullRequestHead;
@@ -255,11 +256,15 @@ public interface RepositoryApiClient {
                                                      Long pullNumber, Long reviewId);
 
     /**
-     * Returns the list of commits in a pull request.
-     * Each map contains at minimum "message" (commit message) and "sha" keys.
+     * Returns the commits of a pull request in the order the provider reports them.
      * Default implementation returns an empty list.
+     *
+     * @return the commits; never {@code null}, empty when the pull request has no
+     *         commits or the provider does not support this lookup. Individual
+     *         {@link PullRequestCommit#sha()} / {@link PullRequestCommit#message()}
+     *         values may be {@code null}.
      */
-    default List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    default List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         return List.of();
     }
 

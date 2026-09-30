@@ -1,6 +1,7 @@
 package org.remus.giteabot.gitlab;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.gitlab.model.GitLabCommit;
 import org.remus.giteabot.gitlab.model.GitLabReview;
 import org.remus.giteabot.gitlab.model.GitLabReviewComment;
 import org.remus.giteabot.repository.ArtifactCommentRenderer;
@@ -9,6 +10,7 @@ import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
@@ -388,15 +390,17 @@ public class GitLabApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for MR !{} in {}/{}", pullNumber, owner, repo);
         String projectPath = encodeProjectPath(owner, repo);
-        List<Map<String, Object>> commits = gitlabRestClient.get()
+        List<GitLabCommit> commits = gitlabRestClient.get()
                 .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/commits",
                         projectPath, pullNumber)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
-        return commits != null ? commits : List.of();
+        return commits != null
+                ? commits.stream().map(GitLabCommit::toPullRequestCommit).toList()
+                : List.of();
     }
 
     @Override

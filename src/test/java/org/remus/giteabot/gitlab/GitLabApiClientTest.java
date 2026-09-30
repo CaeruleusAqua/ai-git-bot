@@ -3,6 +3,7 @@ package org.remus.giteabot.gitlab;
 import org.junit.jupiter.api.Test;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -113,6 +114,25 @@ class GitLabApiClientTest {
         client.postReviewAction("owner", "repo", 7L, PostReviewAction.REQUEST_CHANGES);
 
         server.verify();
+    }
+
+    @Test
+    void getPullRequestCommits_mapsIdAndMessage() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitlab.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitLabApiClient client = new GitLabApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitlab.example.com/api/v4/projects/owner%2Frepo/merge_requests/7/commits"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        [{"id":"abc1234567890","short_id":"abc1234","title":"Add feature",
+                          "message":"Add feature\\n\\nDetails"}]
+                        """, MediaType.APPLICATION_JSON));
+
+        List<PullRequestCommit> commits = client.getPullRequestCommits("owner", "repo", 7L);
+
+        server.verify();
+        assertEquals(List.of(new PullRequestCommit("abc1234567890", "Add feature\n\nDetails")), commits);
     }
 
     @Test

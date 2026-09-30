@@ -3,6 +3,7 @@ package org.remus.giteabot.github;
 import org.junit.jupiter.api.Test;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
@@ -95,6 +96,25 @@ class GitHubApiClientTest {
         client.addPullRequestReaction("owner", "repo", 42L, "eyes");
 
         server.verify();
+    }
+
+    @Test
+    void getPullRequestCommits_mapsShaAndNestedMessage() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://api.github.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitHubApiClient client = new GitHubApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://api.github.com/repos/owner/repo/pulls/42/commits"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        [{"sha":"abc1234567890","commit":{"message":"Add login","author":{"name":"Jane"}},
+                          "author":{"login":"jane"}}]
+                        """, MediaType.APPLICATION_JSON));
+
+        List<PullRequestCommit> commits = client.getPullRequestCommits("owner", "repo", 42L);
+
+        server.verify();
+        assertEquals(List.of(new PullRequestCommit("abc1234567890", "Add login")), commits);
     }
 
     @Test

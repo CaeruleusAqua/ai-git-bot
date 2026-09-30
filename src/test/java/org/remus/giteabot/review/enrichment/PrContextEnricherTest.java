@@ -6,6 +6,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 
 import java.util.List;
 import java.util.Map;
@@ -38,9 +39,7 @@ class PrContextEnricherTest {
         when(repositoryClient.getFileContent("owner", "repo", "src/Foo.java", "feature"))
                 .thenReturn("class Foo {}");
         when(repositoryClient.getPullRequestCommits("owner", "repo", 1L))
-                .thenReturn(List.of(
-                        Map.of("sha", "abc1234", "commit", Map.of("message", "Add Foo"))
-                ));
+                .thenReturn(List.of(new PullRequestCommit("abc1234", "Add Foo")));
         when(repositoryClient.getIssueDetails("owner", "repo", 5L))
                 .thenReturn(Map.of("title", "Create Foo class", "body", "Need a Foo implementation"));
 

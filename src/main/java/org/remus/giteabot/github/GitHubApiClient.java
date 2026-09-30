@@ -1,6 +1,7 @@
 package org.remus.giteabot.github;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.github.model.GitHubCommit;
 import org.remus.giteabot.github.model.GitHubPullRequest;
 import org.remus.giteabot.github.model.GitHubReview;
 import org.remus.giteabot.github.model.GitHubReviewComment;
@@ -8,6 +9,7 @@ import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
 import org.remus.giteabot.repository.model.Review;
@@ -236,13 +238,15 @@ public class GitHubApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for PR #{} in {}/{}", pullNumber, owner, repo);
-        List<Map<String, Object>> commits = restClient.get()
+        List<GitHubCommit> commits = restClient.get()
                 .uri("/repos/{owner}/{repo}/pulls/{pull_number}/commits", owner, repo, pullNumber)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
-        return commits != null ? commits : List.of();
+        return commits != null
+                ? commits.stream().map(GitHubCommit::toPullRequestCommit).toList()
+                : List.of();
     }
 
     @Override
