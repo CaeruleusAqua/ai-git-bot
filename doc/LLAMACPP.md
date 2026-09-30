@@ -4,7 +4,7 @@ This guide covers running AI-Git-Bot with [llama.cpp](https://github.com/ggergan
 
 ## Overview
 
-llama.cpp is a high-performance C++ inference engine for LLMs that supports a wide range of quantized model formats (GGUF). The bot connects to llama.cpp's native `/completion` endpoint, which provides full support for GBNF grammar constraints.
+llama.cpp is a high-performance C++ inference engine for LLMs that supports a wide range of quantized model formats (GGUF). The bot connects to llama.cpp's OpenAI-compatible `/v1/completions` endpoint, which supports model routing and GBNF grammar constraints.
 
 ### Key Advantages over Ollama
 
@@ -35,7 +35,7 @@ Then start the bot and configure the AI Integration in the **web UI**:
 1. Go to **AI Integrations → New Integration**
 2. Select **llamacpp** as the provider type
 3. Set the **API URL** to `http://localhost:8081`
-4. Enter the **Model** name (e.g., `qwen2.5-coder-7b-instruct`)
+4. Enter the **Model** identifier (e.g., `qwen2.5-coder-7b-instruct`)
 5. Click **Save**
 
 **For CPU-only systems**, the default docker-compose uses the CPU-only image. For GPU acceleration, change the image to `ghcr.io/ggml-org/llama.cpp:server-cuda13` and uncomment the `deploy.resources` section.
@@ -47,7 +47,7 @@ All AI provider settings are configured through the **web UI** under **AI Integr
 1. Go to **AI Integrations → New Integration**
 2. Select **llamacpp** as the provider type
 3. Set the **API URL** to your llama.cpp server (e.g., `http://localhost:8081` or `http://llamacpp:8081` if using Docker networking)
-4. Enter the **Model** name (informational — the actual model is set in the llama.cpp server)
+4. Enter the **Model** identifier reported by your llama.cpp server (for router mode, this selects the model for each request)
 5. Adjust settings as needed:
 
 | Setting | Recommended Value | Why |
@@ -84,6 +84,10 @@ The bot uses **GBNF grammar constraints** to ensure valid JSON output from llama
 | `codellama-13b-instruct` | ~8 GB | ✅ Decent quality |
 
 **Note:** While grammar constraints significantly improve JSON reliability, smaller models may still struggle with complex multi-file implementations. For production agent usage, larger models (13B+) or cloud providers are recommended.
+
+### Router Mode
+
+When starting llama.cpp without a model argument (router mode), configure the integration's **Model** field with a model identifier returned by `GET /models`. The bot sends this identifier in each `/v1/completions` request so llama.cpp can route and load the selected model. For a server started with a single model, use its model identifier as well.
 
 ## Model Download
 
@@ -347,4 +351,3 @@ If the agent still produces invalid JSON despite grammar constraints:
 - [GBNF Grammar Documentation](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md)
 - [TheBloke's GGUF Models](https://huggingface.co/TheBloke)
 - [Using Ollama](OLLAMA.md) — Alternative local LLM option
-
