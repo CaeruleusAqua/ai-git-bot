@@ -196,6 +196,7 @@
             const tSuggestedModels = /*[[#{help.ai.suggestedModels}]]*/ 'Suggested models: ';
             const tSuggestedFlavors = /*[[#{help.ai.suggestedFlavors}]]*/ 'Available flavors: ';
             const tLocalModel = /*[[#{help.ai.localModel}]]*/ 'Enter the model name configured in your local {0} instance';
+            const tLlamaCppModel = /*[[#{help.ai.llamacppModel}]]*/ 'Single-model mode ignores this value. In router mode, enter the exact model ID from GET /v1/models; it selects the model for each request.';
             const tApiKeyWillBeRemoved = /*[[#{help.ai.apiKeyWillBeRemoved}]]*/ 'API key will be removed on save';
             const tEnterApiKey = /*[[#{placeholder.enterApiKey}]]*/ 'Enter API key';
 
@@ -296,7 +297,9 @@
                         });
                     } else {
                         modelDropdownBtn.style.display = 'none';
-                        if (provider === 'ollama' || provider === 'llamacpp') {
+                        if (provider === 'llamacpp') {
+                            modelHint.textContent = tLlamaCppModel;
+                        } else if (provider === 'ollama') {
                             modelHint.textContent = tLocalModel.replace('{0}', provider);
                         } else {
                             modelHint.textContent = '';

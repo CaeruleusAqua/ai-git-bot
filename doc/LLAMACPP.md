@@ -47,7 +47,7 @@ All AI provider settings are configured through the **web UI** under **AI Integr
 1. Go to **AI Integrations → New Integration**
 2. Select **llamacpp** as the provider type
 3. Set the **API URL** to your llama.cpp server (e.g., `http://localhost:8081` or `http://llamacpp:8081` if using Docker networking)
-4. Enter the **Model** identifier reported by your llama.cpp server (for router mode, this selects the model for each request)
+4. Enter the model name configured in the server. With a single model launched using `--model`, llama.cpp ignores this value; in router mode, enter the exact model ID returned by `GET /v1/models` because it selects the model for each request.
 5. Adjust settings as needed:
 
 | Setting | Recommended Value | Why |
@@ -87,7 +87,7 @@ The bot uses **GBNF grammar constraints** to ensure valid JSON output from llama
 
 ### Router Mode
 
-When starting llama.cpp without a model argument (router mode), configure the integration's **Model** field with a model identifier returned by `GET /models`. The bot sends this identifier in each `/v1/completions` request so llama.cpp can route and load the selected model. For a server started with a single model, use its model identifier as well.
+When starting llama.cpp without a model argument (router mode), configure the integration's **Model** field with the exact model ID returned by `GET /v1/models`. The bot sends this identifier in each `/v1/completions` request so llama.cpp can route and load the selected model. With a server started using `--model`, llama.cpp serves that model and ignores the request's model identifier.
 
 ## Model Download
 
