@@ -12,12 +12,14 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -62,6 +64,14 @@ class NativeStopReasonTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("providers")
     void emptyHttpBodyIsNotACompletedTurn(Provider provider) {
+        if ("OpenRouter".equals(provider.name())) {
+            // OpenRouter rejects an absent body rather than handing an empty turn to the agent.
+            assertThatThrownBy(() -> send(provider, ""))
+                    .isInstanceOf(RestClientException.class)
+                    .hasMessage("OpenRouter returned an empty response")
+                    .hasNoCause();
+            return;
+        }
         ChatTurn turn = send(provider, "");
 
         assertThat(turn.stopReason()).isEqualTo(StopReason.OTHER);
@@ -97,12 +107,13 @@ class NativeStopReasonTest {
                 .andRespond(withSuccess(response.isEmpty() ? "" : response.replace("\n", "") + "\n",
                         MediaType.APPLICATION_JSON));
 
-        ChatTurn turn = provider.client().apply(builder.build()).chatWithTools(
-                List.of(), "Review this change", List.of(new ToolDescriptor("lookup", "Read context", null)),
-                "You are a reviewer.", null, null);
-
-        server.verify();
-        return turn;
+        try {
+            return provider.client().apply(builder.build()).chatWithTools(
+                    List.of(), "Review this change", List.of(new ToolDescriptor("lookup", "Read context", null)),
+                    "You are a reviewer.", null, null);
+        } finally {
+            server.verify();
+        }
     }
 
     private static Stream<Provider> providers() {
