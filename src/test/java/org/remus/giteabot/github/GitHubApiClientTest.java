@@ -7,6 +7,7 @@ import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
@@ -96,6 +97,30 @@ class GitHubApiClientTest {
         client.addPullRequestReaction("owner", "repo", 42L, "eyes");
 
         server.verify();
+    }
+
+    @Test
+    void getRepositoryTree_mapsBlobTreeAndSubmoduleEntries() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://api.github.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GitHubApiClient client = new GitHubApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://api.github.com/repos/owner/repo/git/trees/main?recursive=1"))
+                .andExpect(method(HttpMethod.GET))
+                .andRespond(withSuccess("""
+                        {"sha":"abc","truncated":false,"tree":[
+                          {"path":"src","mode":"040000","type":"tree","sha":"t1"},
+                          {"path":"src/App.java","mode":"100644","type":"blob","sha":"b1","size":42},
+                          {"path":"vendor/lib","mode":"160000","type":"commit","sha":"c1"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        List<RepositoryTreeEntry> tree = client.getRepositoryTree("owner", "repo", "main");
+
+        server.verify();
+        assertEquals(List.of(
+                new RepositoryTreeEntry("src", RepositoryTreeEntry.Type.DIRECTORY),
+                new RepositoryTreeEntry("src/App.java", RepositoryTreeEntry.Type.FILE),
+                new RepositoryTreeEntry("vendor/lib", RepositoryTreeEntry.Type.OTHER)), tree);
     }
 
     @Test

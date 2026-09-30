@@ -3,9 +3,9 @@ package org.remus.giteabot.review.enrichment;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * Enriches PR context with the repository file tree structure.
@@ -26,7 +26,7 @@ public class RepositoryTreeEnricher implements ContextEnricher {
     @Override
     public String enrich(EnrichmentContext context) {
         try {
-            List<Map<String, Object>> tree = repositoryClient.getRepositoryTree(
+            List<RepositoryTreeEntry> tree = repositoryClient.getRepositoryTree(
                     context.owner(), context.repo(), context.headRef());
             if (tree == null || tree.isEmpty()) {
                 return "";
@@ -34,15 +34,13 @@ public class RepositoryTreeEnricher implements ContextEnricher {
 
             StringBuilder sb = new StringBuilder("**Repository structure:**\n```\n");
             int count = 0;
-            for (Map<String, Object> entry : tree) {
+            for (RepositoryTreeEntry entry : tree) {
                 if (count >= config.getMaxTreeFiles()) {
                     sb.append("... (").append(tree.size() - count).append(" more files)\n");
                     break;
                 }
-                String type = (String) entry.getOrDefault("type", "blob");
-                if ("blob".equals(type)) {
-                    String path = (String) entry.getOrDefault("path", "");
-                    sb.append("  ").append(path).append("\n");
+                if (entry.isFile()) {
+                    sb.append("  ").append(entry.path()).append("\n");
                     count++;
                 }
             }

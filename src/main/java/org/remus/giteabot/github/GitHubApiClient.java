@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.github.model.GitHubCommit;
 import org.remus.giteabot.github.model.GitHubPullRequest;
 import org.remus.giteabot.github.model.GitHubReview;
+import org.remus.giteabot.github.model.GitHubTree;
 import org.remus.giteabot.github.model.GitHubReviewComment;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
@@ -12,6 +13,7 @@ import org.remus.giteabot.repository.WorkflowRunStatus;
 import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.springframework.core.ParameterizedTypeReference;
@@ -305,17 +307,16 @@ public class GitHubApiClient implements RepositoryApiClient {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         log.info("Fetching repository tree for {}/{} at ref={}", owner, repo, ref);
-        Map<String, Object> result = restClient.get()
+        GitHubTree result = restClient.get()
                 .uri("/repos/{owner}/{repo}/git/trees/{ref}?recursive=1", owner, repo, ref)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        if (result != null && result.containsKey("tree")) {
-            return (List<Map<String, Object>>) result.get("tree");
+                .body(GitHubTree.class);
+        if (result == null || result.getTree() == null) {
+            return List.of();
         }
-        return List.of();
+        return result.getTree().stream().map(GitHubTree.Entry::toRepositoryTreeEntry).toList();
     }
 
     @Override

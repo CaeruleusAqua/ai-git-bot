@@ -5,6 +5,7 @@ import org.remus.giteabot.gitea.model.GiteaCommit;
 import org.remus.giteabot.gitea.model.GiteaPullRequest;
 import org.remus.giteabot.gitea.model.GiteaReview;
 import org.remus.giteabot.gitea.model.GiteaReviewComment;
+import org.remus.giteabot.gitea.model.GiteaTree;
 import org.remus.giteabot.repository.ArtifactCommentRenderer;
 import org.remus.giteabot.repository.ArtifactUploadSupport;
 import org.remus.giteabot.repository.PostReviewAction;
@@ -13,6 +14,7 @@ import org.remus.giteabot.repository.SshEndpoint;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestHead;
@@ -582,17 +584,16 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         log.info("Fetching repository tree for {}/{} at ref={}", owner, repo, ref);
-        Map<String, Object> result = giteaRestClient.get()
+        GiteaTree result = giteaRestClient.get()
                 .uri("/api/v1/repos/{owner}/{repo}/git/trees/{ref}?recursive=true", owner, repo, ref)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        if (result != null && result.containsKey("tree")) {
-            return (List<Map<String, Object>>) result.get("tree");
+                .body(GiteaTree.class);
+        if (result == null || result.getTree() == null) {
+            return List.of();
         }
-        return List.of();
+        return result.getTree().stream().map(GiteaTree.Entry::toRepositoryTreeEntry).toList();
     }
 
     @Override

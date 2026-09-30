@@ -1,6 +1,7 @@
 package org.remus.giteabot.repository;
 
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
@@ -345,7 +346,16 @@ public interface RepositoryApiClient {
 
     String getDefaultBranch(String owner, String repo);
 
-    List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref);
+    /**
+     * Returns the recursive tree of {@code repo} at {@code ref}: files, directories
+     * and other entries such as submodules (see {@link RepositoryTreeEntry.Type}).
+     * Providers with paginated listings may return only the first page, so large
+     * repositories can be truncated.
+     *
+     * @return the tree entries; never {@code null}, empty when the provider returns
+     *         no tree
+     */
+    List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref);
 
     String getFileContent(String owner, String repo, String path, String ref);
 
