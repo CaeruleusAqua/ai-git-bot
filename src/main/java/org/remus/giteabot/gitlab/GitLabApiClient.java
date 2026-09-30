@@ -57,6 +57,18 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
+        Map<String, Object> mr = gitlabRestClient.get()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}",
+                        encodeProjectPath(owner, repo), pullNumber)
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        // The transitional "locked" state deliberately denies workflow writes;
+        // this does not mean the MR is closed. Only "opened" permits a write.
+        return mr != null && "opened".equals(mr.get("state"));
+    }
+
+    @Override
     public String getPullRequestDiff(String owner, String repo, Long pullNumber) {
         log.info("Fetching diff for MR !{} in {}/{}", pullNumber, owner, repo);
         String projectPath = encodeProjectPath(owner, repo);
