@@ -76,5 +76,4 @@ class IssueCommentAcknowledgementTest {
         payload.setComment(comment);
         return payload;
     }
-
 }

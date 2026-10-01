@@ -20,6 +20,7 @@ import org.remus.giteabot.prworkflow.review.ReviewWorkflow;
 import org.remus.giteabot.prworkflow.unittest.UnitTestSlashCommandHandler;
 import org.remus.giteabot.prworkflow.unittest.UnitTestWorkflow;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.PullRequestReactions;
 import org.remus.giteabot.review.CodeReviewService;
 import org.remus.giteabot.util.BranchFilter;
 import org.springframework.scheduling.annotation.Async;
@@ -122,10 +123,18 @@ public class BotWebhookService {
         String owner = payload.getRepository().getOwner() != null
                 ? payload.getRepository().getOwner().getLogin() : null;
         String repo = payload.getRepository().getName();
+        if (owner == null || repo == null) {
+            return;
+        }
         Long pullNumber = payload.getPullRequest().getNumber();
         try {
+            if (bot.getWorkflowConfiguration() != null
+                    && workflowSelectionService.enabledWorkflowKeys(
+                            bot.getWorkflowConfiguration().getId()).isEmpty()) {
+                return;
+            }
             giteaClientFactory.getApiClient(bot.getGitIntegration())
-                    .addPullRequestReaction(owner, repo, pullNumber, "eyes");
+                    .addPullRequestReaction(owner, repo, pullNumber, PullRequestReactions.EYES);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}",
                     bot.getName(), pullNumber, e.getMessage());
