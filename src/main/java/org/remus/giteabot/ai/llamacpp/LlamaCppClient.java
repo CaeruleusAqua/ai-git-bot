@@ -294,7 +294,7 @@ public class LlamaCppClient extends AbstractAiClient {
     private String extractText(LlamaCppRequest request, LlamaCppCompletionResponse response, String context) {
         LlamaCppCompletionResponse.Choice choice = firstChoice(response);
         logTruncationIfNeeded(choice, context);
-        if (choice == null || choice.getText() == null) {
+        if (choice == null || choice.getText() == null || choice.getText().isEmpty()) {
             log.warn("Empty response from llama.cpp server");
             return "Unable to generate " + context + " - empty response from AI.";
         }
