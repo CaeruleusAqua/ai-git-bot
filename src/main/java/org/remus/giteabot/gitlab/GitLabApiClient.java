@@ -254,6 +254,18 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' award emoji to MR !{} in {}/{}", reaction, pullNumber, owner, repo);
+        String projectPath = encodeProjectPath(owner, repo);
+        gitlabRestClient.post()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/award_emoji",
+                        projectPath, pullNumber)
+                .body(Map.of("name", reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
     public void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                         String filePath, int line, String body) {
         log.info("Posting inline note on MR !{} in {}/{} at {}:{}", pullNumber, owner, repo, filePath, line);

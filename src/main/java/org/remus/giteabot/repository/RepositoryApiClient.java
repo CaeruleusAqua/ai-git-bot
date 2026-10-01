@@ -173,6 +173,14 @@ public interface RepositoryApiClient {
 
     void addReaction(String owner, String repo, Long commentId, String reaction);
 
+    /**
+     * Adds a reaction to a pull request itself, rather than to a comment.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
     void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                  String filePath, int line, String body);
 

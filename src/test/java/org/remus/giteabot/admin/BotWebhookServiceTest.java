@@ -22,6 +22,7 @@ import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
+import org.remus.giteabot.repository.PullRequestReactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.session.SessionService;
 import org.remus.giteabot.systemsettings.McpConfiguration;
@@ -311,6 +312,96 @@ class BotWebhookServiceTest {
 
         verify(aiClientFactory, never()).getClient(any());
         verify(giteaClientFactory, never()).getApiClient(any());
+    }
+
+    @Test
+    void reviewPullRequest_opened_addsEyesReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, PullRequestReactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithNoEnabledWorkflowsDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        bot.setWorkflowConfiguration(emptyPrConfiguration);
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithEnabledWorkflowsReacts() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, PullRequestReactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithoutRepositoryOwnerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.getRepository().setOwner(null);
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedFromDisallowedCallerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of("allowed_user"));
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(giteaClientFactory, never()).getApiClient(any());
+        verify(prWorkflowOrchestrator, never()).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_reopened_doesNotAddReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("reopened");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addPullRequestReaction(any(), any(), any(), any());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
     }
 
     /**
@@ -1588,6 +1679,21 @@ class BotWebhookServiceTest {
         bot.setSystemPrompt(systemPrompt);
         bot.setIssueWorkflowConfiguration(codingIssueConfiguration);
         return bot;
+    }
+
+    private static WebhookPayload openedPrPayload() {
+        WebhookPayload payload = new WebhookPayload();
+        payload.setAction("opened");
+        WebhookPayload.Repository repository = new WebhookPayload.Repository();
+        repository.setName("my-repo");
+        WebhookPayload.Owner owner = new WebhookPayload.Owner();
+        owner.setLogin("Test");
+        repository.setOwner(owner);
+        payload.setRepository(repository);
+        WebhookPayload.PullRequest pullRequest = new WebhookPayload.PullRequest();
+        pullRequest.setNumber(42L);
+        payload.setPullRequest(pullRequest);
+        return payload;
     }
 
     /**

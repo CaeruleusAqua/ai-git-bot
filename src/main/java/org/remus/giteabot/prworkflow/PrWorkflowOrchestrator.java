@@ -41,13 +41,7 @@ public class PrWorkflowOrchestrator {
 
     public List<PrWorkflowRun> runAll(Bot bot, WebhookPayload payload) {
         if (bot == null) throw new IllegalArgumentException("bot must not be null");
-        List<String> workflowKeys;
-        if (bot.getWorkflowConfiguration() != null) {
-            workflowKeys = workflowSelectionService.enabledWorkflowKeys(
-                    bot.getWorkflowConfiguration().getId());
-        } else {
-            workflowKeys = List.of(ReviewWorkflow.KEY);
-        }
+        List<String> workflowKeys = enabledWorkflowKeys(bot, workflowSelectionService);
         if (workflowKeys.isEmpty()) {
             log.debug("[Bot '{}'] No workflows enabled", bot.getName());
             return List.of();
@@ -65,6 +59,17 @@ public class PrWorkflowOrchestrator {
             }
         }
         return runs;
+    }
+
+    /**
+     * Returns the PR workflow keys {@link #runAll} executes for {@code bot}: the enabled keys of
+     * its workflow configuration, or just the review workflow when it has none.
+     */
+    public static List<String> enabledWorkflowKeys(Bot bot, WorkflowSelectionService workflowSelectionService) {
+        if (bot.getWorkflowConfiguration() == null) {
+            return List.of(ReviewWorkflow.KEY);
+        }
+        return workflowSelectionService.enabledWorkflowKeys(bot.getWorkflowConfiguration().getId());
     }
 
     public PrWorkflowRun run(Bot bot, WebhookPayload payload, String workflowKey) {

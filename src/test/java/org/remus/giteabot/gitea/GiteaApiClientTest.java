@@ -398,4 +398,20 @@ class GiteaApiClientTest {
 
         server.verify();
     }
+
+    @Test
+    void addPullRequestReaction_postsEyesReactionToThePullRequest() {
+        RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        GiteaApiClient client = new GiteaApiClient(builder.build(), CREDS);
+
+        server.expect(requestTo("https://gitea.example.com/api/v1/repos/owner/repo/issues/42/reactions"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(jsonPath("$.content").value("eyes"))
+                .andRespond(withSuccess());
+
+        client.addPullRequestReaction("owner", "repo", 42L, "eyes");
+
+        server.verify();
+    }
 }
