@@ -10,13 +10,15 @@ llama.cpp is a high-performance C++ inference engine for LLMs that supports a wi
 
 | Feature | llama.cpp | Ollama |
 |---------|-----------|--------|
-| **GBNF Grammar** | ✅ Full native support | ❌ JSON mode only |
+| **GBNF Grammar** | ✅ Supported through the OpenAI-compatible endpoint | ❌ JSON mode only |
 | **Model Format** | GGUF files directly | Ollama-specific format |
 | **Agent Reliability** | ✅ Grammar-constrained JSON | ⚠️ Often fails |
 | **Memory Efficiency** | Highly optimized | Good |
 | **Setup Complexity** | Model download required | `ollama pull` |
 
 The **GBNF grammar support** is the main advantage for this bot — it allows constraining the model's output to valid JSON matching the agent's expected schema, significantly improving reliability for issue implementation.
+
+The bot requests streaming usage counters with `stream_options.include_usage`. Use a current llama.cpp server build that supports this OpenAI-compatible option if token usage reporting is required; completions remain supported when an older build omits those counters.
 
 ## Quick Start
 
