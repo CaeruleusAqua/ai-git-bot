@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import tools.jackson.databind.JsonNode;
 
 /**
  * AI client implementation for llama.cpp server.
@@ -95,8 +96,7 @@ public class LlamaCppClient extends AbstractAiClient {
         String effectivePrompt = resolvePrompt(systemPrompt);
         int maxTokens = maxTokensOverride != null && maxTokensOverride > 0
                 ? maxTokensOverride : getMaxTokens();
-        String effectiveModel = modelOverride != null && !modelOverride.isBlank()
-                ? modelOverride : getModel();
+        String effectiveModel = resolveModel(modelOverride);
         List<AiMessage> messages = new ArrayList<>(conversationHistory);
         messages.add(AiMessage.builder().role("user")
                 .content(newUserMessage == null ? "" : newUserMessage).build());
@@ -104,17 +104,17 @@ public class LlamaCppClient extends AbstractAiClient {
         LlamaCppRequest request = buildRequest(buildChatPrompt(effectivePrompt, messages),
                 effectiveModel, maxTokens, "chat", grammar);
         LlamaCppCompletionResponse response = executeRequest(request);
-        if (response == null) {
-            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
-        }
 
         long inputTokens = usageTokens(response, true);
         long outputTokens = usageTokens(response, false);
         if (response.getUsage() != null) {
             reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+        } else {
+            log.debug("llama.cpp chat response did not include usage counters");
         }
         LlamaCppCompletionResponse.Choice choice = firstChoice(response);
         String text = choice == null || choice.getText() == null ? "" : choice.getText();
+        logTruncationIfNeeded(choice, "chat");
         return new ChatTurn(text, List.of(), mapStopReason(choice == null ? null : choice.getFinishReason()),
                 inputTokens, outputTokens);
     }
@@ -233,6 +233,9 @@ public class LlamaCppClient extends AbstractAiClient {
                 sawDoneRef[0] = true;
                 return false;
             }
+            if (json.startsWith("error:")) {
+                throw providerError(json.substring("error:".length()).stripLeading());
+            }
             LlamaCppCompletionResponse chunk;
             try {
                 chunk = jackson.readValue(json, LlamaCppCompletionResponse.class);
@@ -244,9 +247,7 @@ public class LlamaCppClient extends AbstractAiClient {
                         "Malformed llama.cpp stream line: " + e.getMessage(), new IOException(e));
             }
             if (chunk.getError() != null) {
-                String message = chunk.getError().getMessage();
-                throw new ResourceAccessException("llama.cpp stream error: "
-                        + (message == null || message.isBlank() ? "unknown error" : message));
+                throw providerError(chunk.getError());
             }
             lastRef[0] = chunk;
             LlamaCppCompletionResponse.Choice choice = firstChoice(chunk);
@@ -269,9 +270,9 @@ public class LlamaCppClient extends AbstractAiClient {
             throw new ResourceAccessException(
                     "Incomplete llama.cpp stream: missing finish_reason or [DONE]");
         }
-        if (!sawChoiceRef[0] || content.isEmpty()) {
+        if (!sawChoiceRef[0]) {
             throw new ResourceAccessException(
-                    "Invalid llama.cpp stream: response contained no completion text");
+                    "Invalid llama.cpp stream: response contained no completion choice");
         }
 
         LlamaCppCompletionResponse source = lastRef[0];
@@ -291,7 +292,8 @@ public class LlamaCppClient extends AbstractAiClient {
     }
 
     private String extractText(LlamaCppRequest request, LlamaCppCompletionResponse response, String context) {
-        LlamaCppCompletionResponse.Choice choice = response == null ? null : firstChoice(response);
+        LlamaCppCompletionResponse.Choice choice = firstChoice(response);
+        logTruncationIfNeeded(choice, context);
         if (choice == null || choice.getText() == null) {
             log.warn("Empty response from llama.cpp server");
             return "Unable to generate " + context + " - empty response from AI.";
@@ -306,6 +308,8 @@ public class LlamaCppClient extends AbstractAiClient {
                     usageTokens(response, true),
                     usageTokens(response, false));
             reportUsage(usageTokens(response, true), usageTokens(response, false), 0L, 0L, request, response);
+        } else {
+            log.debug("llama.cpp {} response did not include usage counters", context);
         }
 
         return result;
@@ -314,6 +318,42 @@ public class LlamaCppClient extends AbstractAiClient {
     private LlamaCppCompletionResponse.Choice firstChoice(LlamaCppCompletionResponse response) {
         return response.getChoices() == null || response.getChoices().isEmpty()
                 ? null : response.getChoices().getFirst();
+    }
+
+    private void logTruncationIfNeeded(LlamaCppCompletionResponse.Choice choice, String context) {
+        if (choice != null && "length".equals(choice.getFinishReason())) {
+            log.warn("llama.cpp {} response was truncated due to max token limit", context);
+        }
+    }
+
+    private RuntimeException providerError(String payload) {
+        String message = null;
+        JsonNode code = null;
+        try {
+            JsonNode root = jackson.readTree(payload);
+            JsonNode error = root.get("error");
+            JsonNode source = error != null && error.isObject() ? error : root;
+            JsonNode messageNode = source.get("message");
+            message = messageNode == null || messageNode.isNull() ? null : messageNode.asText();
+            code = source.get("code");
+        } catch (JacksonException e) {
+            log.debug("Unable to parse llama.cpp stream error payload: {}", e.getMessage());
+        }
+        return providerError(message, code);
+    }
+
+    private RuntimeException providerError(LlamaCppCompletionResponse.ApiError error) {
+        return providerError(error == null ? null : error.getMessage(),
+                error == null ? null : error.getCode());
+    }
+
+    private RuntimeException providerError(String message, JsonNode code) {
+        String detail = "llama.cpp stream error: "
+                + (message == null || message.isBlank() ? "unknown error" : message);
+        if (code != null && code.isNumber() && code.asInt() < 500) {
+            return new IllegalStateException(detail);
+        }
+        return new ResourceAccessException(detail);
     }
 
     private long usageTokens(LlamaCppCompletionResponse response, boolean prompt) {

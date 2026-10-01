@@ -381,19 +381,39 @@ class LlamaCppClientStreamingTest {
         assertTrue(ex.getMessage().contains("model route failed"));
     }
 
+    @Test
+    void errorEventAfterPartialContentFailsTheRequest() {
+        emitRawSse("""
+                data: {"choices":[{"text":"partial","finish_reason":null}]}
+                error: {"message":"model route failed","type":"server_error","code":500}
+                """);
+
+        ResourceAccessException ex = assertThrows(ResourceAccessException.class,
+                () -> client().submitReviewPrompt("review", null, "hi"));
+
+        assertTrue(ex.getMessage().contains("model route failed"));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "",
             "data: {}%n" + "data: [DONE]%n",
             "data: {\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":0}}%n"
-                    + "data: [DONE]%n",
-            "data: {\"choices\":[{\"text\":\"\",\"finish_reason\":\"stop\"}]}%n"
+                    + "data: [DONE]%n"
     })
     void emptyOrMetadataOnlyStreamsAreRejected(String bodyTemplate) {
         emitRawSse(bodyTemplate.formatted());
 
         assertThrows(ResourceAccessException.class,
                 () -> client().submitReviewPrompt("review", null, "hi"));
+    }
+
+    @Test
+    void completedEmptyChoiceUsesTheExistingFallback() {
+        emitRawSse("data: {\"choices\":[{\"text\":\"\",\"finish_reason\":\"stop\"}]}%n");
+
+        assertEquals("Unable to generate review - empty response from AI.",
+                client().submitReviewPrompt("review", null, "hi"));
     }
 
     @Test
