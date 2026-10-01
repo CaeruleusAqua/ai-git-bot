@@ -87,8 +87,10 @@ public class ChoreRouterIssueWorkflow implements IssueWorkflow {
 - The `IssueWorkflowOrchestrator` resolves the enabled workflow(s) from the
   bot's issue-assigned configuration and owns the lifecycle:
   `issueassignment.started/completed/failed` outgoing events and bot error
-  records for assignments; a 👀 acknowledgment reaction on the triggering
-  comment plus error records for comments.
+  records for assignments. When at least one workflow is enabled, the bot adds
+  a 👀 reaction to the assigned issue before running it. Follow-up comments
+  receive a 👀 acknowledgment reaction on the triggering comment plus error
+  records on failure.
 - To ship a new workflow enabled on the default configuration, add a
   follow-up Flyway migration (H2 + PostgreSQL) following the `V29`/`V37`
   precedent — the application never auto-extends seeded configurations at
