@@ -160,6 +160,14 @@ with kind **VALIDATION** and obey the same whitelist semantics. The Default
 configuration enables all of them; restrict them per bot to avoid the agent
 trying to run the wrong build tool.
 
+The list also ships **`execute`**, which runs a validation script committed
+inside the repository instead of an external binary — the escape hatch for
+documentation-only, CI/CD and infrastructure repositories without a
+conventional build command. It takes the script's repository-relative path as
+its single argument and treats exit code `0` as success; the path is resolved
+against the checkout, so nothing outside the repository can be configured. See
+[Coding Agent → Custom validation scripts](CODING_AGENT.md#custom-validation-scripts-execute).
+
 ### Backwards compatibility
 
 `null` as the whitelist disables enforcement entirely. This path is used by

@@ -50,8 +50,9 @@ public class ToolExecutionService {
     private final WorkspaceService workspaceService;
 
     /**
-     * Executes a configured validation tool (mvn, gradle, …) in the given
-     * workspace directory. Rejects tools not in
+     * Executes a configured validation tool in the given workspace directory:
+     * either a binary from {@code PATH} (mvn, gradle, …) or, for {@code execute},
+     * a script committed inside the repository. Rejects tools not in
      * {@link ToolCatalog#validationToolNames()}.
      */
     public ToolResult executeTool(Path workspaceDir, String tool, List<String> arguments) {
@@ -63,18 +64,72 @@ public class ToolExecutionService {
                     "");
         }
 
-        String[] command = new String[1 + (arguments != null ? arguments.size() : 0)];
-        command[0] = tool;
+        return switch (tool) {
+            case "execute" -> executeScriptTool(workspaceDir, arguments);
+            default -> executePathTool(workspaceDir, tool, arguments);
+        };
+    }
+
+    /**
+     * Runs a binary from {@code PATH} with the supplied arguments.
+     */
+    private ToolResult executePathTool(Path workspaceDir, String tool, List<String> arguments) {
+        List<String> command = new ArrayList<>();
+        command.add(tool);
         if (arguments != null) {
-            for (int i = 0; i < arguments.size(); i++) {
-                command[i + 1] = arguments.get(i);
-            }
+            command.addAll(arguments);
         }
 
         log.info("Executing tool: {} {}", tool,
                 arguments != null ? String.join(" ", arguments) : "");
 
-        return executeCommand(workspaceDir, command);
+        return executeCommand(workspaceDir, command.toArray(String[]::new));
+    }
+
+    /**
+     * Runs the validation script committed inside the repository (the {@code execute}
+     * tool), addressed by its repository-relative path. The path must resolve to an
+     * executable regular file inside the workspace and is executed directly — never
+     * through a shell — so the argument cannot smuggle additional commands. Arguments
+     * after the path are forwarded verbatim; exit code {@code 0} means passed.
+     */
+    private ToolResult executeScriptTool(Path workspaceDir, List<String> arguments) {
+        if (arguments == null || arguments.isEmpty()
+                || arguments.getFirst() == null || arguments.getFirst().isBlank()) {
+            return new ToolResult(false, -1, "",
+                    "execute requires the repository-relative path to a validation script "
+                            + "(for example scripts/validate.sh).");
+        }
+
+        String relativePath = arguments.getFirst().strip();
+        Path script;
+        try {
+            script = resolveWorkspacePath(workspaceDir, relativePath);
+        } catch (IOException e) {
+            return new ToolResult(false, -1, "", "Validation script rejected: " + e.getMessage());
+        }
+        if (!Files.isRegularFile(script)) {
+            return new ToolResult(false, -1, "",
+                    "Validation script not found inside the repository: " + relativePath);
+        }
+        if (!Files.isExecutable(script)) {
+            return new ToolResult(false, -1, "",
+                    "Validation script is not executable: " + relativePath
+                            + ". Commit the executable bit (chmod +x / git update-index --chmod=+x) — "
+                            + "the tool never falls back to a shell interpreter.");
+        }
+
+        List<String> command = new ArrayList<>(arguments.size());
+        command.add(script.toAbsolutePath().toString());
+        for (int i = 1; i < arguments.size(); i++) {
+            String extraArgument = arguments.get(i);
+            if (extraArgument != null && !extraArgument.isBlank()) {
+                command.add(extraArgument);
+            }
+        }
+
+        log.info("Executing repository validation script: {}", relativePath);
+        return executeCommand(workspaceDir, command.toArray(String[]::new));
     }
 
     /**
