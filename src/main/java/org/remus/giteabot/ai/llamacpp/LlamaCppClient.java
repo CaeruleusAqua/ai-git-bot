@@ -12,13 +12,13 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import tools.jackson.databind.JsonNode;
 
 /**
  * AI client implementation for llama.cpp server.
@@ -301,7 +301,6 @@ public class LlamaCppClient extends AbstractAiClient {
 
         String result = choice.getText();
 
-        // Log token usage
         if (response.getUsage() != null) {
             log.info("llama.cpp {} response: {} prompt tokens, {} generated tokens",
                     context,
