@@ -41,5 +41,4 @@ public class IssueCommentAcknowledgement {
                     bot.getName(), commentId, e.getMessage());
         }
     }
-
 }
