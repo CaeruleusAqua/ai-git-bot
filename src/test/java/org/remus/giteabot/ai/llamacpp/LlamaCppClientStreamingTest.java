@@ -410,7 +410,7 @@ class LlamaCppClientStreamingTest {
 
     @Test
     void completedEmptyChoiceUsesTheExistingFallback() {
-        emitRawSse("data: {\"choices\":[{\"text\":\"\",\"finish_reason\":\"stop\"}]}%n");
+        emitRawSse("data: {\"choices\":[{\"text\":\"\",\"finish_reason\":\"stop\"}]}%n".formatted());
 
         assertEquals("Unable to generate review - empty response from AI.",
                 client().submitReviewPrompt("review", null, "hi"));
