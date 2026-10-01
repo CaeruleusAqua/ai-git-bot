@@ -19,8 +19,8 @@ import org.remus.giteabot.prworkflow.readmesync.ReadmeSyncSlashCommandHandler;
 import org.remus.giteabot.prworkflow.review.ReviewWorkflow;
 import org.remus.giteabot.prworkflow.unittest.UnitTestSlashCommandHandler;
 import org.remus.giteabot.prworkflow.unittest.UnitTestWorkflow;
-import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.PullRequestReactions;
+import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.review.CodeReviewService;
 import org.remus.giteabot.util.BranchFilter;
 import org.springframework.scheduling.annotation.Async;
@@ -128,16 +128,15 @@ public class BotWebhookService {
         }
         Long pullNumber = payload.getPullRequest().getNumber();
         try {
-            if (bot.getWorkflowConfiguration() != null
-                    && workflowSelectionService.enabledWorkflowKeys(
-                            bot.getWorkflowConfiguration().getId()).isEmpty()) {
+            if (PrWorkflowOrchestrator.enabledWorkflowKeys(bot, workflowSelectionService).isEmpty()) {
                 return;
             }
             giteaClientFactory.getApiClient(bot.getGitIntegration())
                     .addPullRequestReaction(owner, repo, pullNumber, PullRequestReactions.EYES);
         } catch (RuntimeException e) {
-            log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}",
-                    bot.getName(), pullNumber, e.getMessage());
+            log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}: {}",
+                    bot.getName(), pullNumber, e.getClass().getSimpleName(), e.getMessage());
+            log.debug("[Bot '{}'] 👀 reaction failure details", bot.getName(), e);
         }
     }
 
