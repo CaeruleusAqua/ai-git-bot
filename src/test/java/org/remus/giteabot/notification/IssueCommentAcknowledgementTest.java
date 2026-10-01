@@ -63,34 +63,6 @@ class IssueCommentAcknowledgementTest {
         verifyNoInteractions(giteaClientFactory);
     }
 
-    @Test
-    void acknowledgeIssue_addsEyesReactionToTheIssueItself() {
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
-
-        acknowledgement.acknowledgeIssue(bot, issuePayload());
-
-        verify(repositoryApiClient).addIssueReaction("Test", "my-repo", 12L, "eyes");
-    }
-
-    @Test
-    void acknowledgeIssue_reactionFailure_isSwallowed() {
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
-        doThrow(new RuntimeException("reaction api down"))
-                .when(repositoryApiClient).addIssueReaction(any(), any(), any(), any());
-
-        assertDoesNotThrow(() -> acknowledgement.acknowledgeIssue(bot, issuePayload()));
-    }
-
-    @Test
-    void acknowledgeIssue_payloadWithoutIssue_isIgnored() {
-        WebhookPayload payload = issuePayload();
-        payload.setIssue(null);
-
-        acknowledgement.acknowledgeIssue(bot, payload);
-
-        verifyNoInteractions(giteaClientFactory);
-    }
-
     private static WebhookPayload commentPayload() {
         WebhookPayload payload = new WebhookPayload();
         WebhookPayload.Repository repository = new WebhookPayload.Repository();
@@ -105,17 +77,4 @@ class IssueCommentAcknowledgementTest {
         return payload;
     }
 
-    private static WebhookPayload issuePayload() {
-        WebhookPayload payload = new WebhookPayload();
-        WebhookPayload.Repository repository = new WebhookPayload.Repository();
-        repository.setName("my-repo");
-        WebhookPayload.Owner owner = new WebhookPayload.Owner();
-        owner.setLogin("Test");
-        repository.setOwner(owner);
-        payload.setRepository(repository);
-        WebhookPayload.Issue issue = new WebhookPayload.Issue();
-        issue.setNumber(12L);
-        payload.setIssue(issue);
-        return payload;
-    }
 }

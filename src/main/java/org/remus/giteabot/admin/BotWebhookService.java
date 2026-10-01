@@ -100,6 +100,7 @@ public class BotWebhookService {
             if (!isCallerAllowed(bot, payload)) {
                 return;
             }
+            acknowledgeOpenedPullRequest(bot, payload);
             try {
                 prWorkflowOrchestrator.runAll(bot, payload);
             } catch (Exception e) {
@@ -108,6 +109,26 @@ public class BotWebhookService {
             }
         } finally {
             AiAuditContext.clear();
+        }
+    }
+
+    private void acknowledgeOpenedPullRequest(Bot bot, WebhookPayload payload) {
+        if (!"opened".equals(payload.getAction())
+                || payload.getRepository() == null
+                || payload.getPullRequest() == null
+                || payload.getPullRequest().getNumber() == null) {
+            return;
+        }
+        String owner = payload.getRepository().getOwner() != null
+                ? payload.getRepository().getOwner().getLogin() : null;
+        String repo = payload.getRepository().getName();
+        Long pullNumber = payload.getPullRequest().getNumber();
+        try {
+            giteaClientFactory.getApiClient(bot.getGitIntegration())
+                    .addPullRequestReaction(owner, repo, pullNumber, "eyes");
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}",
+                    bot.getName(), pullNumber, e.getMessage());
         }
     }
 

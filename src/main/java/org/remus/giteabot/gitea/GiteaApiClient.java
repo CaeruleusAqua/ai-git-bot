@@ -463,10 +463,10 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
-        log.info("Adding '{}' reaction to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' reaction to PR #{} in {}/{}", reaction, pullNumber, owner, repo);
         giteaRestClient.post()
-                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/reactions", owner, repo, issueNumber)
+                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/reactions", owner, repo, pullNumber)
                 .body(new ReactionRequest(reaction))
                 .retrieve()
                 .toBodilessEntity();

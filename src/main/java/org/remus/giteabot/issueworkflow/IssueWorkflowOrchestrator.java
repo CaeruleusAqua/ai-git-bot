@@ -28,12 +28,10 @@ import java.util.Map;
  * lifecycle:
  *
  * <ul>
- *   <li>{@link #runAssigned} acknowledges with a best-effort 👀 reaction on
- *       the issue itself (there is no triggering comment for this event),
- *       then publishes {@code issueassignment.started} before each delegation
- *       (with the issue title), {@code issueassignment.completed} on success,
- *       and {@code issueassignment.failed} + a bot error record on exception
- *       — the exact lifecycle that used to be inlined in
+ *   <li>{@link #runAssigned} publishes {@code issueassignment.started} before
+ *       each delegation (with the issue title), {@code issueassignment.completed}
+ *       on success, and {@code issueassignment.failed} + a bot error record on
+ *       exception — the exact lifecycle that used to be inlined in
  *       {@code BotWebhookService.handleIssueAssigned}.</li>
  *   <li>{@link #runComment} delegates follow-up comments through the same
  *       resolved workflows; failures only record a bot error (no outgoing
@@ -64,16 +62,8 @@ public class IssueWorkflowOrchestrator {
      * does not prevent the remaining ones from running.
      */
     public void runAssigned(Bot bot, WebhookPayload payload) {
-        List<IssueWorkflow> workflows = resolveWorkflows(bot);
-        if (workflows.isEmpty()) {
-            return;
-        }
-        // Acknowledge immediately with 👀 on the issue itself (there is no
-        // triggering comment for an assignment event) — the same pattern
-        // runComment uses for follow-up comments.
-        commentAcknowledgement.acknowledgeIssue(bot, payload);
         IssueRef issue = issueRef(payload);
-        for (IssueWorkflow workflow : workflows) {
+        for (IssueWorkflow workflow : resolveWorkflows(bot)) {
             try {
                 retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);

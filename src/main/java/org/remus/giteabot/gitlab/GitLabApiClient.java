@@ -255,13 +255,12 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
-        // Unlike a comment/note reaction, the issue IID is already the identifier
-        // award_emoji needs, so this one can be implemented directly.
-        log.info("Adding '{}' award emoji to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' award emoji to MR !{} in {}/{}", reaction, pullNumber, owner, repo);
         String projectPath = encodeProjectPath(owner, repo);
         gitlabRestClient.post()
-                .uri("/api/v4/projects/{projectPath}/issues/{iid}/award_emoji", projectPath, issueNumber)
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/award_emoji",
+                        projectPath, pullNumber)
                 .body(Map.of("name", reaction))
                 .retrieve()
                 .toBodilessEntity();

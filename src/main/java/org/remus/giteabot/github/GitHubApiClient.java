@@ -167,11 +167,11 @@ public class GitHubApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
-        log.info("Adding '{}' reaction to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' reaction to PR #{} in {}/{}", reaction, pullNumber, owner, repo);
         restClient.post()
                 .uri("/repos/{owner}/{repo}/issues/{issue_number}/reactions",
-                        owner, repo, issueNumber)
+                        owner, repo, pullNumber)
                 .body(new ReactionRequest(reaction))
                 .retrieve()
                 .toBodilessEntity();
