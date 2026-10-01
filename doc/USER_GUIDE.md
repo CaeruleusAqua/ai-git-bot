@@ -184,7 +184,9 @@ Troubleshooting:
 
 #### llama.cpp
 - No API key required
-- Model is determined by the llama.cpp server configuration
+- For a server started with one model (`--model`), the Model field is ignored by llama.cpp
+- In router mode (no `--model`), the Model field must contain the exact model ID returned by `GET /v1/models`; llama.cpp uses it to route each request
+- Uses llama.cpp's OpenAI-compatible `/v1/completions` endpoint
 - Supports GBNF grammar constraints for reliable JSON output (agent feature)
 
 ### Editing an AI Integration
