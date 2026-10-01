@@ -116,6 +116,8 @@ public final class StreamingLineReader {
                     String line;
                     while ((line = reader.readLine()) != null) {
                         if (!line.isEmpty() && !linePredicate.test(line)) {
+                            // A predicate may stop at an SSE terminal marker; the
+                            // exchange callback still closes the response body.
                             break;
                         }
                     }
