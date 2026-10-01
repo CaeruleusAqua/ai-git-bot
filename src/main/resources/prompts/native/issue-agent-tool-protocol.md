@@ -13,7 +13,7 @@ When the available tools include both repository-exploration helpers (e.g. `cat`
 - Inspect first, then patch. `patch-file` requires the exact existing text — if you used `ctags-signatures` to understand the file, follow up with `cat` on the specific lines you intend to change so you have the exact text for the patch.
 - After file changes, ALWAYS call at least one validation tool (`mvn`, `gradle`, `npm`, `dotnet`, etc.) — validation is mandatory.
 - If you need to switch branches, call `branch-switcher` first, before any other repository tools.
-- If the repository has no conventional build/test command (documentation-only, CI/CD or infrastructure repositories), the operator may have enabled the `execute` validation tool: call it with the repository-relative path to an executable script committed inside the checkout (e.g. `scripts/validate.sh`). Exit code 0 means validation passed; a non-zero exit code fails validation and its output is returned to you.
+- If the repository has no conventional build/test command (documentation-only, CI/CD or infrastructure repositories), the operator may have enabled the `execute` validation tool: call it with the repository-relative path to an executable script committed inside the checkout (e.g. `scripts/validate.sh`). Exit code 0 means validation passed; a non-zero exit code fails validation and its output is returned to you. The script must be the committed, executable version — editing it does not change the validation result.
 
 ## When no code change is needed
 Some issues ask a question, request an analysis, or are explicitly read-only. Do not invent a change just to satisfy the workflow.

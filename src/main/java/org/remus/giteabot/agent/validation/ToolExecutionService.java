@@ -119,17 +119,53 @@ public class ToolExecutionService {
                             + "the tool never falls back to a shell interpreter.");
         }
 
-        List<String> command = new ArrayList<>(arguments.size());
-        command.add(script.toAbsolutePath().toString());
-        for (int i = 1; i < arguments.size(); i++) {
-            String extraArgument = arguments.get(i);
-            if (extraArgument != null && !extraArgument.isBlank()) {
-                command.add(extraArgument);
-            }
+        String status = scriptStatus(workspaceDir, relativePath);
+        if (status == null) {
+            return new ToolResult(false, -1, "",
+                    "Validation script could not be verified against the repository: " + relativePath
+                            + " (git status failed — is the workspace a git checkout?)");
+        }
+        if (!status.isEmpty()) {
+            return new ToolResult(false, -1, "",
+                    "Validation script must be the committed version: " + relativePath
+                            + " differs from HEAD (" + status + "). Editing the script cannot"
+                            + " change the validation result.");
         }
 
+        List<String> command = new ArrayList<>(arguments.size());
+        command.add(script.toAbsolutePath().toString());
+        command.addAll(arguments.subList(1, arguments.size()));
+
         log.info("Executing repository validation script: {}", relativePath);
+        // Pre-flight checks and the launch are not atomic: the file could be swapped in
+        // between, but only by something already inside the workspace — accepted.
         return executeCommand(workspaceDir, command.toArray(String[]::new));
+    }
+
+    /**
+     * Porcelain status of the script: {@code ""} when it matches HEAD, non-empty when it is
+     * modified, staged, untracked, deleted or ignored, {@code null} when git could not be
+     * asked. {@code --ignored} matters because an ignored script never appears in a plain
+     * status, yet it is just as editable by the agent.
+     */
+    private String scriptStatus(Path workspaceDir, String relativePath) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "git", "status", "--porcelain", "--ignored", "--", relativePath);
+            pb.directory(workspaceDir.toFile());
+            pb.redirectErrorStream(true);
+            ProcessSupport.scrubEnvironment(pb);
+
+            ProcessSupport.CommandResult result = ProcessSupport.run(pb,
+                    agentConfig.getValidation().getToolTimeoutSeconds(), TimeUnit.SECONDS, 1_000);
+            return result.finished() && result.exitCode() == 0 ? result.output().strip() : null;
+        } catch (IOException e) {
+            log.warn("Could not read the git status of {}: {}", relativePath, e.getMessage());
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     /**

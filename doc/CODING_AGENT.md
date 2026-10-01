@@ -95,24 +95,35 @@ Contract:
 - The script must be committed inside the checked-out repository and must carry
   the **executable bit** (`git update-index --chmod=+x scripts/validate.sh`);
   there is no fallback to a shell interpreter.
+- It must also still match that committed version. `execute` refuses a script
+  the workspace has modified, staged, added or ignored: the agent has
+  `write-file` / `patch-file`, and could otherwise overwrite a failing validation
+  script with `exit 0`. Editing the script therefore cannot influence the result —
+  fix the code, not the checker.
 - Exit code `0` means validation passed. Any non-zero exit code fails the round
   and returns the captured stdout/stderr to the model, exactly like a failing
   `mvn test`; the output is also posted as an issue comment.
 - The path is resolved against the workspace with the same guard the file tools
   use: absolute paths, `..` traversal, `.git` internals and symlinked
   directories are rejected, so only a script inside the checkout can run.
-- Arguments after the path are forwarded verbatim to the script. The script is
-  executed directly — never through a shell — so no free-form shell text can be
-  configured.
+- Arguments after the path are forwarded verbatim to the script, blank ones
+  included. The script is executed directly — never through a shell — so no
+  free-form shell text can be configured.
 - The script runs with the workspace as its working directory, with the same
   scrubbed environment and process-group isolation as the other validation
   tools, and it is bounded by `agent.validation.tool-timeout-seconds`.
 
 `execute` is additive: it never replaces the built-in language tooling, and
-repositories with a conventional build command should keep using it. The guard
-constrains *which* script may run and what environment it inherits — it does not
-confine a script that itself reaches outside the checkout, in the same way the
-Maven plugins a normal `mvn test` runs are not confined.
+repositories with a conventional build command should keep using it.
+
+Sandbox limits, stated plainly. The guard decides *which* script may run, that it
+is the committed version, and what environment it inherits. It does not confine a
+script that itself reaches outside the checkout — the same is true of the Maven
+plugins a normal `mvn test` runs. The pre-flight checks (path, committed version,
+executable bit) are also not atomic with the launch: the file could be swapped in
+between, which is accepted here because only something already inside the
+workspace could do it. And the contract assumes a POSIX host — shebangs and an
+executable bit have no Windows equivalent.
 
 ## Branch naming
 
