@@ -58,7 +58,7 @@ The Usage page (`/usage`) audits all AI provider interactions. It contains two c
 
 ### AI usage
 
-A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
+A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Round**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. The **Round** column shows which round of the agent loop produced the interaction — useful to see how deep into a loop a run got — and is **—** for single-shot calls that are not part of an agent loop (a plain code review or a triage classification, for example). Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
 
 Click the **Raw** button in the **Details** column to open a modal showing the raw JSON request sent to the AI provider and the raw JSON response received back. This is useful for debugging provider-specific behavior, token accounting discrepancies, or unexpected completions.
 
