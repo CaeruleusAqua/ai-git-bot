@@ -268,7 +268,8 @@ public class ToolCatalog {
             Map.entry("go",      "Run the Go toolchain in the workspace root (e.g. build ./..., test ./...)."),
             Map.entry("python3", "Run python3 in the workspace root (e.g. -m py_compile some/file.py)."),
             Map.entry("make",    "Run GNU make in the workspace root."),
-            Map.entry("cmake",   "Run CMake in the workspace root (e.g. --build . --config Debug).")
+            Map.entry("cmake",   "Run CMake in the workspace root (e.g. --build . --config Debug)."),
+            Map.entry("execute", "Run a validation script committed inside the repository (e.g. scripts/validate.sh).")
     );
 
     private final AgentConfigProperties agentConfig;
