@@ -19,10 +19,14 @@ import org.remus.giteabot.notification.WorkflowRetryNotices;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -31,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -416,8 +421,56 @@ class PrWorkflowOrchestratorTest {
         second.start();
         first.join(5000);
         second.join(5000);
+        assertFalse(first.isAlive(), "the first run thread must have finished");
+        assertFalse(second.isAlive(), "the second run thread must have finished");
 
         assertEquals(1, maxConcurrent.get(), "jobs of a limited integration must run one at a time");
+    }
+
+    @Test
+    void aQueuedRunIsNotCreatedBeforeASlotIsFree() throws Exception {
+        when(runService.start(anyLong(), any(), any(), anyLong(), any()))
+                .thenReturn(runWithId(21L));
+        when(runService.complete(anyLong(), any(), any()))
+                .thenReturn(runWithIdAndStatus(21L, PrWorkflowRunStatus.SUCCESS));
+
+        CountDownLatch inside = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        PrWorkflow blocking = new PrWorkflow() {
+            @Override public String key() { return "test-wf"; }
+            @Override public String displayName() { return "Test"; }
+            @Override public PrWorkflowCategory category() { return PrWorkflowCategory.REVIEW; }
+            @Override public WorkflowResult run(PrWorkflowContext ctx) {
+                inside.countDown();
+                try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                return new WorkflowResult(WorkflowResultStatus.SUCCESS, "ok");
+            }
+        };
+        PrWorkflowOrchestrator orchestrator = newOrchestrator(blocking);
+        Bot bot = new Bot();
+        bot.setId(1L);
+        AiIntegration integration = new AiIntegration();
+        integration.setId(9L);
+        integration.setParallelWorkerLimit(1);
+        bot.setAiIntegration(integration);
+
+        Thread first = new Thread(() -> orchestrator.run(bot, payloadFor("o", "r", 1), "test-wf"));
+        first.start();
+        assertTrue(inside.await(5, TimeUnit.SECONDS), "the first run must reach the workflow");
+
+        Thread second = new Thread(() -> orchestrator.run(bot, payloadFor("o", "r", 2), "test-wf"));
+        second.start();
+        // While the second job waits for a slot there must be no run row (and with
+        // it no RUNNING status, STARTED audit event or started webhook).
+        Thread.sleep(200);
+        verify(runService, times(1)).start(anyLong(), any(), any(), anyLong(), any());
+
+        release.countDown();
+        first.join(5000);
+        second.join(5000);
+        assertFalse(first.isAlive(), "the first run thread must have finished");
+        assertFalse(second.isAlive(), "the second run thread must have finished");
+        verify(runService, times(2)).start(anyLong(), any(), any(), anyLong(), any());
     }
 
     private static PrWorkflowRun runWithId(long id) {

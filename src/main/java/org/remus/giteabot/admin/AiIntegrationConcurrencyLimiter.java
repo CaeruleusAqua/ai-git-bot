@@ -1,11 +1,13 @@
 package org.remus.giteabot.admin;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.prworkflow.WorkflowCancelledException;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 /**
@@ -27,10 +29,18 @@ import java.util.function.Supplier;
  *     <li><strong>Single-instance only.</strong> Like
  *     {@code PrWorkflowRunLockManager} the permits live in this JVM, so a
  *     multi-instance deployment applies the limit per instance.</li>
- *     <li>The permit pool is rebuilt when the configured limit changes, so a
- *     limit edited at runtime takes effect for jobs that start afterwards. A job
- *     already holding a permit keeps it on the previous pool and releases it
- *     there.</li>
+ *     <li><strong>The capacity is adjusted in place, never rebuilt.</strong> One
+ *     gate per integration lives for the life of the process, so the in-flight
+ *     count survives a limit change: lowering {@code 2 -> 1} while two jobs run
+ *     makes the next job wait until one of them finishes instead of starting a
+ *     third, and a running job is never displaced.</li>
+ *     <li>The limit is read from the {@link AiIntegration} instance the caller
+ *     passes in, which is the entity the job was dispatched with. Reading it
+ *     through the entity keeps the hot path free of a database round-trip; a
+ *     caller holding a stale copy therefore applies the value it knows for the
+ *     duration of that call.</li>
+ *     <li>Gate entries stay until {@link #forget(Long)} is called for a deleted
+ *     integration, so the map is bounded by the number of integrations.</li>
  * </ul>
  */
 @Slf4j
@@ -45,17 +55,21 @@ public class AiIntegrationConcurrencyLimiter {
      * available when the integration's limit is reached (queuing the job); runs
      * immediately when the limit is {@code 0} / negative or the integration is
      * unknown / unsaved.
+     *
+     * @throws WorkflowCancelledException when the wait is interrupted: a job
+     *         whose application is shutting down must neither run without a
+     *         permit nor be recorded as a failed run
      */
     public <T> T withPermit(AiIntegration integration, Supplier<T> action) {
         Gate gate = gateFor(integration);
         if (gate == null) {
             return action.get();
         }
-        acquire(gate.semaphore());
+        gate.acquire();
         try {
             return action.get();
         } finally {
-            gate.semaphore().release();
+            gate.release();
         }
     }
 
@@ -67,42 +81,79 @@ public class AiIntegrationConcurrencyLimiter {
         });
     }
 
+    /** Drops the permit pool of an integration that no longer exists. */
+    public void forget(Long integrationId) {
+        if (integrationId != null) {
+            gates.remove(integrationId);
+        }
+    }
+
     /**
-     * The permit pool for {@code integration}, or {@code null} when no cap should
-     * apply (unlimited / unknown integration). The pool is replaced when the
-     * configured limit changes.
+     * The permit pool for {@code integration}, or {@code null} when the caller
+     * has no persisted integration to key it by. The pool outlives limit
+     * changes — only its capacity is updated.
      */
     private Gate gateFor(AiIntegration integration) {
         if (integration == null || integration.getId() == null) {
             return null;
         }
-        int limit = integration.getParallelWorkerLimit();
-        if (limit <= 0) {
-            return null;
-        }
-        return gates.compute(integration.getId(),
-                (id, existing) -> existing != null && existing.limit() == limit
-                        ? existing
-                        : new Gate(limit, new Semaphore(limit, true)));
+        Gate gate = gates.computeIfAbsent(integration.getId(), id -> new Gate());
+        gate.applyLimit(integration.getParallelWorkerLimit());
+        return gate;
     }
 
     /**
-     * Acquires a slot, waiting until one is free. An interrupt aborts the wait
-     * (restoring the interrupt flag) rather than silently running without a
-     * permit — a workflow run that is being shut down must not pile onto the
-     * provider.
+     * One integration's permit pool. A lock/condition pair rather than a
+     * {@link java.util.concurrent.Semaphore}, because the capacity has to be
+     * adjustable without handing out a fresh, fully permitted pool while older
+     * jobs are still holding theirs.
      */
-    private void acquire(Semaphore semaphore) {
-        try {
-            semaphore.acquire();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException(
-                    "Interrupted while waiting for a free AI integration concurrency slot", e);
-        }
-    }
+    private static final class Gate {
 
-    /** The permit pool of one integration; rebuilt when {@code limit} changes. */
-    private record Gate(int limit, Semaphore semaphore) {
+        private final ReentrantLock lock = new ReentrantLock(true);
+        private final Condition slotReleased = lock.newCondition();
+        /** Guarded by {@link #lock}; {@code <= 0} means unlimited. */
+        private int limit;
+        /** Guarded by {@link #lock}; jobs currently holding a slot. */
+        private int inFlight;
+
+        void applyLimit(int newLimit) {
+            lock.lock();
+            try {
+                if (limit != newLimit) {
+                    limit = newLimit;
+                    // A raised (or lifted) cap may admit waiters right away.
+                    slotReleased.signalAll();
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        void acquire() {
+            lock.lock();
+            try {
+                while (limit > 0 && inFlight >= limit) {
+                    slotReleased.await();
+                }
+                inFlight++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new WorkflowCancelledException(
+                        "Interrupted while waiting for a free AI integration concurrency slot");
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        void release() {
+            lock.lock();
+            try {
+                inFlight--;
+                slotReleased.signal();
+            } finally {
+                lock.unlock();
+            }
+        }
     }
 }

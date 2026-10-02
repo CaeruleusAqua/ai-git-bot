@@ -92,6 +92,18 @@ public class PrWorkflowOrchestrator {
                     + "owner=" + owner + ", repo=" + repoName + ", pr=" + prNumber + ")");
         }
 
+        // The integration's slot is taken *before* the run row exists: a job queued
+        // behind the limit must not be reported as RUNNING (UI, audit log, outgoing
+        // webhooks), must not have the waiting time counted into its duration, and —
+        // having no run row yet — cannot be started after the operator cancelled it.
+        return concurrencyLimiter.withPermit(bot.getAiIntegration(),
+                () -> runWithPermit(bot, payload, workflow, hints, owner, repoName, prNumber));
+    }
+
+    /** The run itself, executed while holding the AI integration's slot. */
+    private PrWorkflowRun runWithPermit(Bot bot, WebhookPayload payload, PrWorkflow workflow,
+                                        Map<String, String> hints, String owner, String repoName,
+                                        Long prNumber) {
         PrWorkflowRun run = lockManager.withLock(bot.getId(), owner, repoName, prNumber, workflow.key(),
                 () -> runService.start(bot.getId(), owner, repoName, prNumber, workflow.key()));
         log.debug("[Workflow '{}'] Started run id={}", workflow.key(), run.getId());
@@ -142,8 +154,7 @@ public class PrWorkflowOrchestrator {
 
         try {
             retryNotices.installForPullRequest(bot, workflow.key(), owner, repoName, prNumber);
-            WorkflowResult result = concurrencyLimiter.withPermit(bot.getAiIntegration(),
-                    () -> workflow.run(context));
+            WorkflowResult result = workflow.run(context);
             if (result == null) {
                 throw new IllegalStateException("PrWorkflow '" + workflow.key() + "' returned null");
             }

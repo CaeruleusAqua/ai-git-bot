@@ -11,6 +11,7 @@ import org.remus.giteabot.eventhook.EventHookPublisher;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.notification.IssueCommentAcknowledgement;
 import org.remus.giteabot.notification.WorkflowRetryNotices;
+import org.remus.giteabot.prworkflow.WorkflowCancelledException;
 import org.remus.giteabot.prworkflow.config.WorkflowConfiguration;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 import org.springframework.stereotype.Service;
@@ -55,7 +56,6 @@ public class IssueWorkflowOrchestrator {
     private final EventHookPublisher eventHookPublisher;
     private final WorkflowRetryNotices retryNotices;
     private final IssueCommentAcknowledgement commentAcknowledgement;
-
     private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     /**
@@ -69,10 +69,16 @@ public class IssueWorkflowOrchestrator {
         for (IssueWorkflow workflow : resolveWorkflows(bot)) {
             try {
                 retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
-                publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
-                concurrencyLimiter.runWithPermit(bot.getAiIntegration(),
-                        () -> workflow.onIssueAssigned(context(bot, payload, workflow.key())));
+                // The slot is taken before the STARTED event goes out, so a job that has
+                // to wait behind the limit is not reported as started.
+                concurrencyLimiter.runWithPermit(bot.getAiIntegration(), () -> {
+                    publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
+                    workflow.onIssueAssigned(context(bot, payload, workflow.key()));
+                });
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_COMPLETED, bot, payload, null, false);
+            } catch (WorkflowCancelledException cancelled) {
+                log.info("[Bot '{}'] Issue workflow '{}' cancelled: {}",
+                        bot.getName(), workflow.key(), cancelled.getMessage());
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue assignment: {}",
                         bot.getName(), workflow.key(), e.getMessage(), e);
@@ -121,6 +127,9 @@ public class IssueWorkflowOrchestrator {
                 retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
                 concurrencyLimiter.runWithPermit(bot.getAiIntegration(),
                         () -> workflow.onIssueComment(context(bot, payload, workflow.key())));
+            } catch (WorkflowCancelledException cancelled) {
+                log.info("[Bot '{}'] Issue workflow '{}' cancelled: {}",
+                        bot.getName(), workflow.key(), cancelled.getMessage());
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue comment: {}",
                         bot.getName(), workflow.key(), e.getMessage(), e);

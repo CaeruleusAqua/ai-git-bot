@@ -1,6 +1,8 @@
 package org.remus.giteabot.admin;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -76,8 +78,9 @@ public class AiIntegration {
      * (the historical behaviour); a value from {@code 1} to {@code 20} caps
      * the jobs running at the same time and makes further jobs wait for a free
      * slot instead of failing. Enforced by
-     * {@link AiIntegrationConcurrencyLimiter} around each workflow run.
      */
+    @Min(0)
+    @Max(20)
     @Column(name = "parallel_worker_limit", nullable = false)
     private int parallelWorkerLimit = 0;
 

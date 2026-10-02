@@ -1,6 +1,7 @@
 package org.remus.giteabot.admin;
 
 import org.junit.jupiter.api.Test;
+import org.remus.giteabot.prworkflow.WorkflowCancelledException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,6 +11,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -67,6 +69,8 @@ class AiIntegrationConcurrencyLimiterTest {
         release.countDown();
         first.join(5000);
         second.join(5000);
+        assertFalse(first.isAlive(), "the first job thread must have finished");
+        assertFalse(second.isAlive(), "the second job thread must have finished");
     }
 
     @Test
@@ -92,6 +96,8 @@ class AiIntegrationConcurrencyLimiterTest {
                 "the queued job must start once the running one releases its slot");
         first.join(5000);
         second.join(5000);
+        assertFalse(first.isAlive(), "the first job thread must have finished");
+        assertFalse(second.isAlive(), "the second job thread must have finished");
     }
 
     @Test
@@ -115,6 +121,8 @@ class AiIntegrationConcurrencyLimiterTest {
         releaseFirst.countDown();
         first.join(5000);
         second.join(5000);
+        assertFalse(first.isAlive(), "the first job thread must have finished");
+        assertFalse(second.isAlive(), "the second job thread must have finished");
     }
 
     @Test
@@ -152,6 +160,78 @@ class AiIntegrationConcurrencyLimiterTest {
         releaseFirst.countDown();
         first.join(5000);
         second.join(5000);
+        assertFalse(first.isAlive(), "the first job thread must have finished");
+        assertFalse(second.isAlive(), "the second job thread must have finished");
+    }
+
+    @Test
+    void loweringTheLimitDoesNotAdmitExtraJobs() throws Exception {
+        CountDownLatch bothInside = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+        AiIntegration integration = integration(1L, 2);
+        Runnable job = () -> limiter.runWithPermit(integration, () -> {
+            bothInside.countDown();
+            await(release);
+        });
+        Thread first = new Thread(job);
+        Thread second = new Thread(job);
+        first.start();
+        second.start();
+        assertTrue(bothInside.await(5, TimeUnit.SECONDS), "both jobs must run under a limit of 2");
+
+        // Lower the cap while both jobs hold their slot: neither is displaced, and
+        // no third job may slip in on a freshly permitted pool.
+        integration.setParallelWorkerLimit(1);
+        CountDownLatch thirdInside = new CountDownLatch(1);
+        Thread third = new Thread(() -> limiter.runWithPermit(integration, thirdInside::countDown));
+        third.start();
+        assertFalse(thirdInside.await(200, TimeUnit.MILLISECONDS),
+                "lowering the limit to 1 must not let a third job start while two are running");
+
+        release.countDown();
+        assertTrue(thirdInside.await(5, TimeUnit.SECONDS),
+                "the third job must start once a slot frees up");
+        first.join(5000);
+        second.join(5000);
+        third.join(5000);
+        assertFalse(first.isAlive());
+        assertFalse(second.isAlive());
+        assertFalse(third.isAlive());
+    }
+
+    @Test
+    void anInterruptedWaitIsCancelledInsteadOfRunning() throws Exception {
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AiIntegration integration = integration(1L, 1);
+        Thread holder = new Thread(() -> limiter.runWithPermit(integration, () -> {
+            holding.countDown();
+            await(release);
+        }));
+        holder.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS), "the first job must hold the only slot");
+
+        AtomicReference<Throwable> thrown = new AtomicReference<>();
+        AtomicInteger ran = new AtomicInteger();
+        Thread waiting = new Thread(() -> {
+            try {
+                limiter.runWithPermit(integration, ran::incrementAndGet);
+            } catch (Throwable t) {
+                thrown.set(t);
+            }
+        });
+        waiting.start();
+        waiting.interrupt();
+        waiting.join(5000);
+        assertFalse(waiting.isAlive());
+        assertTrue(thrown.get() instanceof WorkflowCancelledException,
+                "an interrupted wait must surface as a cancellation, was: " + thrown.get());
+        assertTrue(waiting.isInterrupted(), "the interrupt flag must be restored");
+        assertEquals(0, ran.get(), "the action must not run without a permit");
+
+        release.countDown();
+        holder.join(5000);
+        assertFalse(holder.isAlive());
     }
 
     /** Runs {@code tasks} jobs of one integration concurrently and returns the peak concurrency. */

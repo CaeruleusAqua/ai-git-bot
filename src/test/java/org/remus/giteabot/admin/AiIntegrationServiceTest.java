@@ -20,6 +20,9 @@ class AiIntegrationServiceTest {
     @Mock
     private EncryptionService encryptionService;
 
+    @Mock
+    private AiIntegrationConcurrencyLimiter concurrencyLimiter;
+
     @InjectMocks
     private AiIntegrationService aiIntegrationService;
 
@@ -117,6 +120,8 @@ class AiIntegrationServiceTest {
     @Test
     void deleteById_delegatesToRepository() {
         aiIntegrationService.deleteById(1L);
+
+        verify(concurrencyLimiter).forget(1L);
 
         verify(aiIntegrationRepository).deleteById(1L);
     }
