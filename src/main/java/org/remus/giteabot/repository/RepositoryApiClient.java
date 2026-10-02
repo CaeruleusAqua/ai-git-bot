@@ -181,6 +181,14 @@ public interface RepositoryApiClient {
         // no-op by default; override where the provider supports it
     }
 
+    /**
+     * Adds a reaction to an issue itself.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
     void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                  String filePath, int line, String body);
 

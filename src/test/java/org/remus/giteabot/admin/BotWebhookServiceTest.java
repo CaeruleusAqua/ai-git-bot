@@ -22,7 +22,7 @@ import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
-import org.remus.giteabot.repository.PullRequestReactions;
+import org.remus.giteabot.repository.Reactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.session.SessionService;
 import org.remus.giteabot.systemsettings.McpConfiguration;
@@ -323,7 +323,7 @@ class BotWebhookServiceTest {
         botWebhookService.reviewPullRequest(bot, payload);
 
         verify(repositoryApiClient).addPullRequestReaction(
-                "Test", "my-repo", 42L, PullRequestReactions.EYES);
+                "Test", "my-repo", 42L, Reactions.EYES);
         verify(prWorkflowOrchestrator).runAll(bot, payload);
     }
 
@@ -349,7 +349,7 @@ class BotWebhookServiceTest {
         botWebhookService.reviewPullRequest(bot, payload);
 
         verify(repositoryApiClient).addPullRequestReaction(
-                "Test", "my-repo", 42L, PullRequestReactions.EYES);
+                "Test", "my-repo", 42L, Reactions.EYES);
         verify(prWorkflowOrchestrator).runAll(bot, payload);
     }
 
@@ -534,9 +534,36 @@ class BotWebhookServiceTest {
 
         botWebhookService.handleIssueAssigned(bot, payload);
 
+        verify(repositoryApiClient).addIssueReaction("Test", "my-repo", 12L, Reactions.EYES);
         verify(repositoryApiClient).createIssue(eq("Test"), eq("my-repo"),
                 eq("AI Created Issue: Vague issue"), org.mockito.ArgumentMatchers.contains("Originates from #12"));
         verify(agentSessionService).setGeneratedIssueNumber(session, 99L);
+    }
+
+    @Test
+    void writerBot_issueAssignmentReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("writer", "writer_bot");
+        makeWriterBot(bot);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addIssueReaction(any(), any(), any(), any());
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient).addIssueReaction(
+                "Test", "my-repo", 12L, Reactions.EYES);
+        verify(repositoryApiClient).getIssueDetails("Test", "my-repo", 12L);
+    }
+
+    @Test
+    void issueAssignmentWithNoConfiguredWorkflowDoesNotReact() {
+        Bot bot = createBot("writer", "writer_bot");
+        bot.setIssueWorkflowConfiguration(null);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient, never()).addIssueReaction(any(), any(), any(), any());
     }
 
     @Test

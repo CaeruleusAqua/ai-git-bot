@@ -82,6 +82,18 @@ public class IssueWorkflowOrchestrator {
     }
 
     /**
+     * Returns the issue workflow keys enabled for {@code bot}, or an empty
+     * list when the bot has no issue-assigned workflow configuration.
+     */
+    public static List<String> enabledWorkflowKeys(Bot bot,
+                                                    WorkflowSelectionService workflowSelectionService) {
+        WorkflowConfiguration configuration = bot.getIssueWorkflowConfiguration();
+        return configuration == null
+                ? List.of()
+                : workflowSelectionService.enabledWorkflowKeys(configuration.getId());
+    }
+
+    /**
      * Routes a follow-up issue comment through every issue workflow enabled
      * on the bot's issue-assigned configuration. The comment is acknowledged
      * with a best-effort 👀 reaction (uniform for all issue workflows, the
@@ -140,7 +152,7 @@ public class IssueWorkflowOrchestrator {
                     bot.getName());
             return List.of();
         }
-        List<String> keys = workflowSelectionService.enabledWorkflowKeys(configuration.getId());
+        List<String> keys = enabledWorkflowKeys(bot, workflowSelectionService);
         if (keys.isEmpty()) {
             log.debug("[Bot '{}'] Issue-assigned configuration '{}' enables no workflows",
                     bot.getName(), configuration.getName());
