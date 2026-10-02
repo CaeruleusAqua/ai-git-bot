@@ -246,6 +246,17 @@ public interface RepositoryApiClient {
     }
 
     /**
+     * Re-fetches whether a PR is open for workflow writes. The default understands
+     * GitHub/Gitea details; other providers override it. Missing state denies
+     * writes, and API failures propagate to the workflow.
+     */
+    default boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
+        Map<String, Object> details = getPullRequestDetails(owner, repo, pullNumber);
+        return details != null && "open".equals(details.get("state"))
+                && Boolean.FALSE.equals(details.get("merged"));
+    }
+
+    /**
      * Returns whether writable PR workspaces must resolve the provider's
      * authoritative head repository before cloning. Providers returning
      * {@code true} must implement {@link #getPullRequestHead} and fail closed
