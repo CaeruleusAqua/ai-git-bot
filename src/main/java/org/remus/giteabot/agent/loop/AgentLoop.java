@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.session.PendingMessage;
 import org.remus.giteabot.agent.shared.AgentMetricsHolder;
+import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
@@ -95,7 +96,7 @@ public final class AgentLoop {
             long started = System.nanoTime();
             ChatTurn turn;
             try {
-                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt);
+                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round);
             } finally {
                 AgentMetricsHolder.recordLatency(modeTag(resolvedMode), providerTag,
                         Duration.ofNanos(System.nanoTime() - started));
@@ -358,10 +359,11 @@ public final class AgentLoop {
      * @throws RuntimeException if the failure is not retryable or the retry fails
      */
     private ChatTurn callAiWithRetry(List<AiMessage> history, String currentMessage,
-                                     List<ToolDescriptor> tools, String systemPrompt) {
+                                     List<ToolDescriptor> tools, String systemPrompt, int round) {
         int maxAttempts = 2;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
+                AiAuditContext.setRound(round);
                 return aiClient.chatWithTools(history, currentMessage, tools, systemPrompt,
                         null, budget.maxTokensPerCall());
             } catch (RuntimeException e) {
@@ -384,6 +386,8 @@ public final class AgentLoop {
                             + "Retrying without changing history. Error: {}",
                             attempt, maxAttempts, e.getMessage());
                 }
+            } finally {
+                AiAuditContext.clearRound();
             }
         }
         // Unreachable, but keeps the compiler happy
