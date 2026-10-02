@@ -19,7 +19,7 @@ services:
 
   ollama-pull:
     image: ollama/ollama:latest
-    entrypoint: ["sh", "-c", "sleep 5 && ollama pull ${AI_MODEL:-qwen2.5:14b}"]
+    entrypoint: ["sh", "-c", "sleep 5 && ollama pull ${AI_MODEL:-qwen2.5-coder:7b}"]
     environment:
       OLLAMA_HOST: http://ollama:11434
     depends_on:
