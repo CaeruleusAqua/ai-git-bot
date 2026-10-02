@@ -354,6 +354,20 @@ class BotWebhookServiceTest {
     }
 
     @Test
+    void reviewPullRequest_reviewRequested_addsEyesReactionToPullRequest() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("review_requested");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
     void reviewPullRequest_openedWithoutRepositoryOwnerDoesNotReact() {
         Bot bot = createBot("review", "review_bot");
         WebhookPayload payload = openedPrPayload();

@@ -101,7 +101,7 @@ public class BotWebhookService {
             if (!isCallerAllowed(bot, payload)) {
                 return;
             }
-            acknowledgeOpenedPullRequest(bot, payload);
+            acknowledgePullRequest(bot, payload);
             try {
                 prWorkflowOrchestrator.runAll(bot, payload);
             } catch (Exception e) {
@@ -139,9 +139,12 @@ public class BotWebhookService {
         }
     }
 
-    private void acknowledgeOpenedPullRequest(Bot bot, WebhookPayload payload) {
+    private void acknowledgePullRequest(Bot bot, WebhookPayload payload) {
         if (!"opened".equals(payload.getAction())
-                || payload.getRepository() == null
+                && !"review_requested".equals(payload.getAction())) {
+            return;
+        }
+        if (payload.getRepository() == null
                 || payload.getPullRequest() == null
                 || payload.getPullRequest().getNumber() == null) {
             return;
