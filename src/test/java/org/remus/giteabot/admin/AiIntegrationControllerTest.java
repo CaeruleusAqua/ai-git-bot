@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.verify;
@@ -143,5 +144,26 @@ class AiIntegrationControllerTest {
                 .andExpect(view().name("ai-integrations/form"))
                 .andExpect(content().string(containsString("id=\"clearApiKeyBtn\"")))
                 .andExpect(content().string(containsString("id=\"apiKeyClearPendingHint\"")));
+    }
+
+    @Test
+    void newForm_showsParallelWorkerLimitSelectAndHelp() throws Exception {
+        when(providerRegistry.getProviderTypes()).thenReturn(List.of("anthropic"));
+        when(providerRegistry.getDisplayNames()).thenReturn(Map.of("anthropic", "Anthropic"));
+        when(providerRegistry.getDefaultApiUrls()).thenReturn(Map.of("anthropic", "https://api.anthropic.com"));
+        when(providerRegistry.getSuggestedModels()).thenReturn(Map.of("anthropic", List.of("claude-sonnet-4")));
+        when(providerRegistry.getApiKeyRequirements()).thenReturn(Map.of("anthropic", true));
+        when(providerRegistry.getFlavors()).thenReturn(Map.of("anthropic", List.of()));
+
+        mockMvc.perform(get("/ai-integrations/new").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("id=\"parallelWorkerLimit\"")))
+                .andExpect(content().string(containsString("name=\"parallelWorkerLimit\"")))
+                .andExpect(content().string(containsString(">0</option>")))
+                .andExpect(content().string(containsString(">20</option>")))
+                .andExpect(content().string(not(containsString(">21</option>"))))
+                .andExpect(content().string(containsString("Parallel worker limit")))
+                .andExpect(content().string(containsString(
+                        "Maximum number of jobs that may run at the same time for this AI integration")));
     }
 }

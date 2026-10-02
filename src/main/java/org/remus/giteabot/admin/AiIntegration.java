@@ -71,6 +71,17 @@ public class AiIntegration {
     private int contextWindowTokens = 200_000;
 
     /**
+     * Maximum number of jobs that may run concurrently for this AI
+     * integration. {@code 0} (the default) means unlimited parallel execution
+     * (the historical behaviour); a value from {@code 1} to {@code 20} caps
+     * the jobs running at the same time and makes further jobs wait for a free
+     * slot instead of failing. Enforced by
+     * {@link AiIntegrationConcurrencyLimiter} around each workflow run.
+     */
+    @Column(name = "parallel_worker_limit", nullable = false)
+    private int parallelWorkerLimit = 0;
+
+    /**
      * Provider-specific per-model request preset ("flavor"), e.g.
      * {@code "no_reasoning"} for an OpenAI reasoning model whose gateway
      * defaults {@code reasoning_effort} on. Values are provider-defined (see

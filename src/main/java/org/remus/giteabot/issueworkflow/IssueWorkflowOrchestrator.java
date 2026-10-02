@@ -2,6 +2,7 @@ package org.remus.giteabot.issueworkflow;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotService;
 import org.remus.giteabot.ai.AiRetryContext;
@@ -55,6 +56,8 @@ public class IssueWorkflowOrchestrator {
     private final WorkflowRetryNotices retryNotices;
     private final IssueCommentAcknowledgement commentAcknowledgement;
 
+    private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
+
     /**
      * Runs every issue workflow enabled on the bot's issue-assigned
      * configuration for an issue-assigned event. Each workflow gets its own
@@ -67,7 +70,8 @@ public class IssueWorkflowOrchestrator {
             try {
                 retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
-                workflow.onIssueAssigned(context(bot, payload, workflow.key()));
+                concurrencyLimiter.runWithPermit(bot.getAiIntegration(),
+                        () -> workflow.onIssueAssigned(context(bot, payload, workflow.key())));
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_COMPLETED, bot, payload, null, false);
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue assignment: {}",
@@ -115,7 +119,8 @@ public class IssueWorkflowOrchestrator {
                 // Installed inside the guarded region (see runAssigned): clearing it in the
                 // finally below is what keeps the notice off the next task on this thread.
                 retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
-                workflow.onIssueComment(context(bot, payload, workflow.key()));
+                concurrencyLimiter.runWithPermit(bot.getAiIntegration(),
+                        () -> workflow.onIssueComment(context(bot, payload, workflow.key())));
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue comment: {}",
                         bot.getName(), workflow.key(), e.getMessage(), e);

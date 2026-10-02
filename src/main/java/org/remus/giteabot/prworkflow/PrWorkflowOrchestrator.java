@@ -2,6 +2,7 @@ package org.remus.giteabot.prworkflow;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.agent.loop.AgentRunContext;
 import org.remus.giteabot.ai.AiRetryContext;
@@ -38,6 +39,7 @@ public class PrWorkflowOrchestrator {
     private final PrAuditEventService auditService;
     private final EventHookPublisher eventHookPublisher;
     private final WorkflowRetryNotices retryNotices;
+    private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     public List<PrWorkflowRun> runAll(Bot bot, WebhookPayload payload) {
         if (bot == null) throw new IllegalArgumentException("bot must not be null");
@@ -140,7 +142,8 @@ public class PrWorkflowOrchestrator {
 
         try {
             retryNotices.installForPullRequest(bot, workflow.key(), owner, repoName, prNumber);
-            WorkflowResult result = workflow.run(context);
+            WorkflowResult result = concurrencyLimiter.withPermit(bot.getAiIntegration(),
+                    () -> workflow.run(context));
             if (result == null) {
                 throw new IllegalStateException("PrWorkflow '" + workflow.key() + "' returned null");
             }

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotService;
 import org.remus.giteabot.ai.AiRetryContext;
@@ -78,7 +79,7 @@ class IssueWorkflowOrchestratorTest {
         orchestrator = new IssueWorkflowOrchestrator(
                 new IssueWorkflowRegistry(List.of(recording)),
                 workflowSelectionService, botService, eventHookPublisher,
-                retryNotices, commentAcknowledgement);
+                retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
         bot = new Bot();
         bot.setName("test-bot");
         WorkflowConfiguration configuration = new WorkflowConfiguration();
@@ -223,7 +224,7 @@ class IssueWorkflowOrchestratorTest {
         orchestrator = new IssueWorkflowOrchestrator(
                 new IssueWorkflowRegistry(List.of(failing)),
                 workflowSelectionService, botService, eventHookPublisher,
-                retryNotices, commentAcknowledgement);
+                retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
 
         orchestrator.runComment(bot, issuePayload());
 

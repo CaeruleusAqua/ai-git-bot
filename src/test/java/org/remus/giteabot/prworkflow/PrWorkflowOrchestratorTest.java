@@ -7,6 +7,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.ArgumentCaptor;
+import org.remus.giteabot.admin.AiIntegration;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.ai.AiRetryContext;
 import org.remus.giteabot.audit.PrAuditEventService;
@@ -17,6 +19,7 @@ import org.remus.giteabot.notification.WorkflowRetryNotices;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -56,7 +59,7 @@ class PrWorkflowOrchestratorTest {
         PrWorkflowRegistry registry = new PrWorkflowRegistry(List.of(workflows));
         return new PrWorkflowOrchestrator(registry, runService, metrics, lockManager,
                 org.mockito.Mockito.mock(WorkflowSelectionService.class), auditService,
-                eventHookPublisher, retryNotices);
+                eventHookPublisher, retryNotices, new AiIntegrationConcurrencyLimiter());
     }
 
     /** Makes the mocked notice component install a real notice, as production does. */
@@ -376,6 +379,45 @@ class PrWorkflowOrchestratorTest {
                         "test-wf".equals(data.get("workflowKey"))
                                 && Long.valueOf(10L).equals(data.get("runId"))
                                 && String.valueOf(data.get("error")).contains("boom")));
+    }
+
+    @Test
+    void runSerialisesConcurrentJobsOfALimitedIntegration() throws Exception {
+        when(runService.start(anyLong(), any(), any(), anyLong(), any()))
+                .thenReturn(runWithId(20L));
+        when(runService.complete(anyLong(), any(), any()))
+                .thenReturn(runWithIdAndStatus(20L, PrWorkflowRunStatus.SUCCESS));
+
+        AtomicInteger concurrent = new AtomicInteger();
+        AtomicInteger maxConcurrent = new AtomicInteger();
+        PrWorkflow tracked = new PrWorkflow() {
+            @Override public String key() { return "test-wf"; }
+            @Override public String displayName() { return "Test"; }
+            @Override public PrWorkflowCategory category() { return PrWorkflowCategory.REVIEW; }
+            @Override public WorkflowResult run(PrWorkflowContext ctx) {
+                int now = concurrent.incrementAndGet();
+                maxConcurrent.accumulateAndGet(now, Math::max);
+                try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                concurrent.decrementAndGet();
+                return new WorkflowResult(WorkflowResultStatus.SUCCESS, "ok");
+            }
+        };
+        PrWorkflowOrchestrator orchestrator = newOrchestrator(tracked);
+        Bot bot = new Bot();
+        bot.setId(1L);
+        AiIntegration integration = new AiIntegration();
+        integration.setId(9L);
+        integration.setParallelWorkerLimit(1);
+        bot.setAiIntegration(integration);
+
+        Thread first = new Thread(() -> orchestrator.run(bot, payloadFor("o", "r", 1), "test-wf"));
+        Thread second = new Thread(() -> orchestrator.run(bot, payloadFor("o", "r", 2), "test-wf"));
+        first.start();
+        second.start();
+        first.join(5000);
+        second.join(5000);
+
+        assertEquals(1, maxConcurrent.get(), "jobs of a limited integration must run one at a time");
     }
 
     private static PrWorkflowRun runWithId(long id) {
