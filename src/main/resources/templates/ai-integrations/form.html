@@ -95,6 +95,14 @@
                                 Model's total context window size. Used for proactive history compaction.
                             </div>
                         </div>
+                        <div class="col-md-3">
+                            <label for="parallelWorkerLimit" class="form-label" th:text="#{label.parallelWorkerLimit}">Parallel worker limit</label>
+                            <input type="number" class="form-control" id="parallelWorkerLimit"
+                                   th:field="*{parallelWorkerLimit}" min="0" max="20" required/>
+                            <div class="form-text" th:text="#{help.ai.parallelWorkerLimit}">
+                                Maximum number of jobs that may run at once for this AI integration.
+                            </div>
+                        </div>
                         <div class="col-md-6" id="modelFlavorField">
                             <label for="modelFlavor" class="form-label" th:text="#{label.modelFlavor}">Model flavor</label>
                             <div class="input-group">
@@ -108,28 +116,6 @@
                                 </ul>
                             </div>
                             <div class="form-text" id="modelFlavorHint"></div>
-                        </div>
-                        <div class="col-md-6">
-                            <label for="parallelWorkerLimit" class="form-label">
-                                <span th:text="#{label.parallelWorkerLimit}">Parallel worker limit</span>
-                                <button type="button" class="btn btn-link btn-sm p-0 align-baseline ms-1"
-                                        tabindex="0"
-                                        data-bs-toggle="popover"
-                                        data-bs-trigger="focus"
-                                        data-bs-placement="right"
-                                        data-bs-html="true"
-                                        th:attr="data-bs-title=#{popover.parallelWorkerLimit.title},data-bs-content=#{popover.parallelWorkerLimit.content}">
-                                    <i class="bi bi-question-circle"></i>
-                                </button>
-                            </label>
-                            <select class="form-select" id="parallelWorkerLimit"
-                                    th:field="*{parallelWorkerLimit}" required>
-                                <option th:each="n : ${#numbers.sequence(0, 20)}"
-                                        th:value="${n}" th:text="${n}"></option>
-                            </select>
-                            <div class="form-text" th:utext="#{help.ai.parallelWorkerLimit}">
-                                Maximum number of jobs that may run at the same time for this AI integration.
-                            </div>
                         </div>
                         <div class="col-12">
                             <hr/>

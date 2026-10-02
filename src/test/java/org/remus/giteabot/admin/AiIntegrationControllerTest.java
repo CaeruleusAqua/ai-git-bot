@@ -147,7 +147,7 @@ class AiIntegrationControllerTest {
     }
 
     @Test
-    void newForm_showsParallelWorkerLimitSelectAndHelp() throws Exception {
+    void newForm_showsParallelWorkerLimitInputAndHelp() throws Exception {
         when(providerRegistry.getProviderTypes()).thenReturn(List.of("anthropic"));
         when(providerRegistry.getDisplayNames()).thenReturn(Map.of("anthropic", "Anthropic"));
         when(providerRegistry.getDefaultApiUrls()).thenReturn(Map.of("anthropic", "https://api.anthropic.com"));
@@ -159,11 +159,11 @@ class AiIntegrationControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("id=\"parallelWorkerLimit\"")))
                 .andExpect(content().string(containsString("name=\"parallelWorkerLimit\"")))
-                .andExpect(content().string(containsString(">0</option>")))
-                .andExpect(content().string(containsString(">20</option>")))
-                .andExpect(content().string(not(containsString(">21</option>"))))
+                .andExpect(content().string(not(containsString(">20</option>"))))
+                .andExpect(content().string(containsString("min=\"0\"")))
+                .andExpect(content().string(containsString("max=\"20\"")))
                 .andExpect(content().string(containsString("Parallel worker limit")))
                 .andExpect(content().string(containsString(
-                        "Maximum number of jobs that may run at the same time for this AI integration")));
+                        "Maximum number of jobs that may run at once for this AI integration")));
     }
 }
