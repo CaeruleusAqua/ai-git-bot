@@ -97,6 +97,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
    - **Model**: Select from the dropdown for suggested models, or type a custom model name
    - **Model Flavor**: OpenAI integrations only. Provider default behavior for the model; the available flavors are listed under the field (see the OpenAI-compatible section below)
    - **Max Tokens**: Maximum tokens per AI response (default: 4096)
+   - **Parallel Worker Limit**: Maximum number of jobs that may run at the same time for this integration (`0` = unlimited, `1`–`20` = cap). See [Parallel worker limit](#parallel-worker-limit)
    - **Max Diff Chars Per Chunk**: Maximum characters per diff chunk (default: 120000)
    - **Max Diff Chunks**: Maximum number of diff chunks to process (default: 8)
    - **Retry Truncated Chunk Chars**: Truncated chunk size for retries (default: 60000)
@@ -188,6 +189,17 @@ Troubleshooting:
 - In router mode (no `--model`), the Model field must contain the exact model ID returned by `GET /v1/models`; llama.cpp uses it to route each request
 - Uses llama.cpp's OpenAI-compatible `/v1/completions` endpoint
 - Supports GBNF grammar constraints for reliable JSON output (agent feature)
+
+### Parallel worker limit
+
+Every AI integration has a **Parallel worker limit** that controls how many of its jobs may run at the same time:
+
+- **0** (default) — unlimited parallel execution. Jobs start immediately, exactly as before.
+- **1–20** — at most that many jobs run concurrently for the integration. Once the limit is reached, further jobs are **not dropped**: they stay queued and start as soon as a running job finishes.
+
+The value is validated when the integration is saved — the form and the server both accept only `0`–20. A job that is waiting for a free slot is not reported as running: its run row is created once the slot becomes available.
+
+The limit is applied per AI integration, so a busy integration never holds back jobs that use a different one, and every bot's jobs are bounded by the limit of the AI integration it is configured with. It is intended for self-hosted or resource-constrained providers (for example a local vLLM or llama.cpp backend) that become unstable or slow when several reviews run against them at once. The counter lives in the running application, so in a multi-instance deployment the limit applies per instance rather than globally.
 
 ### Editing an AI Integration
 

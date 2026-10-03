@@ -95,7 +95,16 @@
                                 Model's total context window size. Used for proactive history compaction.
                             </div>
                         </div>
-                        <div class="col-md-6" id="modelFlavorField">
+                        <div class="w-100"></div>
+                        <div class="col-md-3">
+                            <label for="parallelWorkerLimit" class="form-label" th:text="#{label.parallelWorkerLimit}">Parallel worker limit</label>
+                            <input type="number" class="form-control" id="parallelWorkerLimit"
+                                   th:field="*{parallelWorkerLimit}" min="0" max="20" required/>
+                            <div class="form-text" th:text="#{help.ai.parallelWorkerLimit}">
+                                Maximum number of jobs that may run at once for this AI integration.
+                            </div>
+                        </div>
+                        <div class="col-md-3" id="modelFlavorField">
                             <label for="modelFlavor" class="form-label" th:text="#{label.modelFlavor}">Model flavor</label>
                             <div class="input-group">
                                 <input type="text" class="form-control" id="modelFlavor" th:field="*{modelFlavor}"/>

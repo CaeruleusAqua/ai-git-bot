@@ -120,7 +120,7 @@ class BotWebhookServiceTest {
         org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator issueWorkflowOrchestrator =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator(
                         issueWorkflowRegistry, workflowSelectionService, botService, eventHookPublisher,
-                        retryNotices, commentAcknowledgement);
+                        retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
         botWebhookService = new BotWebhookService(giteaClientFactory,
                 agentSessionService, botService,
                 prWorkflowOrchestrator, e2eTestPrCloseHandler,
