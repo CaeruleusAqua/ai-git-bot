@@ -249,6 +249,17 @@ public class WorkspaceService {
      */
     public boolean commitAndPush(Path workspaceDir, String branchName, String commitMessage,
                                  String authorName, String authorEmail, boolean createNewBranch) {
+        return commitAndPush(workspaceDir, branchName, commitMessage, authorName, authorEmail,
+                createNewBranch, () -> { });
+    }
+
+    /**
+     * Runs the caller's live write check immediately before push; exceptions abort
+     * publication. The original overload preserves the contract of other workflows.
+     */
+    public boolean commitAndPush(Path workspaceDir, String branchName, String commitMessage,
+                                 String authorName, String authorEmail, boolean createNewBranch,
+                                 Runnable beforePush) {
         WorkspaceSetup setup = setupsByWorkspace.get(workspaceKey(workspaceDir));
         if (setup == null) {
             log.error("Cannot commit workspace without authentication state: {}", workspaceDir);
@@ -298,6 +309,9 @@ public class WorkspaceService {
                 return false;
             }
 
+            // The check may do network I/O under this workspace's lock. Keep it with
+            // the push so cleanup cannot release authentication between them.
+            beforePush.run();
             CommandResult pushResult = runRemoteCommand(setup, workspaceDir.toFile(), 60,
                     "push", "origin", branchName);
             if (!pushResult.success()) {
@@ -308,6 +322,23 @@ public class WorkspaceService {
             log.info("Successfully committed and pushed to branch '{}'", branchName);
             return true;
         }
+    }
+
+    /**
+     * Stages changes to include new/deleted files in a bounded comment preview.
+     * Call after checking the allowed file scope and before committing.
+     */
+    public String stagedDiff(Path workspaceDir) {
+        CommandResult add = runCommand(workspaceDir.toFile(), new String[]{"git", "add", "-A"}, 15);
+        if (!add.success()) {
+            throw new IllegalStateException("Cannot stage documentation diff: " + add.output());
+        }
+        CommandResult diff = runCommand(workspaceDir.toFile(),
+                new String[]{"git", "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", "HEAD", "--"}, 15);
+        if (!diff.success()) {
+            throw new IllegalStateException("Cannot read documentation diff: " + diff.output());
+        }
+        return diff.output();
     }
 
     /**

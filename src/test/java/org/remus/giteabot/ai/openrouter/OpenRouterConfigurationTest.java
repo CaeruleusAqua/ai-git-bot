@@ -9,6 +9,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.AiIntegration;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.AiIntegrationRepository;
 import org.remus.giteabot.admin.AiIntegrationService;
 import org.remus.giteabot.admin.EncryptionService;
@@ -41,6 +42,7 @@ class OpenRouterConfigurationTest {
     private MockRestServiceServer server;
     @Mock private AiIntegrationRepository repository;
     @Mock private EncryptionService encryption;
+    @Mock private AiIntegrationConcurrencyLimiter concurrencyLimiter;
     @Mock private ObjectProvider<RestClient.Builder> builders;
     private AiIntegrationService service;
 
@@ -49,7 +51,8 @@ class OpenRouterConfigurationTest {
         RestClient.Builder http = RestClient.builder();
         when(builders.getObject()).thenReturn(http);
         service = new AiIntegrationService(repository, encryption,
-                new AiProviderRegistry(List.of(new OpenRouterProviderMetadata(builders, HttpClientSettings.defaults()))));
+                new AiProviderRegistry(List.of(new OpenRouterProviderMetadata(builders, HttpClientSettings.defaults()))),
+                concurrencyLimiter);
         server = MockRestServiceServer.bindTo(http).build();
     }
 

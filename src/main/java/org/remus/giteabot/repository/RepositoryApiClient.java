@@ -173,6 +173,22 @@ public interface RepositoryApiClient {
 
     void addReaction(String owner, String repo, Long commentId, String reaction);
 
+    /**
+     * Adds a reaction to a pull request itself, rather than to a comment.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
+    /**
+     * Adds a reaction to an issue itself.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
     void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                  String filePath, int line, String body);
 
@@ -227,6 +243,17 @@ public interface RepositoryApiClient {
      */
     default Map<String, Object> getPullRequestDetails(String owner, String repo, Long pullNumber) {
         return Map.of();
+    }
+
+    /**
+     * Re-fetches whether a PR is open for workflow writes. The default understands
+     * GitHub/Gitea details; other providers override it. Missing state denies
+     * writes, and API failures propagate to the workflow.
+     */
+    default boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
+        Map<String, Object> details = getPullRequestDetails(owner, repo, pullNumber);
+        return details != null && "open".equals(details.get("state"))
+                && Boolean.FALSE.equals(details.get("merged"));
     }
 
     /**

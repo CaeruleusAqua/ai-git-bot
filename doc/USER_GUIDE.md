@@ -58,7 +58,7 @@ The Usage page (`/usage`) audits all AI provider interactions. It contains two c
 
 ### AI usage
 
-A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
+A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Round**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. The **Round** column shows which round of the agent loop produced the interaction — useful to see how deep into a loop a run got — and is **—** for single-shot calls that are not part of an agent loop (a plain code review or a triage classification, for example). Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
 
 Click the **Raw** button in the **Details** column to open a modal showing the raw JSON request sent to the AI provider and the raw JSON response received back. This is useful for debugging provider-specific behavior, token accounting discrepancies, or unexpected completions.
 
@@ -98,6 +98,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
    - **Model**: Select from the dropdown for suggested models, or type a custom model name
    - **Model Flavor**: Available flavors are listed under the field. OpenRouter currently accepts only `standard` (provider default); see the OpenAI-compatible section for OpenAI flavors.
    - **Max Tokens**: Maximum tokens per AI response (default: 4096)
+   - **Parallel Worker Limit**: Maximum number of jobs that may run at the same time for this integration (`0` = unlimited, `1`–`20` = cap). See [Parallel worker limit](#parallel-worker-limit)
    - **Max Diff Chars Per Chunk**: Maximum characters per diff chunk (default: 120000)
    - **Max Diff Chunks**: Maximum number of diff chunks to process (default: 8)
    - **Retry Truncated Chunk Chars**: Truncated chunk size for retries (default: 60000)
@@ -198,8 +199,21 @@ Troubleshooting:
 
 #### llama.cpp
 - No API key required
-- Model is determined by the llama.cpp server configuration
+- For a server started with one model (`--model`), the Model field is ignored by llama.cpp
+- In router mode (no `--model`), the Model field must contain the exact model ID returned by `GET /v1/models`; llama.cpp uses it to route each request
+- Uses llama.cpp's OpenAI-compatible `/v1/completions` endpoint
 - Supports GBNF grammar constraints for reliable JSON output (agent feature)
+
+### Parallel worker limit
+
+Every AI integration has a **Parallel worker limit** that controls how many of its jobs may run at the same time:
+
+- **0** (default) — unlimited parallel execution. Jobs start immediately, exactly as before.
+- **1–20** — at most that many jobs run concurrently for the integration. Once the limit is reached, further jobs are **not dropped**: they stay queued and start as soon as a running job finishes.
+
+The value is validated when the integration is saved — the form and the server both accept only `0`–20. A job that is waiting for a free slot is not reported as running: its run row is created once the slot becomes available.
+
+The limit is applied per AI integration, so a busy integration never holds back jobs that use a different one, and every bot's jobs are bounded by the limit of the AI integration it is configured with. It is intended for self-hosted or resource-constrained providers (for example a local vLLM or llama.cpp backend) that become unstable or slow when several reviews run against them at once. The counter lives in the running application, so in a multi-instance deployment the limit applies per instance rather than globally.
 
 ### Editing an AI Integration
 
@@ -754,6 +768,7 @@ Set `GITEABOT_SECURITY_OAUTH_DEBUG_LOGGING_ENABLED=true` and configure the appli
 | `AGENT_MAX_TOKENS` | `32768` | Maximum tokens for AI responses in agent mode |
 | `AGENT_BRANCH_PREFIX` | `ai-agent/` | Prefix for branches created by the agent |
 | `AGENT_VALIDATION_ENABLED` | `true` | Enable syntax validation before commit |
+| `AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS` | `300` | Timeout for each build/test/validation command the coding agent runs, including repository-provided `execute` scripts |
 | `AGENT_VALIDATION_MAX_RETRIES` | `3` | Max iterations for error correction |
 | `AGENT_WRITER_MAX_TOOL_ROUNDS` | `5` | Repository-context rounds the technical-writer agent may spend before it has to answer |
 

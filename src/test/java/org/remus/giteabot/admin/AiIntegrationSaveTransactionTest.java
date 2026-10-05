@@ -43,7 +43,8 @@ class AiIntegrationSaveTransactionTest {
             context.register(TransactionConfiguration.class);
             context.registerBean("transactionManager", DataSourceTransactionManager.class, () -> transactions);
             context.registerBean(AiIntegrationService.class,
-                    () -> new AiIntegrationService(repository, encryption, registry));
+                    () -> new AiIntegrationService(repository, encryption, registry,
+                            mock(AiIntegrationConcurrencyLimiter.class)));
             context.refresh();
             var service = context.getBean(AiIntegrationService.class);
             var integration = new AiIntegration();

@@ -32,6 +32,9 @@ services:
       # Technical-writer agent: repository-context rounds per run; the round after
       # them is the wrap-up round (tools refused, the writer must answer).
       AGENT_WRITER_MAX_TOOL_ROUNDS: ${AGENT_WRITER_MAX_TOOL_ROUNDS:-5}
+      # Timeout (seconds) for each validation command the coding agent runs: the
+      # build/test tools and any repository-provided `execute` script.
+      AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS: ${AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS:-300}
       # Optional: capture raw AI request/response payloads in the usage audit log.
       # Disabled by default because payloads can be large and may contain sensitive prompts.
       AI_USAGE_RAW_PAYLOADS_ENABLED: ${AI_USAGE_RAW_PAYLOADS_ENABLED:-false}

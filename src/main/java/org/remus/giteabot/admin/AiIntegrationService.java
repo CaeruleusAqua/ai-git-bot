@@ -20,6 +20,7 @@ public class AiIntegrationService {
     private final AiIntegrationRepository aiIntegrationRepository;
     private final EncryptionService encryptionService;
     private final AiProviderRegistry providerRegistry;
+    private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     @Transactional(readOnly = true)
     public List<AiIntegration> findAll() {
@@ -69,6 +70,7 @@ public class AiIntegrationService {
 
     public void deleteById(Long id) {
         aiIntegrationRepository.deleteById(id);
+        concurrencyLimiter.forget(id);
     }
 
     public String decryptApiKey(AiIntegration integration) {

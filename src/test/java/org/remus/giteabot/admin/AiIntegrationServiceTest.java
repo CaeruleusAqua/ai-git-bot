@@ -25,6 +25,8 @@ class AiIntegrationServiceTest {
 
     @Mock private AiProviderRegistry providerRegistry;
     @Mock private AiProviderMetadata provider;
+    @Mock
+    private AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     @InjectMocks
     private AiIntegrationService aiIntegrationService;
@@ -161,6 +163,8 @@ class AiIntegrationServiceTest {
     @Test
     void deleteById_delegatesToRepository() {
         aiIntegrationService.deleteById(1L);
+
+        verify(concurrencyLimiter).forget(1L);
 
         verify(aiIntegrationRepository).deleteById(1L);
     }
