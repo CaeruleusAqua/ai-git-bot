@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.time.Instant;
 
@@ -28,6 +29,7 @@ public class AiIntegration {
     private String apiUrl;
 
     @Column(length = 1000)
+    @ToString.Exclude
     private String apiKey;
 
     private String apiVersion;

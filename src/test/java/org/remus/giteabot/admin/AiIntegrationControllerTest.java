@@ -2,6 +2,7 @@ package org.remus.giteabot.admin;
 
 import org.junit.jupiter.api.Test;
 import org.remus.giteabot.ai.AiProviderRegistry;
+import org.remus.giteabot.ai.openrouter.OpenRouterProviderMetadata;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration;
@@ -76,6 +77,30 @@ class AiIntegrationControllerTest {
                 .andExpect(content().string(containsString("gemini-2.5-flash")))
                 .andExpect(content().string(containsString("Google AI uses the Gemini REST API")))
                 .andExpect(content().string(containsString("API key required")));
+    }
+
+    @Test
+    void editForm_showsOpenRouterSettingsWithoutEchoingTheKey() throws Exception {
+        AiIntegration integration = new AiIntegration();
+        integration.setId(7L);
+        integration.setProviderType("openrouter");
+        integration.setApiUrl("https://openrouter.ai/api");
+        integration.setApiKey("private-stored-ciphertext");
+        when(aiIntegrationService.findById(7L)).thenReturn(Optional.of(integration));
+        when(providerRegistry.getProviderTypes()).thenReturn(List.of("openrouter"));
+        when(providerRegistry.getDisplayNames()).thenReturn(Map.of("openrouter", "openrouter"));
+        when(providerRegistry.getSuggestedModels()).thenReturn(
+                Map.of("openrouter", OpenRouterProviderMetadata.SUGGESTED_MODELS));
+
+        mockMvc.perform(get("/ai-integrations/7/edit").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(">openrouter</option>")))
+                .andExpect(content().string(containsString("openrouter\\/auto")))
+                .andExpect(content().string(containsString("deepseek\\/deepseek-v4.1-flash")))
+                .andExpect(content().string(containsString("z-ai\\/glm-5.3-flash")))
+                .andExpect(content().string(containsString("xiaomi\\/mimo-v2.6-flash")))
+                .andExpect(content().string(containsString("readonly=\"readonly\"")))
+                .andExpect(content().string(not(containsString("private-stored-ciphertext"))));
     }
 
     @Test
