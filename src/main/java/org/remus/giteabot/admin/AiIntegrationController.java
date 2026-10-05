@@ -1,13 +1,17 @@
 package org.remus.giteabot.admin;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
 import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
+import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.List;
@@ -67,10 +71,22 @@ public class AiIntegrationController {
     }
 
     @PostMapping("/save")
-    public String save(@ModelAttribute AiIntegration integration,
+    public String save(@Valid @ModelAttribute AiIntegration integration,
+                       BindingResult bindingResult,
                        @RequestParam(required = false) String apiKey,
                        @RequestParam(required = false, defaultValue = "false") boolean clearApiKey,
                        RedirectAttributes redirectAttributes) {
+        // Preserve HTTP 400 for malformed settings without exposing submitted credentials.
+        if (bindingResult.getErrorCount() > bindingResult.getFieldErrorCount("parallelWorkerLimit")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid AI integration settings");
+        }
+        // The form limits the value in the browser; this stops a hand-made POST
+        // from storing a value the limiter would read as "unlimited".
+        if (bindingResult.hasErrors()) {
+            redirectAttributes.addFlashAttribute("error", messageSource.getMessage(
+                    "flash.aiWorkerLimitOutOfRange", null, LocaleContextHolder.getLocale()));
+            return "redirect:/ai-integrations";
+        }
         try {
             // The key form field is a one-way write: only override when a new
             // key is provided. Blank means "keep the stored key" and the

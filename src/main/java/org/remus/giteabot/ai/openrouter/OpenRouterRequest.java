@@ -44,7 +44,10 @@ record OpenRouterRequest(String model, @JsonProperty("max_tokens") int maxTokens
     /** Per-request opt-outs; enforced account-level plugins must be disabled by the operator. */
     @JsonProperty("plugins")
     public List<Plugin> plugins() {
-        // IDs and per-request opt-outs: https://openrouter.ai/docs/guides/features/plugins
+        // Opt-outs: https://openrouter.ai/docs/guides/features/plugins
+        // file-parser: https://openrouter.ai/docs/guides/overview/multimodal/pdfs
+        // context-compression: https://openrouter.ai/docs/guides/features/message-transforms
+        // pareto-router: https://openrouter.ai/docs/guides/routing/routers/pareto-router
         return List.of("web", "file-parser", "response-healing", "context-compression", "pareto-router")
                 .stream().map(id -> new Plugin(id, false)).toList();
     }

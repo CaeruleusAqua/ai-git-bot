@@ -11,6 +11,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.AiIntegration;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.AiIntegrationRepository;
 import org.remus.giteabot.admin.AiIntegrationService;
 import org.remus.giteabot.admin.EncryptionService;
@@ -44,6 +45,7 @@ class OpenRouterConfigurationTest {
     private MockRestServiceServer server;
     @Mock private AiIntegrationRepository repository;
     @Mock private EncryptionService encryption;
+    @Mock private AiIntegrationConcurrencyLimiter concurrencyLimiter;
     @Mock private ObjectProvider<RestClient.Builder> builders;
     private AiIntegrationService service;
 
@@ -52,7 +54,8 @@ class OpenRouterConfigurationTest {
         RestClient.Builder http = RestClient.builder();
         when(builders.getObject()).thenReturn(http);
         service = new AiIntegrationService(repository, encryption,
-                new AiProviderRegistry(List.of(new OpenRouterProviderMetadata(builders, HttpClientSettings.defaults()))));
+                new AiProviderRegistry(List.of(new OpenRouterProviderMetadata(builders, HttpClientSettings.defaults()))),
+                concurrencyLimiter);
         server = MockRestServiceServer.bindTo(http).build();
     }
 
@@ -105,6 +108,50 @@ class OpenRouterConfigurationTest {
                         """, MediaType.APPLICATION_JSON));
         AiIntegration integration = integration();
         integration.setOpenRouterRegion(OpenRouterRegion.EU);
+
+        assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("selected region");
+
+        verifyNoInteractions(encryption, repository);
+        server.verify();
+    }
+
+    @Test
+    void omittedRegionsAllowVerifiedInferenceKeyOnGlobalRoute() {
+        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false}}
+                        """, MediaType.APPLICATION_JSON));
+        when(encryption.encrypt("test-key")).thenReturn("encrypted-key");
+        when(repository.save(any())).thenAnswer(call -> call.getArgument(0));
+
+        assertThat(service.save(integration()).getApiKey()).isEqualTo("encrypted-key");
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"[]", "[\"europe\"]", "null", "\"global\"", "{}", "[true]"})
+    void explicitRegionRestrictionsMustAllowGlobalRouting(String regions) {
+        server.expect(requestTo("https://openrouter.ai/api/v1/key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false,"allowed_data_regions":%s}}
+                        """.formatted(regions), MediaType.APPLICATION_JSON));
+        AiIntegration integration = integration();
+
+        assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("selected region");
+
+        verifyNoInteractions(encryption, repository);
+        server.verify();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = OpenRouterRegion.class, names = {"EU", "US"})
+    void omittedRegionsCannotAuthorizeRegionalRoutes(OpenRouterRegion region) {
+        server.expect(requestTo(region.getApiRoot() + "/v1/key"))
+                .andRespond(withSuccess("""
+                        {"data":{"is_management_key":false,"is_provisioning_key":false}}
+                        """, MediaType.APPLICATION_JSON));
+        AiIntegration integration = integration();
+        integration.setOpenRouterRegion(region);
 
         assertThatThrownBy(() -> service.save(integration)).hasMessageContaining("selected region");
 
@@ -253,7 +300,7 @@ class OpenRouterConfigurationTest {
     }
 
     /** The OpenRouter settings migration version. */
-    private static final int OPENROUTER_MIGRATION_VERSION = 53;
+    private static final int OPENROUTER_MIGRATION_VERSION = 56;
 
     /** Highest migration version available on this checkout below the OpenRouter migration. */
     private static String baselineBeforeOpenRouter() throws Exception {
@@ -292,6 +339,67 @@ class OpenRouterConfigurationTest {
                 assertThat(row.getBoolean("openrouter_zdr")).isFalse();
             }
         }
+        flyway.target(String.valueOf(OPENROUTER_MIGRATION_VERSION)).load().validate();
+        assertThat(flyway.load().migrate().migrationsExecuted).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 4, 5, 6, 7})
+    void migrationPreservesPartialSettingsAndSupportsSqlReplay(int existingColumns) throws Exception {
+        String url = "jdbc:h2:mem:openrouter-partial-" + existingColumns + ";DB_CLOSE_DELAY=-1";
+        var flyway = Flyway.configure().dataSource(url, "sa", "")
+                .locations("classpath:db/migration/h2");
+        flyway.target(baselineBeforeOpenRouter()).load().migrate();
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            if ((existingColumns & 1) != 0) {
+                statement.execute("ALTER TABLE ai_integrations ADD COLUMN openrouter_region VARCHAR(16) DEFAULT 'GLOBAL' NOT NULL");
+            }
+            if ((existingColumns & 2) != 0) {
+                statement.execute("ALTER TABLE ai_integrations ADD COLUMN openrouter_data_collection VARCHAR(16) DEFAULT 'DENY' NOT NULL");
+            }
+            if ((existingColumns & 4) != 0) {
+                statement.execute("ALTER TABLE ai_integrations ADD COLUMN openrouter_zdr BOOLEAN DEFAULT FALSE NOT NULL");
+            }
+            statement.execute("""
+                    INSERT INTO ai_integrations (name, provider_type, api_url, api_key, model, parallel_worker_limit, created_at, updated_at)
+                    VALUES ('Existing', 'openai', 'https://proxy.example', 'old-ciphertext', 'old-model', 7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """);
+            if ((existingColumns & 1) != 0) {
+                statement.execute("UPDATE ai_integrations SET openrouter_region = 'US'");
+            }
+            if ((existingColumns & 2) != 0) {
+                statement.execute("UPDATE ai_integrations SET openrouter_data_collection = 'ALLOW'");
+            }
+            if ((existingColumns & 4) != 0) {
+                statement.execute("UPDATE ai_integrations SET openrouter_zdr = TRUE");
+            }
+
+            assertThat(flyway.target(String.valueOf(OPENROUTER_MIGRATION_VERSION)).load().migrate().migrationsExecuted)
+                    .isEqualTo(1);
+            String migration = java.nio.file.Files.readString(java.nio.file.Path.of(
+                    "src/main/resources/db/migration/h2/V" + OPENROUTER_MIGRATION_VERSION + "__openrouter_settings.sql"));
+            for (int replay = 0; replay < 2; replay++) {
+                for (String sql : migration.split(";")) {
+                    if (!sql.isBlank()) {
+                        statement.execute(sql);
+                    }
+                }
+            }
+            try (var row = statement.executeQuery("SELECT * FROM ai_integrations WHERE name = 'Existing'")) {
+                assertThat(row.next()).isTrue();
+                assertThat(row.getString("provider_type")).isEqualTo("openai");
+                assertThat(row.getString("api_url")).isEqualTo("https://proxy.example");
+                assertThat(row.getString("api_key")).isEqualTo("old-ciphertext");
+                assertThat(row.getString("model")).isEqualTo("old-model");
+                assertThat(row.getInt("parallel_worker_limit")).isEqualTo(7);
+                assertThat(row.getString("openrouter_region")).isEqualTo((existingColumns & 1) != 0 ? "US" : "GLOBAL");
+                assertThat(row.getString("openrouter_data_collection")).isEqualTo((existingColumns & 2) != 0 ? "ALLOW" : "DENY");
+                assertThat(row.getBoolean("openrouter_zdr")).isEqualTo((existingColumns & 4) != 0);
+            }
+        }
+        flyway.target(String.valueOf(OPENROUTER_MIGRATION_VERSION)).load().validate();
+        assertThat(flyway.load().migrate().migrationsExecuted).isZero();
     }
 
     private static AiIntegration integration() {

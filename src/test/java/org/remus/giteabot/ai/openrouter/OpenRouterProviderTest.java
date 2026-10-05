@@ -73,6 +73,48 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 class OpenRouterProviderTest {
     @Test
+    void registeredProviderUsesLowercaseDisplayName() {
+        try (var context = providerContext(RestClient.builder())) {
+            var registry = context.getBean(AiProviderRegistry.class);
+
+            assertThat(registry.getDisplayNames()).containsEntry("openrouter", "openrouter");
+        }
+    }
+
+    @Test
+    void registeredProviderSuggestsAutoRouterAndPopularModels() {
+        try (var context = providerContext(RestClient.builder())) {
+            var registry = context.getBean(AiProviderRegistry.class);
+
+            assertThat(registry.getSuggestedModels().get("openrouter")).containsExactly(
+                    "openrouter/auto",
+                    "deepseek/deepseek-v4.1-flash",
+                    "z-ai/glm-5.3-flash",
+                    "xiaomi/mimo-v2.6-flash");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void emptyResponseFailsForBothChatApis(boolean nativeTools) {
+        RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
+        var server = MockRestServiceServer.bindTo(http).build();
+        server.expect(requestTo("https://openrouter.ai/api/v1/chat/completions"))
+                .andRespond(withSuccess("", MediaType.APPLICATION_JSON));
+        var client = new OpenRouterClient(http.build(), "author/model", 32, nativeTools);
+
+        assertThatThrownBy(() -> {
+            if (nativeTools) {
+                client.chatWithTools(List.of(), "Question",
+                        List.of(new ToolDescriptor("lookup", "Read context", null)), "sys", null, null);
+            } else {
+                client.chat(List.of(), "Question", "sys", null);
+            }
+        }).hasMessage("OpenRouter returned an empty response");
+        server.verify();
+    }
+
+    @Test
     void genericOpenAiKeepsItsWireContractEvenAtAnOpenRouterUrl() {
         RestClient.Builder http = RestClient.builder().baseUrl("https://openrouter.ai/api");
         var server = MockRestServiceServer.bindTo(http).build();

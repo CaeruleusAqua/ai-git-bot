@@ -12,6 +12,7 @@ import org.remus.giteabot.ai.openrouter.OpenRouterClient;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.util.Arrays;
 import java.util.List;
@@ -19,6 +20,7 @@ import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.jsonPath;
@@ -63,6 +65,14 @@ class TextTurnMetadataTest {
     @ParameterizedTest(name = "{0}: {1}")
     @MethodSource("textClients")
     void emptyResponseDoesNotBecomeSyntheticReviewText(Provider provider, Mode mode) {
+        if ("OpenRouter".equals(provider.name())) {
+            // The adapter rejects an absent body in empty/null/disabled-tool modes too.
+            assertThatThrownBy(() -> send(provider, mode, ""))
+                    .isInstanceOf(RestClientException.class)
+                    .hasMessage("OpenRouter returned an empty response")
+                    .hasNoCause();
+            return;
+        }
         ChatTurn turn = send(provider, mode, "");
 
         assertThat(turn.stopReason()).isEqualTo(StopReason.OTHER);
@@ -100,10 +110,11 @@ class TextTurnMetadataTest {
                         MediaType.APPLICATION_JSON));
 
         AiClient client = provider.client().apply(builder.build(), mode != Mode.DISABLED_TOOLS);
-        ChatTurn turn = client.chatWithTools(List.of(), "Review this change", tools(mode), null, null, null);
-
-        server.verify();
-        return turn;
+        try {
+            return client.chatWithTools(List.of(), "Review this change", tools(mode), null, null, null);
+        } finally {
+            server.verify();
+        }
     }
 
     private List<ToolDescriptor> tools(Mode mode) {

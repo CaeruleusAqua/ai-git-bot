@@ -131,7 +131,16 @@
                                 Model's total context window size. Used for proactive history compaction.
                             </div>
                         </div>
-                        <div class="col-md-6" id="modelFlavorField">
+                        <div class="w-100"></div>
+                        <div class="col-md-3">
+                            <label for="parallelWorkerLimit" class="form-label" th:text="#{label.parallelWorkerLimit}">Parallel worker limit</label>
+                            <input type="number" class="form-control" id="parallelWorkerLimit"
+                                   th:field="*{parallelWorkerLimit}" min="0" max="20" required/>
+                            <div class="form-text" th:text="#{help.ai.parallelWorkerLimit}">
+                                Maximum number of jobs that may run at once for this AI integration.
+                            </div>
+                        </div>
+                        <div class="col-md-3" id="modelFlavorField">
                             <label for="modelFlavor" class="form-label" th:text="#{label.modelFlavor}">Model flavor</label>
                             <div class="input-group">
                                 <input type="text" class="form-control" id="modelFlavor" th:field="*{modelFlavor}"/>
@@ -237,6 +246,7 @@
             const tSuggestedModels = /*[[#{help.ai.suggestedModels}]]*/ 'Suggested models: ';
             const tSuggestedFlavors = /*[[#{help.ai.suggestedFlavors}]]*/ 'Available flavors: ';
             const tLocalModel = /*[[#{help.ai.localModel}]]*/ 'Enter the model name configured in your local {0} instance';
+            const tLlamaCppModel = /*[[#{help.ai.llamacppModel}]]*/ 'Single-model mode ignores this value. In router mode, enter the exact model ID from GET /v1/models; it selects the model for each request.';
             const tApiKeyWillBeRemoved = /*[[#{help.ai.apiKeyWillBeRemoved}]]*/ 'API key will be removed on save';
             const tEnterApiKey = /*[[#{placeholder.enterApiKey}]]*/ 'Enter API key';
 
@@ -283,6 +293,7 @@
                     } else if (providerSelect.dataset.previousValue && providerSelect.dataset.previousValue !== provider) {
                         apiUrlInput.value = provider === initialProvider ? initialApiUrl : (defaultApiUrls[provider] || '');
                     }
+                    // Run after provider-switch restoration: fill new-form defaults only, never overwrite an edited URL.
                     // Update API URL hint and set default if empty (only for new integrations)
                     if (defaultApiUrls[provider]) {
                         apiUrlHint.textContent = isOpenRouter ? '' : tDefaultPrefix + defaultApiUrls[provider];
@@ -357,7 +368,9 @@
                         });
                     } else {
                         modelDropdownBtn.style.display = 'none';
-                        if (provider === 'ollama' || provider === 'llamacpp') {
+                        if (provider === 'llamacpp') {
+                            modelHint.textContent = tLlamaCppModel;
+                        } else if (provider === 'ollama') {
                             modelHint.textContent = tLocalModel.replace('{0}', provider);
                         } else {
                             modelHint.textContent = '';

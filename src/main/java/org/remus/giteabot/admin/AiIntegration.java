@@ -1,6 +1,8 @@
 package org.remus.giteabot.admin;
 
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
@@ -73,6 +75,18 @@ public class AiIntegration {
 
     @Column(nullable = false)
     private int contextWindowTokens = 200_000;
+
+    /**
+     * Maximum number of jobs that may run concurrently for this AI
+     * integration. {@code 0} (the default) means unlimited parallel execution
+     * (the historical behaviour); a value from {@code 1} to {@code 20} caps
+     * the jobs running at the same time and makes further jobs wait for a free
+     * slot instead of failing. Enforced by
+     */
+    @Min(0)
+    @Max(20)
+    @Column(name = "parallel_worker_limit", nullable = false)
+    private int parallelWorkerLimit = 0;
 
     /**
      * Provider-specific per-model request preset ("flavor"), e.g.

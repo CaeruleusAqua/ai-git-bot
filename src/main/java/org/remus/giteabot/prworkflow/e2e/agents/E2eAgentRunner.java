@@ -6,6 +6,7 @@ import org.remus.giteabot.agent.loop.AgentLoop;
 import org.remus.giteabot.agent.loop.HistoryCompactor;
 import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.model.ImplementationPlan;
+import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
@@ -185,10 +186,13 @@ public final class E2eAgentRunner {
         for (int round = 1; round <= maxRounds; round++) {
             ChatTurn turn;
             try {
+                AiAuditContext.setRound(round);
                 turn = callAiWithRetry(history, currentMessage, mode, maxTokens);
             } catch (RuntimeException e) {
                 log.warn("[{}] AI call failed in round {}: {}", agentLabel, round, e.getMessage(), e);
                 return new Result(lastAssistantText, invocations, round - 1, true);
+            } finally {
+                AiAuditContext.clearRound();
             }
             lastAssistantText = turn.assistantText() == null ? "" : turn.assistantText();
             log.debug("[{}] round {}/{}: assistantTextLen={} toolCalls={} stopReason={}",

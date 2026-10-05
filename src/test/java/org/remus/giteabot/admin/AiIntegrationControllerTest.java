@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
 import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
+import org.remus.giteabot.ai.openrouter.OpenRouterProviderMetadata;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.security.autoconfigure.SecurityAutoConfiguration;
@@ -21,8 +22,11 @@ import java.util.Optional;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -31,6 +35,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.flash;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.view;
@@ -87,11 +92,17 @@ class AiIntegrationControllerTest {
         integration.setOpenRouterRegion(OpenRouterRegion.EU);
         when(aiIntegrationService.findById(7L)).thenReturn(Optional.of(integration));
         when(providerRegistry.getProviderTypes()).thenReturn(List.of("openrouter"));
-        when(providerRegistry.getDisplayNames()).thenReturn(Map.of("openrouter", "OpenRouter"));
+        when(providerRegistry.getDisplayNames()).thenReturn(Map.of("openrouter", "openrouter"));
+        when(providerRegistry.getSuggestedModels()).thenReturn(
+                Map.of("openrouter", OpenRouterProviderMetadata.SUGGESTED_MODELS));
 
         mockMvc.perform(get("/ai-integrations/7/edit").with(user("admin").roles("ADMIN")))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("OpenRouter")))
+                .andExpect(content().string(containsString(">openrouter</option>")))
+                .andExpect(content().string(containsString("openrouter\\/auto")))
+                .andExpect(content().string(containsString("deepseek\\/deepseek-v4.1-flash")))
+                .andExpect(content().string(containsString("z-ai\\/glm-5.3-flash")))
+                .andExpect(content().string(containsString("xiaomi\\/mimo-v2.6-flash")))
                 .andExpect(content().string(containsString("readonly=\"readonly\"")))
                 .andExpect(content().string(containsString("id=\"openRouterRegion\"")))
                 .andExpect(content().string(containsString("id=\"openRouterDataCollection\"")))
@@ -195,5 +206,44 @@ class AiIntegrationControllerTest {
                 .andExpect(view().name("ai-integrations/form"))
                 .andExpect(content().string(containsString("id=\"clearApiKeyBtn\"")))
                 .andExpect(content().string(containsString("id=\"apiKeyClearPendingHint\"")));
+    }
+
+    @Test
+    void newForm_showsParallelWorkerLimitInputAndHelp() throws Exception {
+        when(providerRegistry.getProviderTypes()).thenReturn(List.of("anthropic"));
+        when(providerRegistry.getDisplayNames()).thenReturn(Map.of("anthropic", "Anthropic"));
+        when(providerRegistry.getDefaultApiUrls()).thenReturn(Map.of("anthropic", "https://api.anthropic.com"));
+        when(providerRegistry.getSuggestedModels()).thenReturn(Map.of("anthropic", List.of("claude-sonnet-4")));
+        when(providerRegistry.getApiKeyRequirements()).thenReturn(Map.of("anthropic", true));
+        when(providerRegistry.getFlavors()).thenReturn(Map.of("anthropic", List.of()));
+
+        mockMvc.perform(get("/ai-integrations/new").with(user("admin").roles("ADMIN")))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("id=\"parallelWorkerLimit\"")))
+                .andExpect(content().string(containsString("name=\"parallelWorkerLimit\"")))
+                .andExpect(content().string(not(containsString(">20</option>"))))
+                .andExpect(content().string(containsString("min=\"0\"")))
+                .andExpect(content().string(containsString("max=\"20\"")))
+                .andExpect(content().string(containsString("Parallel worker limit")))
+                .andExpect(content().string(containsString(
+                        "Maximum number of jobs that may run at once for this AI integration")));
+    }
+
+    @Test
+    void save_rejectsAParallelWorkerLimitOutsideTheRange() throws Exception {
+        for (String value : List.of("-5", "21")) {
+            mockMvc.perform(post("/ai-integrations/save")
+                            .with(user("admin").roles("ADMIN"))
+                            .with(csrf())
+                            .param("name", "Anthropic")
+                            .param("providerType", "anthropic")
+                            .param("apiUrl", "https://api.anthropic.com")
+                            .param("model", "claude-sonnet-4")
+                            .param("parallelWorkerLimit", value))
+                    .andExpect(status().is3xxRedirection())
+                    .andExpect(redirectedUrl("/ai-integrations"))
+                    .andExpect(flash().attributeExists("error"));
+        }
+        verify(aiIntegrationService, never()).save(any(AiIntegration.class), anyBoolean());
     }
 }
