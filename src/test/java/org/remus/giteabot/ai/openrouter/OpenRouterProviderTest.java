@@ -71,6 +71,28 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withException;
 
 class OpenRouterProviderTest {
+    @Test
+    void registeredProviderUsesLowercaseDisplayName() {
+        try (var context = providerContext(RestClient.builder())) {
+            var registry = context.getBean(AiProviderRegistry.class);
+
+            assertThat(registry.getDisplayNames()).containsEntry("openrouter", "openrouter");
+        }
+    }
+
+    @Test
+    void registeredProviderSuggestsAutoRouterAndPopularModels() {
+        try (var context = providerContext(RestClient.builder())) {
+            var registry = context.getBean(AiProviderRegistry.class);
+
+            assertThat(registry.getSuggestedModels().get("openrouter")).containsExactly(
+                    "openrouter/auto",
+                    "deepseek/deepseek-v4.1-flash",
+                    "z-ai/glm-5.3-flash",
+                    "xiaomi/mimo-v2.6-flash");
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void emptyResponseFailsForBothChatApis(boolean nativeTools) {

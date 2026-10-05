@@ -87,7 +87,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
      |----------|-----------------|------------------|
      | `anthropic` | `https://api.anthropic.com` | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5-20251001 |
      | `openai` | `https://api.openai.com` | gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex |
-     | `openrouter` | `https://openrouter.ai/api` | *(manual model ID)* |
+     | `openrouter` | `https://openrouter.ai/api` | `openrouter/auto`, `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3-flash`, `xiaomi/mimo-v2.6-flash` |
      | `google` | `https://generativelanguage.googleapis.com` | gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash |
      | `ollama` | `http://localhost:11434` | *(user-configured)* |
      | `llamacpp` | `http://localhost:8081` | *(user-configured)* |
@@ -118,7 +118,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
 
 #### OpenRouter
 
-- Select **OpenRouter**, enter an **inference API key**, the exact model ID (usually `author/model`), and your response/context limits. No model catalog is needed for inference.
+- Select **openrouter**, enter an **inference API key**, choose a suggested model or enter an exact model ID (usually `author/model`), and set your response/context limits. Suggestions include `openrouter/auto` and recent models from the [most-popular list](https://openrouter.ai/models?order=most-popular); custom model IDs remain supported. No model catalog request is needed for inference.
 - The API root is fixed to `https://openrouter.ai/api`; custom proxies use the generic `openai` provider.
 - When entering or replacing a key, the server checks `/v1/key` at the official host and rejects management/provisioning keys. Missing or invalid key-type flags fail closed. When `allowed_data_regions` is present, it must be an array containing `global`; an omitted field is accepted on the fixed global route. See the [OpenRouter key response schema](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key). Validation runs outside database transactions. HTTP redirects are disabled for key checks and inference.
 - Leave the key blank on edit to keep it **only for the same provider**. A provider change requires a newly entered key or an explicit **Clear** for providers that allow keyless saves. Switching an existing generic OpenRouter integration from `openai` to `openrouter` therefore requires re-entering its key. Keys use the existing encrypted storage when `APP_ENCRYPTION_KEY` is configured.

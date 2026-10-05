@@ -21,6 +21,13 @@ import java.util.List;
 @Component
 public class OpenRouterProviderMetadata implements AiProviderMetadata {
     private static final String API_ROOT = "https://openrouter.ai/api";
+    // Popular model suggestions checked at https://openrouter.ai/models?order=most-popular on 2026-10-05.
+    public static final List<String> SUGGESTED_MODELS = List.of(
+            "openrouter/auto",
+            "deepseek/deepseek-v4.1-flash",
+            "z-ai/glm-5.3-flash",
+            "xiaomi/mimo-v2.6-flash"
+    );
     private final RestClient.Builder restClientBuilder;
 
     /** Retains configured timeouts/TLS settings, but never redirects a credential to another host. */
@@ -30,9 +37,8 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
     }
 
     @Override public String getProviderType() { return "openrouter"; }
-    @Override public String getDisplayName() { return "OpenRouter"; }
     @Override public String getDefaultApiUrl() { return API_ROOT; }
-    @Override public List<String> getSuggestedModels() { return List.of(); }
+    @Override public List<String> getSuggestedModels() { return SUGGESTED_MODELS; }
     @Override public boolean requiresApiKey() { return true; }
 
     @Override
