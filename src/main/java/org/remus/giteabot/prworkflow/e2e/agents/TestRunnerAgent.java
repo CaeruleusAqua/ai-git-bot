@@ -77,7 +77,7 @@ public class TestRunnerAgent {
         String systemPromptText = promptAssembler.assemble(
                 E2ePromptLibrary.runnerSystemPromptOrDefault(systemPrompt, toolContext.framework()),
                 toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                SystemPromptAssembler.PromptKind.E2E_TEST_RUNNER);
 
         int maxRounds = Math.max(2, maxRetries) + OVERHEAD_ROUNDS;
         E2eAgentRunner runner = new E2eAgentRunner(

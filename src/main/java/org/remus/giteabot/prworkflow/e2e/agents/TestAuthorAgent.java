@@ -69,7 +69,7 @@ public class TestAuthorAgent {
         String systemPromptText = promptAssembler.assemble(
                 E2ePromptLibrary.authorSystemPromptOrDefault(systemPrompt, toolContext.framework()),
                 toolCatalog, allowed, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                SystemPromptAssembler.PromptKind.E2E_TEST_AUTHOR);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, plan.journeys().size() + 2);
         E2eAgentRunner runner = new E2eAgentRunner(

@@ -230,4 +230,34 @@ class ToolCatalogTest {
         assertThat(catalog.validationToolNames(null)).isEqualTo(catalog.validationToolNames());
         assertThat(catalog.writerRepositoryToolNames(null)).isEqualTo(catalog.writerRepositoryToolNames());
     }
+
+    @Test
+    void usageHintsRideOnTheToolDefinitions() {
+        assertThat(catalog.usageHint("cat")).isPresent();
+        assertThat(catalog.usageHint("CTAGS-SIGNATURES")).as("normalized").isPresent();
+        assertThat(catalog.usageHint("pr-test-write")).isPresent();
+        assertThat(catalog.usageHint("execute")).as("validation tool").isPresent();
+        // A tool that needs no strategy line contributes none.
+        assertThat(catalog.usageHint("write-file")).isEmpty();
+        assertThat(catalog.usageHint("mvn")).isEmpty();
+        assertThat(catalog.usageHint("does-not-exist")).isEmpty();
+    }
+
+    @Test
+    void builtinToolNamesGroupsTheCatalogByRole() {
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.CODING))
+                .contains("write-file", "cat", "execute-code", "mvn")
+                // classification-only aliases are never advertised
+                .doesNotContain("ripgrep", "grep", "pr-test-write");
+
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.PR_WORKFLOW))
+                .contains("pr-test-write", "pr-test-run", "preview-url", "preview-status",
+                        "attach-artifact", "unit-test-write", "doc-write", "doc-delete",
+                        "i18n-write", "i18n-delete", "execute-code")
+                .doesNotContain("cat", "write-file", "mvn", "get-issue");
+
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.WRITER))
+                .contains("cat", "branch-switcher", "get-issue", "search-issues")
+                .doesNotContain("write-file", "mvn", "pr-test-write");
+    }
 }

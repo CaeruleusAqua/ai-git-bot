@@ -77,7 +77,7 @@ public class ReadmeSyncAgent {
         String systemPromptText = promptAssembler.assemble(
                 ReadmeSyncPromptLibrary.systemPrompt(systemPrompt, toolContext.includePatterns()),
                 toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                SystemPromptAssembler.PromptKind.README_SYNC_AGENT);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, Math.min(maxToolRounds, 30) + 2);
         ReadmeSyncAgentRunner runner = new ReadmeSyncAgentRunner(

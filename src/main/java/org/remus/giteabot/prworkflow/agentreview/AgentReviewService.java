@@ -639,7 +639,7 @@ public class AgentReviewService {
                 ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String base = systemPromptAssembler.assemble(context.reviewAgentSystemPrompt(), toolCatalog,
                 context.allowedBuiltinTools(), context.mcpToolCatalog(), mode,
-                SystemPromptAssembler.PromptKind.WRITER_AGENT);
+                SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
 
         if (!enableFormalDecision) {
             return base;

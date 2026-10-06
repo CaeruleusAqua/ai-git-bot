@@ -151,6 +151,13 @@ cannot bypass it:
    a `ToolResult` whose error message tells the model that the tool is
    disabled for this bot. MCP tools are exempt — they are governed by
    `McpToolSelectionService`.
+4. **Prompt tool-selection strategy.** Each agent stage's system prompt carries
+   a "when to reach for it" line for every tool that survives the whitelist
+   *and* belongs to that stage's role — the hint is read from the tool's own
+   definition (`ToolCatalog.usageHint`) and rendered by
+   `SystemPromptAssembler` into the stage's native protocol. A tool the bot
+   cannot call is never described, so the strategy cannot drift from the
+   selection.
 
 ### Validation tools
 

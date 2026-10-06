@@ -80,7 +80,7 @@ public class UnitTestAuthorAgent {
         String systemPromptText = promptAssembler.assemble(
                 UnitTestPromptLibrary.authorSystemPromptOrDefault(systemPrompt, toolContext.framework()),
                 toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                SystemPromptAssembler.PromptKind.UNIT_TEST_AUTHOR_AGENT);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, Math.min(maxTestCases, 12) + 2);
         UnitTestAgentRunner runner = new UnitTestAgentRunner(

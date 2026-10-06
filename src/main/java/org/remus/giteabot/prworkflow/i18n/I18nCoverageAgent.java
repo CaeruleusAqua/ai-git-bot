@@ -82,7 +82,7 @@ public class I18nCoverageAgent {
         String systemPromptText = promptAssembler.assemble(
                 I18nCoveragePromptLibrary.systemPrompt(systemPrompt, includePatterns, baselineLocale),
                 toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                SystemPromptAssembler.PromptKind.I18N_COVERAGE_AGENT);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, Math.min(maxToolRounds, 30) + 2);
         I18nCoverageAgentRunner runner = new I18nCoverageAgentRunner(

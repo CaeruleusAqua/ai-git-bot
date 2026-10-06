@@ -198,7 +198,7 @@ public class IssueTriageService {
 
         ToolingMode mode = aiClient.supportsNativeTools() ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String systemPrompt = systemPromptAssembler.assemble(configuredPrompt, toolCatalog,
-                allowedBuiltinTools, mcpToolCatalog, mode, SystemPromptAssembler.PromptKind.WRITER_AGENT);
+                allowedBuiltinTools, mcpToolCatalog, mode, SystemPromptAssembler.PromptKind.TRIAGE_AGENT);
 
         String treeContext = promptBuilder.buildTreeContext(
                 repoClient.getRepositoryTree(owner, repo, baseBranch), maxInitialTreeFiles());

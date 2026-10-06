@@ -11,6 +11,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,12 +32,12 @@ import java.util.stream.Collectors;
  *       from the bot's {@link ToolCatalog} filtered by its built-in tool
  *       whitelist (see {@link LegacyToolProtocolRenderer}), plus the MCP tool
  *       catalog inline.</li>
- *   <li><b>NATIVE</b> &mdash; appends a short hint that tools are exposed via
- *       the provider's function-calling API and skips the inline MCP block
- *       (the catalog is forwarded through the API instead). The native hint
- *       still comes from a static template under
- *       {@code /prompts/native/{kind}-tool-protocol.md} because it does not
- *       enumerate tools.</li>
+ *   <li><b>NATIVE</b> &mdash; appends the protocol for the given
+ *       {@link PromptKind} and skips the inline MCP block (the catalog is
+ *       forwarded through the API instead). One template per agent stage lives
+ *       under {@code /prompts/native/{kind}-tool-protocol.md}; each carries a
+ *       {@link #TOOL_STRATEGY_MARKER} that is replaced with the usage hints of
+ *       the tools that stage may actually call.</li>
  * </ul>
  *
  * <p>Any stray {@code <!-- BEGIN_LEGACY_TOOL_PROTOCOL --> ... <!-- END_LEGACY_TOOL_PROTOCOL -->}
@@ -49,15 +51,36 @@ public class SystemPromptAssembler {
     public static final String BEGIN_MARKER = "<!-- BEGIN_LEGACY_TOOL_PROTOCOL -->";
     public static final String END_MARKER = "<!-- END_LEGACY_TOOL_PROTOCOL -->";
 
-    /** Identifies which template family to load. */
+    /**
+     * Identifies which agent stage the system prompt is assembled for. Each constant names its own
+     * native-protocol resource ({@code /prompts/native/{fileBase}-tool-protocol.md}) and the
+     * {@link ToolCatalog.Role} whose tools that stage's agent may call, so the tool-selection
+     * strategy is rendered from exactly the tools the stage can reach — and a stage whose agent has
+     * none of them simply gets no strategy section.
+     */
     public enum PromptKind {
-        ISSUE_AGENT("issue-agent"),
-        WRITER_AGENT("writer-agent"),
-        E2E_AGENT("e2e-agent");
+        ISSUE_AGENT("issue-agent", ToolCatalog.Role.CODING),
+        WRITER_AGENT("writer-agent", ToolCatalog.Role.WRITER),
+        TRIAGE_AGENT("triage-agent", ToolCatalog.Role.WRITER),
+        E2E_TEST_AUTHOR("e2e-test-author", ToolCatalog.Role.PR_WORKFLOW),
+        E2E_TEST_RUNNER("e2e-test-runner", ToolCatalog.Role.PR_WORKFLOW),
+        README_SYNC_AGENT("readme-sync", ToolCatalog.Role.PR_WORKFLOW),
+        I18N_COVERAGE_AGENT("i18n-coverage", ToolCatalog.Role.PR_WORKFLOW),
+        UNIT_TEST_AUTHOR_AGENT("unit-test-author", ToolCatalog.Role.PR_WORKFLOW),
+        AGENT_REVIEW_AGENT("agentic-review", ToolCatalog.Role.WRITER);
 
         private final String fileBase;
-        PromptKind(String fileBase) { this.fileBase = fileBase; }
+        private final ToolCatalog.Role role;
+
+        PromptKind(String fileBase, ToolCatalog.Role role) {
+            this.fileBase = fileBase;
+            this.role = role;
+        }
+
         public String fileBase() { return fileBase; }
+
+        /** The catalogue role whose tools this stage's agent may call. */
+        public ToolCatalog.Role role() { return role; }
     }
 
     /** Pattern matching a legacy block, including markers and surrounding whitespace. */
@@ -106,7 +129,7 @@ public class SystemPromptAssembler {
         sb.append(stripped);
 
         String protocol = mode == ToolingMode.NATIVE
-                ? loadNativeTemplate(kind)
+                ? nativeProtocol(toolCatalog, allowedBuiltinTools, kind)
                 : renderLegacyProtocol(toolCatalog, allowedBuiltinTools, kind);
         if (!protocol.isEmpty()) {
             if (!stripped.isEmpty()) {
@@ -121,6 +144,62 @@ public class SystemPromptAssembler {
             sb.append("\n\n").append(CODE_EXECUTION_GUIDANCE);
         }
         return sb.toString();
+    }
+
+    /** Where a native template wants the tool-selection strategy rendered in. */
+    static final String TOOL_STRATEGY_MARKER = "{{TOOL_STRATEGY}}";
+
+    /**
+     * The native block: this stage's template with the tool-selection strategy rendered in. A template
+     * that carries {@link #TOOL_STRATEGY_MARKER} gets the strategy there; one that does not (written
+     * before the marker existed) gets it appended, so a template can never silently lose the strategy.
+     */
+    private String nativeProtocol(ToolCatalog toolCatalog, Set<String> allowedBuiltinTools,
+                                  PromptKind kind) {
+        String template = loadNativeTemplate(kind);
+        String strategy = renderToolStrategy(toolCatalog, allowedBuiltinTools, kind);
+        if (strategy.isEmpty()) {
+            return template;
+        }
+        if (template.contains(TOOL_STRATEGY_MARKER)) {
+            return template.replace(TOOL_STRATEGY_MARKER, strategy.stripTrailing());
+        }
+        return template.stripTrailing() + "\n\n### Tool Selection Strategy\n" + strategy;
+    }
+
+    /**
+     * The strategy bullets for one stage: the tools its {@link PromptKind#role()} exposes, filtered by
+     * the bot's whitelist, that carry a usage hint — in the catalogue's display order, so the text
+     * follows the definitions rather than a list kept here. The validation rule is the one line that is
+     * policy rather than a hint; it only applies to the coding role, whose surface is the only one with
+     * validation tools, and it names the configured validators that survived the whitelist. A
+     * {@code null} whitelist means every tool, as everywhere else in this class.
+     */
+    private String renderToolStrategy(ToolCatalog toolCatalog, Set<String> allowedBuiltinTools,
+                                      PromptKind kind) {
+        StringBuilder out = new StringBuilder();
+        for (String name : toolCatalog.builtinToolNames(kind.role())) {
+            if (!offers(allowedBuiltinTools, name)) {
+                continue;
+            }
+            toolCatalog.usageHint(name)
+                    .ifPresent(hint -> out.append("- ").append(hint).append('\n'));
+        }
+        if (kind.role() == ToolCatalog.Role.CODING) {
+            List<String> validators = toolCatalog.validationToolNames(allowedBuiltinTools);
+            if (!validators.isEmpty()) {
+                out.append("- **After a change, validation is mandatory**: run one of ")
+                        .append(validators.stream().map(name -> "`" + name + "`")
+                                .collect(Collectors.joining(", ")))
+                        .append('.')
+                        .append('\n');
+            }
+        }
+        return out.toString();
+    }
+
+    private static boolean offers(Set<String> allowedBuiltinTools, String tool) {
+        return allowedBuiltinTools == null || allowedBuiltinTools.contains(tool);
     }
 
     /** The tool this guidance is about; named here because the assembler sits above the catalog. */
@@ -161,9 +240,12 @@ public class SystemPromptAssembler {
             return "";
         }
         return switch (kind) {
-            case ISSUE_AGENT  -> legacyRenderer.renderIssueAgent(toolCatalog, allowedBuiltinTools);
-            case WRITER_AGENT -> legacyRenderer.renderWriterAgent(toolCatalog, allowedBuiltinTools);
-            case E2E_AGENT    -> legacyRenderer.renderE2eAgent(toolCatalog, allowedBuiltinTools);
+            case ISSUE_AGENT -> legacyRenderer.renderIssueAgent(toolCatalog, allowedBuiltinTools);
+            case WRITER_AGENT, TRIAGE_AGENT, AGENT_REVIEW_AGENT ->
+                    legacyRenderer.renderWriterAgent(toolCatalog, allowedBuiltinTools);
+            case E2E_TEST_AUTHOR, E2E_TEST_RUNNER, README_SYNC_AGENT,
+                 I18N_COVERAGE_AGENT, UNIT_TEST_AUTHOR_AGENT ->
+                    legacyRenderer.renderE2eAgent(toolCatalog, allowedBuiltinTools);
         };
     }
 
