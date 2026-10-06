@@ -65,7 +65,7 @@ class ResolvedToolSetTest {
     @Test
     void invoke_toolThatThrows_becomesUnsuccessfulResult() {
         ResolvedToolSet set = ResolvedToolSet.of(List.of(tool("cat")),
-                Map.<String, ToolInvoker>of("cat", arguments -> {
+                Map.of("cat", arguments -> {
                     throw new IllegalStateException("boom");
                 }));
 
