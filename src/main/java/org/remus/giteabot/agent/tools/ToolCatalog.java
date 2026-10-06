@@ -256,14 +256,19 @@ public class ToolCatalog {
             // ---- agent-control tool (dispatched before the tool families) ----
             entry("execute-code", ToolKind.AGENT_CONTROL,
                     EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
-                    "Run a short Python program that can call your available read-only tools "
-                            + "and print one compact result. Use it when several steps need no "
-                            + "further reasoning: loops, filtering, sorting, parsing, "
-                            + "aggregation, calculations or repeated tool calls. Intermediate "
-                            + "tool results stay outside your context, so this is cheaper than "
-                            + "calling those tools one per turn. Discover what you may call with "
-                            + "tools.list() and tools.describe(name), then call it with "
-                            + "tools.call(name, arguments). Print the final result.",
+                    "Run a Python program that can call the tools available in this request "
+                            + "and print one compact result. Reach for it when the answer takes "
+                            + "more than one tool call, or a step between them: reading several "
+                            + "files and comparing what they declare, searching the tree and "
+                            + "keeping only the hits that matter, distilling a long result down "
+                            + "to the fields you need, counting or grouping matches, checking one "
+                            + "property across many files. Only what you print comes back, so a "
+                            + "result you would otherwise read in full stays out of your context "
+                            + "\u2014 but a single read or search is still cheaper as a direct "
+                            + "call. In the program, tools.list() shows what you may call, "
+                            + "tools.describe(name) its arguments, and tools.call(name, "
+                            + "arguments) calls it \u2014 a tool outside that set is refused. "
+                            + "print() hands the answer back.",
                     objectSchema(
                             prop("code", "string", "Python source to execute."),
                             required("code")))
