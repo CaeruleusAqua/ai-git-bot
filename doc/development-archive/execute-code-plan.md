@@ -496,7 +496,12 @@ sites use inline literals matching the shipped defaults.
 ### 3.11 Prompt guidance
 
 LLM-facing text stays English and lives in the classpath prompt templates — not in a DB
-`system_prompts` row, which would cost a migration and get clobbered by the next blunt `UPDATE`.
+`system_prompts` row, which would cost a migration and get clobbered by the next blunt `UPDATE`. As built, the guidance is not in the templates at all:
+`SystemPromptAssembler` appends a short `## Running code` block when the bot's whitelist contains
+`execute-code` (a `null` whitelist counts as every catalog tool, that class's own semantics), so all
+three prompt kinds and every surface share one wording, and nothing is duplicated from the tool's
+description. It is deliberately capability-neutral — *the tools you can see* — because a program's
+reach is whatever the run's role advertises.
 Add the guidance to all three native templates
 (`src/main/resources/prompts/native/{issue-agent,writer-agent,e2e-agent}-tool-protocol.md`):
 
@@ -850,11 +855,13 @@ request.
 
 Two sequencing corrections made while implementing, both to avoid shipping a hazard:
 
-- **The five PR-workflow `ALLOWED_TOOLS` sets moved out of phase 2.** Those sets are hardcoded, so
-  adding `execute-code` there advertises it to those agents' models *unconditionally*, while the
-  decorator that would handle a call does not exist yet. The four `AgentLoop` surfaces are safe to
-  register now because the bot whitelist is the gate and no `bot_tool_selections` row is seeded, so
-  nothing is advertised until an operator opts in. The five edits land with the decorator.
+- **The five PR-workflow `ALLOWED_TOOLS` sets keep only their workflow tools, permanently.** The
+  earlier plan was to add `execute-code` to them and let a decorator handle the call. That was wrong
+  twice over: it would have made a global tool look workflow-specific, and a decorator is a new layer
+  these runs do not need. Those sets stay as they are, and the four surfaces gain the catalogue's
+  globals — `execute-code` among them — the way every other surface does (see the design note at the
+  end of this section). The four `AgentLoop` surfaces are unaffected: the bot whitelist is their gate
+  and no `bot_tool_selections` row is seeded, so nothing is advertised until an operator opts in.
 - **`pr-diff` needs no special case, and got none.** It is `ToolKind.CONTEXT` with roles
   `CODING` + `WRITER` and reads `ToolCallContext.diffSummary`, which is null outside a PR-review
   context. Under the removed read-only filter it needed the phase-3 fix of being dropped when
@@ -901,6 +908,20 @@ Phase 3 (the execution engine) added these, each recorded because the plan's wor
   router proves the arguments arrive flattened, a mock proves the whitelist gates programs too, and
   two more prove `execute-code` is refused inside a program and that a bot without the tool never
   reaches the sandbox.
+
+**The four workflow surfaces, as designed (not yet built).** i18n, readme-sync, unit-test and e2e
+select from their own hardcoded sets and hand every name to their own executor, so no catalogue tool
+reaches them — not `execute-code`, not `rg`, not `find`. Bringing a surface in line means, per run:
+it computes the bot's own selection (`BotToolSelectionService.allowedBuiltinTools(
+bot.getToolConfiguration())`) and the filtered MCP catalog, and passes both down; it advertises the
+union of its own tools (`nativeDescriptors(PR_WORKFLOW, null, <its names>)`) and the catalogue's
+(`nativeDescriptors(WRITER, mcpToolCatalog, <the bot's names>)`); it builds one `AgentToolRouter` per
+run; and its dispatch becomes two-way — a name in its own set goes to its executor, anything else to
+the router with the run's own `ToolCallContext`. `Mode.WRITER` is the mode in all four, because the
+gate is the role: these are read-only catalogue surfaces, so a bot's wider selection does not widen
+the run, while `execute-code` is offered regardless — it is served before the mode's handler switch,
+and the program it runs sees only what that mode advertises. Order: readme-sync first (two tools, one
+runner), then i18n, unit-test, e2e.
 
 **Superseded wording.** Where §3.6, §4–§7, the criteria table and the ADRs still name
 `agent.code-execution.enabled`/`hardened`/`network`/`max-output-size`/`mcp-deny-tools`,

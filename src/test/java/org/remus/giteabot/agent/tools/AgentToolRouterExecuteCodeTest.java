@@ -1,7 +1,10 @@
 package org.remus.giteabot.agent.tools;
 
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.remus.giteabot.agent.codeexecution.CodeExecutionScope;
+import org.remus.giteabot.agent.codeexecution.ProcessPythonExecutionService;
 import org.remus.giteabot.agent.codeexecution.PythonExecutionOutcome;
 import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.model.ImplementationPlan;
@@ -21,6 +24,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -41,6 +45,23 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class AgentToolRouterExecuteCodeTest {
 
     private static final AgentConfigProperties CONFIG = new AgentConfigProperties();
+
+    /** Detected once: this is the only test here that needs a real interpreter. */
+    private static boolean pythonAvailable;
+
+    @BeforeAll
+    static void detectPython() {
+        try {
+            Process process = new ProcessBuilder("python3", "--version")
+                    .redirectErrorStream(true).start();
+            pythonAvailable = process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0;
+        } catch (IOException e) {
+            pythonAvailable = false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            pythonAvailable = false;
+        }
+    }
 
     /** A stand-in for the sandbox: it makes one nested call and hands the answer straight back. */
     private static final class Program implements PythonExecutionService {
@@ -175,5 +196,28 @@ class AgentToolRouterExecuteCodeTest {
 
         assertThat(result.success()).isFalse();
         assertThat(program.advertised).isNull();
+    }
+
+    @Test
+    void aRealProgramRunsThroughTheDispatchAndPrintsItsNestedCall() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path workspace = Files.createTempDirectory("router-real-python");
+        Files.writeString(workspace.resolve("Main.java"), "class Main {}\n");
+        ToolExecutionService tools =
+                new ToolExecutionService(CONFIG, new ToolCatalog(CONFIG), mock(WorkspaceService.class));
+        String program = """
+                import ai_git_bot
+
+                result = ai_git_bot.tools.call("cat", {"path": "Main.java"})
+                print(result["output"])
+                """;
+
+        ToolResult result = router(tools, botWithExecuteCode(),
+                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
+
+        // The file's text made it: python -> bridge -> router -> the real cat -> back out of stdout.
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("class Main {}");
     }
 }
