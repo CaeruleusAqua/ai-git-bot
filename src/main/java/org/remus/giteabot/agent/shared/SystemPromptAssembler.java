@@ -117,7 +117,39 @@ public class SystemPromptAssembler {
         if (mode != ToolingMode.NATIVE) {
             sb.append(mcpToolPromptRenderer.render(mcpToolCatalog));
         }
+        if (offersCodeExecution(allowedBuiltinTools)) {
+            sb.append("\n\n").append(CODE_EXECUTION_GUIDANCE);
+        }
         return sb.toString();
+    }
+
+    /** The tool this guidance is about; named here because the assembler sits above the catalog. */
+    private static final String CODE_EXECUTION_TOOL = "execute-code";
+
+    /**
+     * Appended only when the bot has {@code execute-code} on its whitelist.
+     *
+     * <p>The tool's own description carries its API. This carries when to reach for it, which is a
+     * strategy question rather than an interface one, and it is paid for on every round of every run
+     * that has the tool — so it stays short and it does not sell the tool.</p>
+     *
+     * <p>Deliberately capability-neutral: "the tools you can see" is the program's actual surface on
+     * a read-only run and on a writable one alike, so this text never promises a reach the run's role
+     * does not have.</p>
+     */
+    private static final String CODE_EXECUTION_GUIDANCE = """
+            ## Running code
+
+            The `execute-code` tool runs a Python program that can call the tools you can see. Reach for it when the work is iterative or would otherwise take several tool calls: gather and filter inside the program, and only what it prints enters the conversation.
+
+            A tool you cannot call is one the program cannot call either, and its output is size-capped — so print what matters.""";
+
+    /**
+     * Whether the bot has the code-execution tool selected. A {@code null} set means "no whitelist
+     * configured — render every catalog tool" (see {@link #assemble}), which includes this one.
+     */
+    private static boolean offersCodeExecution(Set<String> allowedBuiltinTools) {
+        return allowedBuiltinTools == null || allowedBuiltinTools.contains(CODE_EXECUTION_TOOL);
     }
 
     private String renderLegacyProtocol(ToolCatalog toolCatalog,

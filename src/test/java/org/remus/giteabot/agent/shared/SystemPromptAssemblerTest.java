@@ -105,4 +105,32 @@ class SystemPromptAssemblerTest {
                 McpToolCatalog.empty(), ToolingMode.LEGACY, PromptKind.ISSUE_AGENT);
         assertFalse(out.contains("Available MCP tools"));
     }
+
+    @Test
+    void nativeMode_appendsTheCodeExecutionGuidanceWhenTheToolIsSelected() {
+        String out = new SystemPromptAssembler().assemble(CLEAN_BASE, toolCatalog,
+                Set.of("cat", "execute-code"), McpToolCatalog.empty(), ToolingMode.NATIVE,
+                PromptKind.ISSUE_AGENT);
+
+        assertTrue(out.contains("## Running code"));
+        assertTrue(out.contains("the tools you can see"));
+    }
+
+    @Test
+    void nativeMode_leavesTheGuidanceOutWhenTheToolIsNotSelected() {
+        String out = new SystemPromptAssembler().assemble(CLEAN_BASE, toolCatalog,
+                Set.of("cat", "rg"), McpToolCatalog.empty(), ToolingMode.NATIVE,
+                PromptKind.ISSUE_AGENT);
+
+        assertFalse(out.contains("## Running code"));
+        assertFalse(out.contains("execute-code"));
+    }
+
+    @Test
+    void anUnconfiguredWhitelistIsTreatedAsEveryTool() {
+        String out = new SystemPromptAssembler().assemble(CLEAN_BASE, toolCatalog, null,
+                McpToolCatalog.empty(), ToolingMode.NATIVE, PromptKind.ISSUE_AGENT);
+
+        assertTrue(out.contains("## Running code"));
+    }
 }
