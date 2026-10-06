@@ -92,7 +92,7 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
      | `ollama` | `http://localhost:11434` | *(user-configured)* |
      | `llamacpp` | `http://localhost:8081` | *(user-configured)* |
      
-   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups. OpenRouter uses its read-only official URL.
+   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups. OpenRouter uses a read-only, region-derived official URL.
    - **API Key**: Your API key (encrypted at rest when `APP_ENCRYPTION_KEY` is configured; not needed for Ollama or llama.cpp)
    - **API Version**: API version string (Anthropic only, e.g., `2023-06-01`)
    - **Model**: Select from the dropdown for suggested models, or type a custom model name
@@ -119,12 +119,13 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
 
 #### OpenRouter
 
-- Select **openrouter**, enter an **inference API key**, choose a suggested model or enter an exact model ID (usually `author/model`), and set your response/context limits. Suggestions include `openrouter/auto` and recent models from the [most-popular list](https://openrouter.ai/models?order=most-popular); custom model IDs remain supported. No model catalog request is needed for inference.
-- The API root is fixed to `https://openrouter.ai/api`; custom proxies use the generic `openai` provider.
-- When entering or replacing a key, the server checks `/v1/key` at the official host and rejects management/provisioning keys. Missing or invalid key-type flags fail closed. When `allowed_data_regions` is present, it must be an array containing `global`; an omitted field is accepted on the fixed global route. See the [OpenRouter key response schema](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key). Validation runs outside database transactions. HTTP redirects are disabled for key checks and inference.
+- Select **openrouter**, enter an **inference API key**, choose a suggested model or enter an exact model ID (usually `author/model`), and set your response/context limits. Suggestions are bundled examples, not a live catalog or availability guarantee; check the current [model catalog](https://openrouter.ai/models?order=most-popular) and enter another model ID when needed. Custom model IDs remain supported without changing configuration files or requesting the catalog during inference.
+- Configure **Routing and privacy**: Global (default), EU or US. EU/US are Enterprise in-region routes and require account eligibility. The API root is fixed by the selected region; custom proxies use the generic `openai` provider.
+- When entering or replacing a key, the server checks `/v1/key` at the selected official host, rejects management/provisioning keys, and verifies the region is allowed. Missing or invalid key-type flags fail closed. An omitted `allowed_data_regions` is accepted only for Global; EU/US require an explicit matching entitlement. Explicit restrictions must be an array containing the selected region. See the [OpenRouter key response schema](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key). Validation runs outside database transactions. HTTP redirects are disabled for key checks and inference.
 - Leave the key blank on edit to keep it **only for the same provider**. A provider change requires a newly entered key or an explicit **Clear** for providers that allow keyless saves. Switching an existing generic OpenRouter integration from `openai` to `openrouter` therefore requires re-entering its key. Keys use the existing encrypted storage when `APP_ENCRYPTION_KEY` is configured.
-- Existing OpenRouter keys are checked with `/v1/key` when first entered or replaced, not on every settings edit. To recheck a key, enter it again. OpenRouter integrations cannot be saved without a key, including after using **Clear**; enter a replacement before saving.
-- Requests use `data_collection=deny`, `zdr=false`, `require_parameters=true` and `allow_fallbacks=false`. A missing compatible route fails explicitly rather than weakening the policy.
+- Existing OpenRouter keys are not rechecked on ordinary settings edits. Changing the region rechecks the retained key against the new route; to recheck a key otherwise, enter it again. OpenRouter integrations cannot be saved without a key, including after using **Clear**; enter a replacement before saving.
+- **Provider data collection** defaults to **Deny**; **Require zero data retention (ZDR)** defaults to off. Requests always require the configured parameters and disable provider fallbacks. A missing compatible route fails explicitly rather than weakening the settings.
+- ZDR and data collection are independent routing filters. When ZDR is enabled, only ZDR endpoints are eligible even if data collection is set to **Allow**; **Allow** does not override ZDR. Both selections are preserved rather than silently normalised.
 - Requests explicitly disable the documented OpenRouter [plugins](https://openrouter.ai/docs/guides/features/plugins), including [automatic context compression](https://openrouter.ai/docs/guides/features/message-transforms) and the [Pareto Router](https://openrouter.ai/docs/guides/routing/routers/pareto-router). Account-level **Prevent overrides** settings can enforce plugins anyway; configure the OpenRouter account without forced plugins and select a concrete model ID for predictable review behavior.
 - Requests use `max_tokens`; the generic OpenAI integration continues to use `max_completion_tokens`. The `standard` flavor leaves reasoning at the provider default. Unsupported explicit flavors are rejected.
 - Native tool continuations preserve opaque `reasoning_details` in memory, separately from visible answers and session history. The existing, explicitly enabled `AI_USAGE_RAW_PAYLOADS_ENABLED` audit option also captures these provider payloads; it is off by default.
@@ -217,7 +218,13 @@ The limit is applied per AI integration, so a busy integration never holds back 
 
 ### Editing an AI Integration
 
-Click the **Edit** button on the integration's row. When editing, leave the API Key field blank to keep the existing stored value.
+Click the **Edit** button on the integration's row. Leave the API Key field blank to keep the existing stored value **only when the provider stays the same**.
+
+Changing **any** provider requires a newly entered API key or an explicit **Clear** of the stored key. This also applies when switching to a keyless provider such as Ollama or llama.cpp: click **Clear** before saving so the previous provider's credential cannot be reused. OpenRouter still requires a replacement key and does not allow a keyless save.
+
+Every save requires a registered **Provider Type**. Missing, blank or unknown provider types are rejected, including requests sent outside the form.
+
+Empty, non-numeric or overflowing token/worker-limit fields show a validation flash message without saving the integration. Worker-limit-only errors keep the specific `0`–`20` message. Malformed OpenRouter region, data-collection or boolean values still return HTTP 400; submitted credentials are not included in these validation messages.
 
 ### Deleting an AI Integration
 

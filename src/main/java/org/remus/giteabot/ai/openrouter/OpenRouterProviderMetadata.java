@@ -20,7 +20,6 @@ import java.util.List;
 /** First-class OpenRouter configuration and credential validation. */
 @Component
 public class OpenRouterProviderMetadata implements AiProviderMetadata {
-    private static final String API_ROOT = "https://openrouter.ai/api";
     // Popular model suggestions checked at https://openrouter.ai/models?order=most-popular on 2026-10-05.
     public static final List<String> SUGGESTED_MODELS = List.of(
             "openrouter/auto",
@@ -37,7 +36,7 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
     }
 
     @Override public String getProviderType() { return "openrouter"; }
-    @Override public String getDefaultApiUrl() { return API_ROOT; }
+    @Override public String getDefaultApiUrl() { return OpenRouterRegion.GLOBAL.getApiRoot(); }
     @Override public List<String> getSuggestedModels() { return SUGGESTED_MODELS; }
     @Override public boolean requiresApiKey() { return true; }
 
@@ -48,9 +47,14 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
     }
 
     @Override
+    public boolean requiresRetainedKeyValidation(AiIntegration previous, AiIntegration updated) {
+        return previous.getOpenRouterRegion() != updated.getOpenRouterRegion();
+    }
+
+    @Override
     public void validateConfiguration(AiIntegration integration, String apiKey) {
         validateSettings(integration);
-        integration.setApiUrl(API_ROOT);
+        integration.setApiUrl(integration.getOpenRouterRegion().getApiRoot());
         if (apiKey == null || apiKey.isBlank()) {
             if (integration.getId() == null || integration.getApiKey() == null || integration.getApiKey().isBlank()) {
                 throw new IllegalArgumentException("OpenRouter requires an inference API key");
@@ -75,17 +79,17 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
             throw new IllegalArgumentException("OpenRouter key is not a verified inference key");
         }
         JsonNode allowedRegions = data.get("allowed_data_regions");
-        if (allowedRegions == null) {
+        if (allowedRegions == null && integration.getOpenRouterRegion() == OpenRouterRegion.GLOBAL) {
             return;
         }
         boolean allowed = false;
-        if (allowedRegions.isArray()) {
+        if (allowedRegions != null && allowedRegions.isArray()) {
             for (JsonNode region : allowedRegions) {
-                allowed |= region.isString() && region.asString().equals("global");
+                allowed |= region.isString() && region.asString().equals(integration.getOpenRouterRegion().getDataRegion());
             }
         }
         if (!allowed) {
-            throw new IllegalArgumentException("The OpenRouter key/account does not allow global routing");
+            throw new IllegalArgumentException("The OpenRouter key/account does not allow the selected region");
         }
     }
 
@@ -96,7 +100,7 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
             throw new IllegalArgumentException("OpenRouter requires an inference API key");
         }
         return restClientBuilder.clone()
-                .baseUrl(API_ROOT)
+                .baseUrl(integration.getOpenRouterRegion().getApiRoot())
                 .defaultHeader("Authorization", "Bearer " + decryptedApiKey)
                 .defaultHeader("Content-Type", "application/json")
                 .defaultStatusHandler(HttpStatusCode::is3xxRedirection, (request, response) -> {
@@ -109,10 +113,14 @@ public class OpenRouterProviderMetadata implements AiProviderMetadata {
     public AiClient createClient(RestClient restClient, AiIntegration integration) {
         validateSettings(integration);
         return new OpenRouterClient(restClient, integration.getModel(), integration.getMaxTokens(),
-                !integration.isUseLegacyToolCalling());
+                !integration.isUseLegacyToolCalling(), new OpenRouterRequest.ProviderPreferences(true, false,
+                integration.getOpenRouterDataCollection().getWireValue(), integration.isOpenRouterZdr()));
     }
 
     private void validateSettings(AiIntegration integration) {
+        if (integration.getOpenRouterRegion() == null || integration.getOpenRouterDataCollection() == null) {
+            throw new IllegalArgumentException("Select a valid OpenRouter region and data-collection policy");
+        }
         if (integration.getModel() == null || integration.getModel().isBlank()
                 || integration.getMaxTokens() <= 0 || integration.getContextWindowTokens() <= 0) {
             throw new IllegalArgumentException("OpenRouter requires a model ID and positive token limits");
