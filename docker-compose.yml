@@ -13,7 +13,7 @@ services:
       # Encryption key for API keys and SSH private keys stored in the database
       # (optional for tokens, required for SSH private keys)
       APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
-      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-https://github-bot.gitbot.eu}
       # Web UI login: native (default) or oauth (OAuth/OIDC discovery).
       GITEABOT_SECURITY_LOGIN_METHOD: ${GITEABOT_SECURITY_LOGIN_METHOD:-native}
       GITEABOT_SECURITY_OAUTH_CLIENT_ID: ${GITEABOT_SECURITY_OAUTH_CLIENT_ID:-}
@@ -26,8 +26,8 @@ services:
       AGENT_CONTEXT_MAX_ISSUE_COMMENTS: ${AGENT_CONTEXT_MAX_ISSUE_COMMENTS:-50}
       AGENT_CONTEXT_MAX_ISSUE_COMMENTS_CHARS: ${AGENT_CONTEXT_MAX_ISSUE_COMMENTS_CHARS:-20000}
       AGENT_CONTEXT_MAX_SINGLE_ISSUE_COMMENT_CHARS: ${AGENT_CONTEXT_MAX_SINGLE_ISSUE_COMMENT_CHARS:-4000}
-      AGENT_BUDGET_MAX_CONTENT_ROUNDS: 20
-      AGENT_BUDGET_MAX_ROUNDS: 20
+      AGENT_BUDGET_MAX_CONTENT_ROUNDS: 100
+      AGENT_BUDGET_MAX_ROUNDS: 100
       AGENT_BUDGET_MAX_CONTEXT_TOOL_REQUESTS_PER_ROUND: 20
       # Technical-writer agent: repository-context rounds per run; the round after
       # them is the wrap-up round (tools refused, the writer must answer).

@@ -222,7 +222,7 @@ final class PythonToolBridge {
         if (value == null || value.isNull()) {
             return null;
         }
-        String text = value.asText();
+        String text = value.asString();
         return text == null || text.isBlank() ? null : text.strip();
     }
 

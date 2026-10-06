@@ -294,10 +294,10 @@ public class ToolCatalog {
                             + "to the fields you need, counting or grouping matches, checking one "
                             + "property across many files. Only what you print comes back, so a "
                             + "result you would otherwise read in full stays out of your context "
-                            + "\u2014 but a single read or search is still cheaper as a direct "
+                            + "— but a single read or search is still cheaper as a direct "
                             + "call. In the program, tools.list() shows what you may call, "
                             + "tools.describe(name) its arguments, and tools.call(name, "
-                            + "arguments) calls it \u2014 a tool outside that set is refused. "
+                            + "arguments) calls it — a tool outside that set is refused. "
                             + "The program runs in its own empty working directory, so the "
                             + "checkout is not on its filesystem: read repository files with "
                             + "tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
@@ -408,11 +408,6 @@ public class ToolCatalog {
     /** Names of the agent-control tools. Unfiltered. */
     public List<String> agentControlToolNames() {
         return namesOf(ToolKind.AGENT_CONTROL);
-    }
-
-    /** Names of agent-control tools the bot may invoke. See {@link #contextToolNames(Set)} for whitelist semantics. */
-    public List<String> agentControlToolNames(Set<String> allowed) {
-        return filterNames(agentControlToolNames(), allowed);
     }
 
     /**

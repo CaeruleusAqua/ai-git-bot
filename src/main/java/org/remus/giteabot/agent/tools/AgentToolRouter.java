@@ -192,11 +192,11 @@ public class AgentToolRouter {
             return new ToolResult(false, -1, "", "execute-code is not available in this deployment");
         }
         List<String> args = context.args();
-        if (args.isEmpty() || args.get(0).isBlank()) {
+        if (args.isEmpty() || args.getFirst().isBlank()) {
             return new ToolResult(false, -1, "",
                     "execute-code needs the Python program as its first argument");
         }
-        String program = args.get(0);
+        String program = args.getFirst();
         List<ToolDescriptor> surface = availableTools(mode);
         log.info("execute-code: running a {}-char program against {} available tool(s)",
                 program.length(), surface.size());

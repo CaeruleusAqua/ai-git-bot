@@ -336,11 +336,6 @@ public final class TriageAgentStrategy implements AgentStrategy {
         return sb.toString();
     }
 
-    /**
-     * Converts a native {@link ToolCall} into the positional-args
-     * {@link ImplementationPlan.ToolRequest} that {@link AgentToolRouter}
-     * expects. Only the read-only WRITER tool schemas are relevant here.
-     */
     /** See {@link ToolArguments}: the mapping is shared, never copied per agent. */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
         return ImplementationPlan.ToolRequest.builder()
