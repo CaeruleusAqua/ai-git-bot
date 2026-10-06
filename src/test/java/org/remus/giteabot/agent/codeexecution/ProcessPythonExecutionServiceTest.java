@@ -128,6 +128,31 @@ class ProcessPythonExecutionServiceTest {
         assertThat(relayed).hasValue(1);
     }
 
+    /**
+     * The tool description tells the model to call {@code tools.call(...)} — the program's own
+     * namespace carries that name, so no import is needed. A program that writes it and gets a
+     * NameError loses the round and reads as "execute-code is broken".
+     */
+    @Test
+    void theToolSurfaceIsBoundWithoutAnImport() {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        String program = """
+                result = tools.call("cat", {"path": "README.md", "startLine": None, "endLine": None})
+                print("tool said: " + result["output"])
+                """;
+        AtomicInteger relayed = new AtomicInteger();
+
+        PythonExecutionOutcome outcome = service(config -> { }).execute(program,
+                scope(advertised("cat"), (tool, arguments) -> {
+                    relayed.incrementAndGet();
+                    return ok("FILE-CONTENT");
+                }));
+
+        assertThat(outcome.error()).isEmpty();
+        assertThat(outcome.output()).isEqualTo("tool said: FILE-CONTENT\n");
+        assertThat(relayed).hasValue(1);
+    }
+
     @Test
     void aRefusedToolIsReadableFromTheProgramWithoutAnException() {
         Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
@@ -202,6 +227,67 @@ class ProcessPythonExecutionServiceTest {
         assertThat(outcome.success()).isTrue();
         assertThat(outcome.output()).contains("[output truncated at 1024 chars]");
         assertThat(outcome.output().length()).isLessThanOrEqualTo(1024 + 40);
+    }
+
+    /**
+     * The contract the model depends on: everything the program prints is the result, in order.
+     * The bridge has its own channel, so a program may print whatever it likes.
+     */
+    @Test
+    void everythingTheProgramPrintsIsTheResult() {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+
+        PythonExecutionOutcome outcome = service(config -> { }).execute("""
+                print("CHARS", 11)
+                print("LINES", 1)
+                """, scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.output()).isEqualTo("CHARS 11\nLINES 1\n");
+    }
+
+    /**
+     * A program that fails is still a program that printed. Dropping the output would leave an
+     * empty result, which reads as a program that chose to say nothing.
+     */
+    @Test
+    void theLinesPrintedBeforeAFailureStillReachTheModel() {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+
+        PythonExecutionOutcome outcome = service(config -> { }).execute("""
+                print("got this far")
+                raise SystemExit("boom")
+                """, scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(outcome.exitCode()).isEqualTo(1);
+        assertThat(outcome.output()).contains("got this far");
+        assertThat(outcome.error()).contains("code 1");
+        // What the model actually reads, not only what the sandbox returned.
+        assertThat(new ToolResult(outcome.success(), outcome.exitCode(),
+                outcome.output(), outcome.error()).formatForAi())
+                .contains("got this far");
+    }
+
+    /**
+     * The program's working directory is its own scratch space, not the checkout: a repository read
+     * goes through the tool surface, where the bot's whitelist decides what exists. Making the
+     * checkout reachable by path would hand every program reads its tool configuration never granted
+     * — which is why the tool description spells out {@code tools.call("cat", ...)} instead of
+     * {@code open()}.
+     */
+    @Test
+    void theProgramsWorkingDirectoryHoldsNothingButTheSandbox() {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+
+        PythonExecutionOutcome outcome = service(config -> { })
+                .execute("import os\nprint(sorted(os.listdir('.')))",
+                        scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.output())
+                .contains("ai_git_bot.py")
+                .contains("bootstrap.py")
+                .contains("program.py");
     }
 
     @Test

@@ -9,10 +9,10 @@ import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
-import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.shared.ToolFailures;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
 import org.remus.giteabot.agent.tools.ToolCallContext;
+import org.remus.giteabot.agent.tools.ToolArguments;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.ai.ChatTurn;
@@ -341,32 +341,13 @@ public final class TriageAgentStrategy implements AgentStrategy {
      * {@link ImplementationPlan.ToolRequest} that {@link AgentToolRouter}
      * expects. Only the read-only WRITER tool schemas are relevant here.
      */
+    /** See {@link ToolArguments}: the mapping is shared, never copied per agent. */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
-        List<String> args = new ArrayList<>();
-        JsonNode root = call.args();
-        if (root != null && root.isObject()) {
-            if (McpTools.looksLikeMcpTool(call.name())) {
-                // MCP: pass the whole arguments object through as a single JSON blob.
-                args.add(root.toString());
-            } else {
-                JsonNode varargs = root.get("args");
-                if (varargs != null && varargs.isArray()) {
-                    varargs.forEach(node -> args.add(asString(node)));
-                } else {
-                    addIfPresent(root, "path", args);
-                    addIfPresent(root, "branch", args);
-                    addIfPresent(root, "startLine", args);
-                    addIfPresent(root, "endLine", args);
-                    if (args.isEmpty() && !root.isEmpty()) {
-                        args.add(root.toString());
-                    }
-                }
-            }
-        }
         return ImplementationPlan.ToolRequest.builder()
                 .id(call.id() == null || call.id().isBlank() ? UUID.randomUUID().toString() : call.id())
                 .tool(call.name())
-                .args(args)
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
     }
 
@@ -421,16 +402,5 @@ public final class TriageAgentStrategy implements AgentStrategy {
         }
         JsonNode value = node.get(field);
         return value != null && value.isString() ? value.asString() : null;
-    }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
-    }
-
-    private static String asString(JsonNode node) {
-        return node.isString() ? node.asString() : node.toString();
     }
 }

@@ -59,10 +59,11 @@ def _harden_imports():
     # _run): it needs the real socket module. Then the blocked modules are dropped from
     # sys.modules and the guard installed, so a program cannot reach them by name either —
     # the bridge keeps its own reference.
-    import ai_git_bot  # noqa: F401  - binds the tool surface for the program
+    import ai_git_bot  # noqa: F401  - returns the tool surface bound into the program
     for name in [n for n in sys.modules if n.split(".")[0] in _BLOCKED]:
         del sys.modules[name]
     sys.meta_path.insert(0, _ImportGuard())
+    return ai_git_bot
 
 
 def _confine_path():
@@ -78,7 +79,7 @@ def _run():
     # Order matters: the bridge must be importable (path) before it is imported, and imported
     # before the guard that would refuse its own imports.
     _confine_path()
-    _harden_imports()
+    bridge = _harden_imports()
     sys.setrecursionlimit(_RECURSION_LIMIT)
 
     if _USER_PROGRAM is None:
@@ -87,8 +88,12 @@ def _run():
         source = handle.read()
     # The program sees a normal argv, not this bootstrap's.
     sys.argv = [_USER_PROGRAM]
+    # `tools` is bound up front because it is the name the tool description tells the model to
+    # call (tools.list / tools.describe / tools.call). A name the program must import first is a
+    # name it forgets, and the forgotten import costs a whole round to a NameError traceback
+    # instead of an answer.
     exec(compile(source, _USER_PROGRAM, "exec"),
-         {"__name__": "__main__", "__file__": _USER_PROGRAM})
+         {"__name__": "__main__", "__file__": _USER_PROGRAM, "tools": bridge.tools})
 
 
 if __name__ == "__main__":

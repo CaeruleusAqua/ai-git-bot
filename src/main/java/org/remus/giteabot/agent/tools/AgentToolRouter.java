@@ -173,7 +173,8 @@ public class AgentToolRouter {
                 ImplementationPlan.ToolRequest.builder()
                         .id("execute-code-nested")
                         .tool(tool)
-                        .args(ToolArguments.toPositional(tool, arguments))
+                        .args(ToolArguments.toPositional(tool, arguments,
+                                catalog.schemaOf(tool).orElse(null)))
                         .build(),
                 base.diffSummary());
         return execute(mode, nested, base.tool());

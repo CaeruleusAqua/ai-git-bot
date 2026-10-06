@@ -298,6 +298,10 @@ public class ToolCatalog {
                             + "call. In the program, tools.list() shows what you may call, "
                             + "tools.describe(name) its arguments, and tools.call(name, "
                             + "arguments) calls it \u2014 a tool outside that set is refused. "
+                            + "The program runs in its own empty working directory, so the "
+                            + "checkout is not on its filesystem: read repository files with "
+                            + "tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
+                            + "tools.call(\"rg\", {\"args\": [\"pattern\"]}), not with open(). "
                             + "print() hands the answer back.",
                     objectSchema(
                             prop("code", "string", "Python source to execute."),
@@ -467,6 +471,16 @@ public class ToolCatalog {
             return Optional.of(entry.usageHint());
         }
         return Optional.ofNullable(VALIDATION_USAGE_HINTS.get(name));
+    }
+
+    /**
+     * The native JSON schema of a built-in tool, whose property order is the order its executor
+     * reads positional arguments in. Empty for a tool the catalog does not declare — validation
+     * and MCP tools come from configuration, and the classification-only aliases have no schema.
+     */
+    public Optional<JsonNode> schemaOf(String tool) {
+        Entry entry = byName.get(normalize(tool));
+        return Optional.ofNullable(entry != null ? entry.schema() : null);
     }
 
     // ---------------------------------------------------------------- queries

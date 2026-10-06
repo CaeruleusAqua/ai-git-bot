@@ -382,7 +382,8 @@ public final class CodingAgentStrategy implements AgentStrategy {
                         ? java.util.UUID.randomUUID().toString()
                         : call.id())
                 .tool(call.name())
-                .args(ToolArguments.toPositional(call.name(), call.args()))
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
     }
 

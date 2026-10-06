@@ -220,4 +220,97 @@ class AgentToolRouterExecuteCodeTest {
         assertThat(result.success()).isTrue();
         assertThat(result.output()).contains("class Main {}");
     }
+
+    /**
+     * A program submitted the way the model submits it, with nothing stubbed between the argument
+     * object and the interpreter. That is the seam the bug lived in: every other test in this class
+     * hands the program over positionally, so the raw-JSON fallback passed for a program that had
+     * chosen to print nothing.
+     */
+    @Test
+    void aProgramSubmittedAsTheModelSubmitsItPrintsItsOutput() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path workspace = Files.createTempDirectory("router-model-args");
+        ToolCatalog catalog = new ToolCatalog(CONFIG);
+        ToolCallContext context = new ToolCallContext("owner", "repo", 1L, workspace,
+                ImplementationPlan.ToolRequest.builder()
+                        .id("tool-1")
+                        .tool("execute-code")
+                        .args(ToolArguments.toPositional("execute-code",
+                                node("{\"code\": \"print('CHARS', 11)\"}"),
+                                catalog.schemaOf("execute-code").orElse(null)))
+                        .build(),
+                null);
+
+        ToolResult result = router(mock(ToolExecutionService.class), botWithExecuteCode(),
+                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                .execute(AgentToolRouter.Mode.CODING, context);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("CHARS 11");
+    }
+
+    /**
+     * The shape that produced an empty result in the field: read a repository file, print a couple of
+     * statistics about it. The checkout is not on the program's filesystem — the sandbox has its own
+     * empty working directory — so the file is read through the tool surface like everything else.
+     */
+    @Test
+    void aProgramReadsARepositoryFileThroughTheToolsAndPrintsItsStatistics() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path workspace = Files.createTempDirectory("router-repo-stats");
+        Files.writeString(workspace.resolve("SWREQ.md"), "one\ntwo\nthree\n");
+        ToolExecutionService tools =
+                new ToolExecutionService(CONFIG, new ToolCatalog(CONFIG), mock(WorkspaceService.class));
+        String program = """
+                import ai_git_bot
+
+                data = ai_git_bot.tools.call("cat", {"path": "SWREQ.md"})["output"]
+                print("CHARS", len(data))
+                print("LINES", data.count(chr(10)))
+                """;
+
+        ToolResult result = router(tools, botWithExecuteCode(),
+                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("CHARS ").contains("LINES ");
+    }
+
+    /**
+     * The sweep the field report was attempting — glob a set of files, read each one, print a summary
+     * — done the way the sandbox supports it: {@code find} lists, {@code cat} reads, both over the
+     * bridge. {@code open()} is not an option, because the program has no checkout of its own; this
+     * pins the recipe in the tool description as one that actually works.
+     */
+    @Test
+    void aProgramSweepsTheCheckoutThroughTheToolSurface() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path workspace = Files.createTempDirectory("router-sweep");
+        Files.createDirectories(workspace.resolve("items"));
+        Files.writeString(workspace.resolve("items/mdeg_110100-11_SWREQ_1.md"), "# One\nalpha\nbravo\n");
+        Files.writeString(workspace.resolve("items/mdeg_110100-11_SWREQ_2.md"), "# Two\ncharlie\n");
+        ToolExecutionService tools =
+                new ToolExecutionService(CONFIG, new ToolCatalog(CONFIG), mock(WorkspaceService.class));
+        // `tools` bare, no import: that is the form the tool description gives the model.
+        String program = """
+                found = tools.call("find", {"args": ["items/mdeg_*_SWREQ_*.md"]})["output"]
+                paths = [line.strip() for line in found.splitlines() if line.strip()]
+                print("item files:", len(paths))
+                for path in paths:
+                    data = tools.call("cat", {"path": path})["output"]
+                    print(path, "lines:", data.count(chr(10)))
+                """;
+
+        ToolResult result = router(tools, Set.of("execute-code", "find", "cat"),
+                new ProcessPythonExecutionService(CONFIG))
+                .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output())
+                .contains("item files: 2")
+                .contains("mdeg_110100-11_SWREQ_1.md");
+    }
+
 }

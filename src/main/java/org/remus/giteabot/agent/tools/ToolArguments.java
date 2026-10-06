@@ -6,16 +6,21 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Converts the JSON argument object of a native tool call into the positional argument
  * vector the built-in executors declare.
  *
- * <p>Single source of truth on purpose: the flattening order has to match the property
- * order of the schemas in {@link ToolCatalog}, and the executors take positional args
- * while the model produces named ones. A second copy of this mapping would drift. Used by
- * {@code CodingAgentStrategy} for direct calls and by the code-execution bridge for
- * nested ones.</p>
+ * <p>The order is read from the tool's own schema in {@link ToolCatalog}, which declares its
+ * properties in the order its executor takes them — so a property is mapped by being declared,
+ * and this class cannot fall behind a tool. Used by {@code CodingAgentStrategy} for direct calls
+ * and by the code-execution bridge for nested ones: one mapping, both paths.</p>
+ *
+ * <p>Falling behind used to be silent. A property this mapping did not know was replaced by the
+ * whole argument object as a single string, and for {@code execute-code} that string is valid
+ * Python — a dict literal. The program ran, printed nothing and exited 0, so the empty result
+ * looked like a program that had chosen to say nothing.</p>
  */
 @Slf4j
 public final class ToolArguments {
@@ -24,17 +29,19 @@ public final class ToolArguments {
     }
 
     /**
-     * Positional arguments for {@code toolName}, or an empty list when the call carried
-     * none. An argument object this class does not recognise is passed through as a single
-     * JSON blob rather than dropped, so the call still reaches its executor with data.
+     * Positional arguments for {@code toolName}, or an empty list when the call carried none.
+     *
+     * @param schema the tool's parameter schema from {@link ToolCatalog#schemaOf(String)}, or
+     *               {@code null} for a tool the catalog does not declare; without it the argument
+     *               object's own shape is all there is to go on.
      */
-    public static List<String> toPositional(String toolName, JsonNode root) {
+    public static List<String> toPositional(String toolName, JsonNode root, JsonNode schema) {
         List<String> args = new ArrayList<>();
         if (root == null || !root.isObject()) {
             return args;
         }
-        // MCP tools accept arbitrary provider-defined schemas (any field name). Flattening
-        // only known property names would silently drop all of them and the MCP server would
+        // MCP tools accept arbitrary provider-defined schemas (any field name). Flattening only
+        // known property names would silently drop all of them and the MCP server would
         // reject the call with a parameter-validation error. Pass the full args object as a
         // single JSON-encoded arg so McpOrchestrationService.parseArguments can turn it back
         // into a Map.
@@ -42,39 +49,41 @@ public final class ToolArguments {
             args.add(root.toString());
             return args;
         }
-        // 1) varargs convention: a top-level "args" array.
+        // Varargs convention: a top-level "args" array, one element per token. This is also the
+        // shape the validation tools are called with — they are declared by configuration, so the
+        // catalog holds no schema whose order could be read.
         JsonNode varargs = root.get("args");
         if (varargs != null && varargs.isArray()) {
             varargs.forEach(node -> args.add(asString(node)));
             return args;
         }
-        // 2) Typed schema (write-file/patch-file/mkdir/delete-file/cat/branch-switcher):
-        //    flatten the known property order into positional args.
-        addIfPresent(root, "path", args);
-        addIfPresent(root, "branch", args);
-        addIfPresent(root, "content", args);
-        addIfPresent(root, "search", args);
-        addIfPresent(root, "replacement", args);
-        addIfPresent(root, "startLine", args);
-        addIfPresent(root, "endLine", args);
-        // 3) Safety net: the whitelist matched nothing but the object did carry fields, so the
-        //    caller is using a tool or schema this mapping does not know. Pass the raw JSON so
-        //    the call still carries data, and warn so the schema drift gets noticed.
+        // Declared properties, in declared order. An unknown field is not passed through here: the
+        // schema is the contract, and a tool that declares a property gets it.
+        JsonNode properties = schema == null ? null : schema.get("properties");
+        if (properties != null && properties.isObject()) {
+            for (Map.Entry<String, JsonNode> property : properties.properties()) {
+                JsonNode value = root.get(property.getKey());
+                if (value == null || value.isMissingNode() || value.isNull()) {
+                    continue;
+                }
+                if (value.isArray()) {
+                    value.forEach(node -> args.add(asString(node)));
+                } else {
+                    args.add(asString(value));
+                }
+            }
+        }
+        // Safety net: the object carried fields but none matched a declared property, so this is a
+        // tool or a schema the catalog does not know. Pass the raw JSON so the call still carries
+        // data, and say so, because the alternative is an executor that reads an argument nobody
+        // sent.
         if (args.isEmpty() && !root.isEmpty()) {
-            log.warn("Tool '{}' called with unrecognised arg fields {} — passing raw JSON. "
-                            + "Update ToolArguments.toPositional if this tool is meant to be "
-                            + "supported natively.",
+            log.warn("Tool '{}' called with fields {} that its schema does not declare — passing "
+                            + "raw JSON. Check the tool's schema in ToolCatalog.",
                     toolName, new ArrayList<>(root.propertyNames()));
             args.add(root.toString());
         }
         return args;
-    }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
     }
 
     private static String asString(JsonNode node) {

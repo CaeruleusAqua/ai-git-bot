@@ -75,9 +75,10 @@ configuration. This means:
   seeds the built-in tool selections (file, context, repository) and then
   attaches every existing bot to it before adding the `NOT NULL` /
   foreign-key constraint.
-- New built-in context-gathering tools shipped in a later release are added
-  to Default by follow-up migrations (V29 seeded `ctags-signatures` /
-  `ctags-deps`, V37 seeded `pr-diff`). Validation tools added through
+- New built-in tools shipped in a later release are added to Default by
+  follow-up migrations (V29 seeded `ctags-signatures` / `ctags-deps` and V37
+  `pr-diff`, both CONTEXT; V56 seeded the `execute-code` control tool, the only
+  AGENT_CONTROL member). Validation tools added through
   `agent.validation.available-tools` and any other built-in tools are
   **not** added to Default automatically — an admin opts in by editing the
   configuration in **System settings → Tool configurations**.
@@ -88,8 +89,8 @@ The Default configuration is protected:
 
 - It **cannot be renamed**.
 - It **cannot be deleted**.
-- Its selection always includes all built-in tools known to the catalog at the
-  time of boot.
+- Its selection is everything the migrations shipped with that release seed —
+  it grows through new migrations, never at boot.
 
 A tool configuration referenced by at least one bot cannot be deleted either —
 the service rejects the request with a clear error and the UI surfaces it.
@@ -205,6 +206,10 @@ application-level code:
    fresh installations and existing Default configurations expose every
    context-gathering tool. (V30 separately backfills `pr-diff` into custom
    configurations used by bots with the agentic-review workflow.)
+4. **V56** adds the `execute-code` control tool (`AGENT_CONTROL`) to the
+   Default configuration. There is no backfill into custom configurations this
+   time — a bot on its own configuration keeps its own choice — and because
+   Default cannot be edited, the row is permanent there.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases
