@@ -78,13 +78,13 @@ class ResolvedToolSetTest {
     @Test
     void without_removesToolAndItsInvoker() {
         ResolvedToolSet set = ResolvedToolSet.of(
-                List.of(tool("cat"), tool("execute_code")),
-                Map.of("cat", ok("c"), "execute_code", ok("e")));
+                List.of(tool("cat"), tool("execute-code")),
+                Map.of("cat", ok("c"), "execute-code", ok("e")));
 
-        ResolvedToolSet trimmed = set.without("execute_code");
+        ResolvedToolSet trimmed = set.without("execute-code");
 
         assertThat(trimmed.list()).extracting(ResolvedTool::name).containsExactly("cat");
-        assertThatThrownBy(() -> trimmed.invoke("execute_code", null))
+        assertThatThrownBy(() -> trimmed.invoke("execute-code", null))
                 .isInstanceOf(ToolNotAllowedException.class);
     }
 

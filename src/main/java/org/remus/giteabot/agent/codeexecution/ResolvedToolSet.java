@@ -11,7 +11,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * The authority for one {@code execute_code} invocation: the tools a Python program may
+ * The authority for one {@code execute-code} invocation: the tools a Python program may
  * name, and the invoker that will run each of them.
  *
  * <p>Built once per execution. A name that is not in here is unreachable rather than

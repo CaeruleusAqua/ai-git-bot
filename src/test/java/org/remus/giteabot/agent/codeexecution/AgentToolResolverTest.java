@@ -78,13 +78,13 @@ class AgentToolResolverTest {
 
     @Test
     void forAgentLoop_excludesAgentControlAndValidationShapedTools() {
-        Set<String> allowed = Set.of("cat", "branch-switcher", "pr-test-run", "preview-status", "mvn");
+        Set<String> allowed = Set.of("cat", "execute-code", "branch-switcher", "pr-test-run", "preview-status", "mvn");
         ResolvedToolSet set = AgentToolResolver.forAgentLoop(
                 newRouter(mock(ToolExecutionService.class), allowed, McpToolCatalog.empty(), null, null),
                 catalog, ToolCatalog.Role.CODING, base(), McpToolAccess.none(), allowed, Set.of());
 
         assertThat(set.list()).extracting(ResolvedTool::name)
-                .doesNotContain("branch-switcher", "pr-test-run", "preview-status", "mvn", "execute_code");
+                .doesNotContain("branch-switcher", "pr-test-run", "preview-status", "mvn", "execute-code");
     }
 
     @Test
@@ -184,12 +184,12 @@ class AgentToolResolverTest {
                 catalog, ToolCatalog.Role.CODING, base(), access, allowed, Set.of());
 
         ToolInvocationResult result = set.invoke("mcp:github:search_issues",
-                JSON.readTree("{\"query\":\"execute_code\"}"));
+                JSON.readTree("{\"query\":\"execute-code\"}"));
 
         assertThat(result.success()).isTrue();
         assertThat(result.output()).isEqualTo("issues");
         verify(orchestration).executeTool(any(), any(), eqStr("mcp:github:search_issues"),
-                eqArgs("{\"query\":\"execute_code\"}"));
+                eqArgs("{\"query\":\"execute-code\"}"));
     }
 
     @Test

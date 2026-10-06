@@ -251,7 +251,22 @@ public class ToolCatalog {
                             + "rejected.",
                     objectSchema(
                             prop("path", "string", "Checkout-relative path of the locale file to delete."),
-                            required("path")))
+                            required("path"))),
+
+            // ---- agent-control tool (dispatched before the tool families) ----
+            entry("execute-code", ToolKind.AGENT_CONTROL,
+                    EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
+                    "Run a short Python program that can call your available read-only tools "
+                            + "and print one compact result. Use it when several steps need no "
+                            + "further reasoning: loops, filtering, sorting, parsing, "
+                            + "aggregation, calculations or repeated tool calls. Intermediate "
+                            + "tool results stay outside your context, so this is cheaper than "
+                            + "calling those tools one per turn. Discover what you may call with "
+                            + "tools.list() and tools.describe(name), then call it with "
+                            + "tools.call(name, arguments). Print the final result.",
+                    objectSchema(
+                            prop("code", "string", "Python source to execute."),
+                            required("code")))
     );
 
     /**
@@ -338,6 +353,16 @@ public class ToolCatalog {
         return filterNames(prWorkflowToolNames(), allowed);
     }
 
+    /** Names of the agent-control tools. Unfiltered. */
+    public List<String> agentControlToolNames() {
+        return namesOf(ToolKind.AGENT_CONTROL);
+    }
+
+    /** Names of agent-control tools the bot may invoke. See {@link #contextToolNames(Set)} for whitelist semantics. */
+    public List<String> agentControlToolNames(Set<String> allowed) {
+        return filterNames(agentControlToolNames(), allowed);
+    }
+
     private List<String> namesOf(ToolKind kind) {
         List<String> out = new ArrayList<>();
         for (Entry e : STATIC_TOOLS) {
@@ -415,7 +440,8 @@ public class ToolCatalog {
             };
         }
         return switch (kind) {
-            case CONTEXT, REPOSITORY, MCP -> DisplayBucket.CONTEXT;
+            // AGENT_CONTROL is silent, so its bucket only keeps this switch exhaustive.
+            case CONTEXT, REPOSITORY, MCP, AGENT_CONTROL -> DisplayBucket.CONTEXT;
             case FILE -> DisplayBucket.MUTATION;
             case VALIDATION, UNKNOWN -> DisplayBucket.VALIDATION;
             default -> throw new IllegalStateException("Unexpected value: " + kind);

@@ -18,10 +18,10 @@ public final class ObservabilityToolCallObserver implements ToolCallObserver {
     public void onNestedToolCall(String name, ToolSource source, String sourceId,
                                  boolean success, long durationMs) {
         if (!success) {
-            log.warn("execute_code -> {} [{}{}] failed after {}ms",
+            log.warn("execute-code -> {} [{}{}] failed after {}ms",
                     name, source, sourceId == null ? "" : ", server=" + sourceId, durationMs);
         } else if (log.isDebugEnabled()) {
-            log.debug("execute_code -> {} [{}{}] ok in {}ms",
+            log.debug("execute-code -> {} [{}{}] ok in {}ms",
                     name, source, sourceId == null ? "" : ", server=" + sourceId, durationMs);
         }
     }

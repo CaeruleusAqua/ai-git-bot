@@ -1,7 +1,7 @@
-# Plan — `execute_code`: In-Sandbox Python Tool Orchestration
+# Plan — `execute-code`: In-Sandbox Python Tool Orchestration
 
 **Status:** Proposed
-**Scope:** One new agent tool (`execute_code`), one new read-only tool-resolution layer shared by
+**Scope:** One new agent tool (`execute-code`), one new read-only tool-resolution layer shared by
 every agentic surface, one new config block. **No DB migration.** No new runtime dependency
 (`python3` already ships in the runtime image). No changes to the AI provider clients, the webhook
 layer, or any `PrWorkflow`'s domain logic.
@@ -24,7 +24,7 @@ open questions):
    generated Python passes to `tools.call(...)`. No dotted alias, no rename, no data migration
    (ADR-4).
 
-**Origin:** the feature request (`execute_code` — deterministic in-Python orchestration of existing
+**Origin:** the feature request (`execute-code` — deterministic in-Python orchestration of existing
 tools so intermediate tool results never enter the LLM context). The evidence base for every
 "as-built" claim below is the dispatch chain as read at HEAD of
 `fork/CaeruleusAqua/feat/openrouter-routing-settings` (6 commits ahead of `develop`), with file
@@ -34,7 +34,7 @@ paths and line numbers named so each claim can be re-checked.
 
 ## 1. Goal
 
-Give the model a single tool, `execute_code`, that runs a short, untrusted Python program in a
+Give the model a single tool, `execute-code`, that runs a short, untrusted Python program in a
 locked-down subprocess where **every tool call the program makes is routed back into Java and
 executed by that surface's existing tool infrastructure**, so that N deterministic operations
 (loops, filtering, aggregation, parsing, repeated reads) cost **one** LLM round and contribute
@@ -141,12 +141,12 @@ workflow-specific persistence (`PrTestCase` / `UnitTestCase` upserts, the in-mem
 and execution has always been the workflow's own concern while `ToolCatalog.Role.PR_WORKFLOW`
 governs advertisement only.
 
-That decision stands. `execute_code` therefore does **not** become a god-service. Instead:
+That decision stands. `execute-code` therefore does **not** become a god-service. Instead:
 
 - The **four dispatchers stay exactly where they are**, guards and persistence untouched.
 - A thin, read-only **resolution layer** is introduced that *delegates*: each family contributes
   `ToolInvoker` adapters bound to its own executor and its own typed context. Nothing moves.
-- The `execute_code` entry point is one new `AGENT_CONTROL` tool kind, dispatched from the two
+- The `execute-code` entry point is one new `AGENT_CONTROL` tool kind, dispatched from the two
   existing per-surface chokepoints (§3.4).
 
 This is the single largest deviation from the feature request's prose, and it is deliberate: the
@@ -232,13 +232,13 @@ The families implement `ToolInvoker` locally, so no cross-family hub class appea
   `Map<String,Object>` its `execute(String, Map, C)` signature wants — enabled by the SPI interface
   extraction in §10 phase 0.
 
-### 3.4 Delivery: how each of the nine surfaces advertises and dispatches `execute_code`
+### 3.4 Delivery: how each of the nine surfaces advertises and dispatches `execute-code`
 
 **Advertisement.** A new `ToolCatalog` entry (one line per the house register, behavioural contract
 in the prompt):
 
 ```java
-entry("execute_code", ToolKind.AGENT_CONTROL,
+entry("execute-code", ToolKind.AGENT_CONTROL,
         EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
         "Run a short Python program to process tool results deterministically (loop, filter, "
                 + "sort, parse, aggregate, repeat tool calls) and print one compact result. "
@@ -247,7 +247,7 @@ entry("execute_code", ToolKind.AGENT_CONTROL,
 ```
 
 A new kind — `ToolKind.AGENT_CONTROL` — rather than reusing `CONTEXT`, because reusing `CONTEXT`
-would (a) inject `execute_code` into `ToolCatalog.contextToolNames()`, which
+would (a) inject `execute-code` into `ToolCatalog.contextToolNames()`, which
 `ToolExecutionService.executeContextTool` validates against *and* `AgentToolRouter.executeWriter`
 prints as its "Available tools" error text, and (b) route it into
 `ToolExecutionService.executeContextTool`'s switch — the built-in CLI executor, the wrong layer to
@@ -265,11 +265,11 @@ exhaustive):
   toolCatalog.agentControlToolNames(), ToolKind.AGENT_CONTROL, Role.CODING)` line. **Without this
   the tool is registered but never appears in the admin tool-configuration UI and cannot be put on
   any bot's whitelist** — the same silent-no-op class as a `RepositoryApiClient` default method.
-- `tool.execute_code.description=` in **all seven** `messages*.properties` (36 `tool.*` keys exist
+- `tool.execute-code.description=` in **all seven** `messages*.properties` (36 `tool.*` keys exist
   today, so this is an established surface).
 
 Advertisement then reaches every surface automatically for the four `AgentLoop` strategies (they pass
-the bot whitelist into `nativeDescriptors`). The five PR-workflow agents need `"execute_code"` added
+the bot whitelist into `nativeDescriptors`). The five PR-workflow agents need `"execute-code"` added
 to each of their hardcoded `ALLOWED_TOOLS` sets (§2.3) — five one-line edits.
 
 **Dispatch — `AgentLoop` side (one site).** `AgentToolRouter.execute` gains one check before the
@@ -297,7 +297,7 @@ one decorator:
 ```java
 final class CodeExecutionToolExecutor<C> implements PrWorkflowToolExecutor<C> {
     public String execute(String toolName, Map<String,Object> args, C ctx) {
-        if (!"execute_code".equals(toolName)) return delegate.execute(toolName, args, ctx);
+        if (!"execute-code".equals(toolName)) return delegate.execute(toolName, args, ctx);
         return executeCodeTool.run(scopeFrom(delegate, ctx, readOnlyViewOf(ALLOWED_TOOLS)));
     }
 }
@@ -307,7 +307,7 @@ Each of the five agents then constructs the decorator once around its executor. 
 zero duplicated logic, and the SPI plan's own four-runner merge remains independent (it can land
 before or after, in either order).
 
-*Cheaper alternative if the maintainer wants no prerequisite:* a five-line `execute_code` branch in
+*Cheaper alternative if the maintainer wants no prerequisite:* a five-line `execute-code` branch in
 each of the four runners. Costs four copies of the same interception; rejected for that reason.
 
 ### 3.5 The bridge: transport, protocol, lifecycle
@@ -383,7 +383,7 @@ result → Python. It never touches `AgentLoop`, `AgentStep`, `PendingMessage`, 
 isolation is structural, not a filtering rule. Nested calls are still authorised, logged, measured,
 and audited (§3.9).
 
-Only the final stdout (truncated to `max-output-size`) becomes the single `execute_code` tool
+Only the final stdout (truncated to `max-output-size`) becomes the single `execute-code` tool
 result. Returned as `new ToolResult(true, 0, finalOutput, "")` so it renders through the same
 `formatForAi()` shape as every sibling tool; a non-zero Python exit returns
 `ToolResult(false, exitCode, stdout, stderrTail)`.
@@ -405,7 +405,7 @@ on a validation tool's exit code and still read the error text.
 - There is no API that takes a server URL, a server alias, or a transport: `tools.call(name, args)`
   is the whole surface.
 - `ResolvedToolSet.without(...)` is applied at construction, not at call time:
-  - `execute_code` itself (recursion — required).
+  - `execute-code` itself (recursion — required).
   - `branch-switcher`. Non-obvious and worth recording: it is classified `CONTEXT` and reads as
     read-only, but it mutates git state and the agent's own bookkeeping depends on it happening
     through `AgentRunContext.setBaseBranch` in the strategy. Letting a Python program switch
@@ -490,7 +490,7 @@ LLM-facing text stays English and lives in the classpath prompt templates — no
 Add the guidance to all three native templates
 (`src/main/resources/prompts/native/{issue-agent,writer-agent,e2e-agent}-tool-protocol.md`):
 
-> Use `execute_code` when several deterministic operations or tool calls can run without additional
+> Use `execute-code` when several deterministic operations or tool calls can run without additional
 > semantic reasoning between them — loops, filtering, sorting, aggregation, parsing, calculations,
 > repeated reads. Intermediate tool results stay outside your context, so this is cheaper than
 > separate tool calls. Call `tools.call(name, arguments)`; use `tools.list()` / `tools.describe()`
@@ -598,7 +598,7 @@ generalised to every family.
 | 2 | Program prints nothing, exits 0 | `ToolResult(true, 0, "(no output)", "")` — the model is told, not left guessing. |
 | 3 | Program raises `NameError` | Syntax/runtime failure returned compactly (`Python execution failed: NameError …`, last frames only) so the model can correct the program. |
 | 4 | `tools.call("does_not_exist")` | Closed-set rejection before execution → `tool_error` → Python `ToolError`; catchable. |
-| 5 | `tools.call("execute_code")` | Rejected — the tool is not in the resolved set (`without("execute_code")`). |
+| 5 | `tools.call("execute-code")` | Rejected — the tool is not in the resolved set (`without("execute-code")`). |
 | 6 | `tools.call("branch-switcher")` | Rejected — excluded from the set (§3.8). |
 | 7 | Tool the bot has not enabled | Not in the set → same as #4. Never reaches an executor. |
 | 8 | MCP tool selected for the bot | Routed bridge → `McpOrchestrationService` → the configured client. Server, transport and credentials never leave Java. |
@@ -631,7 +631,7 @@ Unit (no real process):
   (`python3 -I`, no shell metacharacters, prefix order when hardened, scrubbed env, rlimit env
   pass-through), timeout kill, output truncation, missing-binary failure.
 - `ExecuteCodeToolCatalogTest` — `ToolKind.AGENT_CONTROL`, `isSilent()` true, `bucketOf`, and that
-  `BuiltinToolRegistry.builtinTools()` contains `execute_code` (guards the silent-no-op trap).
+  `BuiltinToolRegistry.builtinTools()` contains `execute-code` (guards the silent-no-op trap).
 
 Integration (real `python3`; skip gracefully when absent, the repo's established convention for
 process-dependent tests):
@@ -648,7 +648,7 @@ MCP routing: mocked `McpOrchestrationService`, asserting `executeTool(cfg, catal
 "mcp:github:search_issues", args)` — i.e. the *native* name and the right config, not just "was
 called".
 
-Agent-level: one test in which a **single** `execute_code` LLM tool invocation performs ≥ 2 nested
+Agent-level: one test in which a **single** `execute-code` LLM tool invocation performs ≥ 2 nested
 tool calls (the feature request's acceptance criterion 48), asserted on the agent `Result` plus the
 captured history length.
 
@@ -675,7 +675,7 @@ Config: an `AgentConfigPropertiesTest` addition for `CodeExecutionConfig` defaul
   credentials, MCP credentials or MCP server URLs to Python.
 - Python connecting to MCP servers, or to any network destination, directly.
 - A second, independent tool-execution framework (ADR-3).
-- Recursive `execute_code`.
+- Recursive `execute-code`.
 - Generated per-tool Python wrappers (`ai_git_bot_tools`) — follow-up (§3.6).
 - Parallel nested tool calls — V1 is sequential; the protocol shape leaves room.
 - Python as a replacement for semantic reasoning. The prompt says so explicitly.
@@ -703,13 +703,13 @@ boundaries cost in operation.
 - **`RLIMIT_AS` bounds address space, not RSS** — a program may hit `MemoryError` slightly before it
   hits the configured figure. Coarse by design, same class of caveat as `prlimit` in
   `sandbox-approach.md`.
-- **Cost of the descriptor.** `execute_code`'s schema is small, but every advertised tool adds
+- **Cost of the descriptor.** `execute-code`'s schema is small, but every advertised tool adds
   fixed per-round prompt overhead (native rounds resend the system prompt and one schema per tool).
   The plan does not add a second descriptor to compensate.
 - **Nested calls are observed everywhere but recorded only where a sink exists.** Log line and
   metric on all six surfaces; a forwarded `ToolCallRecord` on the ones that already had a consumer
   (§3.9, §9 row 18). Stated rather than glossed.
-- **`execute_code` is snake_case** while every sibling tool is kebab-case. Kept deliberately: the
+- **`execute-code` is snake_case** while every sibling tool is kebab-case. Kept deliberately: the
   request specifies it, it is LLM-facing, and it is a primitive models already associate with
   in-loop code execution. A one-line deviation from the house register, recorded here so it is not
   "corrected" at review by accident.
@@ -738,7 +738,7 @@ why the deviation was preferred to the alternative. Acceptance criteria 1–23, 
 | 4 | `PythonExecutionContext(UUID workflowRunId, Long botId, Long repositoryId, String traceId, ResolvedToolSet tools)` | `CodeExecutionScope(String owner, String repo, Path workspaceDir, Long runId, Long botId, ResolvedToolSet tools, ToolCallObserver observer, CodeExecutionLimits limits)` | the tools take `owner`/`repo`/`workspaceDir`, not a repository id; run ids are numeric, not UUIDs; there is no trace id in this codebase (`AiAuditContext`'s session id is the equivalent and is already thread-local); limits keep a single owner |
 | 5 | `PythonExecutionService.execute(String code, ToolContext toolContext)` | `execute(String code, CodeExecutionScope scope)` | no `ToolContext` type exists in this codebase |
 | 6 | Bridge socket at `/run/ai-git-bot/exec/<execution-id>.sock` | socket inside the per-execution 0700 temp dir | `/run` is not writable by `appuser` in this image; the temp dir already exists and is torn down with the execution (ADR-2) |
-| 7 | Exclude only `execute_code` from the nested set | also excludes `branch-switcher` | it is classified `CONTEXT` but mutates git state and would desync `AgentRunContext.baseBranch` (§3.8) |
+| 7 | Exclude only `execute-code` from the nested set | also excludes `branch-switcher` | it is classified `CONTEXT` but mutates git state and would desync `AgentRunContext.baseBranch` (§3.8) |
 | 8 | Also exclude `delegate_task`, `change_model`, `change_workflow` | nothing to exclude — those three tools do not exist in this codebase | if one is added later it belongs in the same `without(...)` set |
 | 9 | Name MCP tools `<mcp-server-alias>.<native-tool-name>` (dotted) | stays `mcp:<server>:<tool>` verbatim | the dotted form would be LLM-visible *and* is what the persisted `mcp_selected_tools` rows key on, so renaming is a wire change plus a data migration for cosmetics (ADR-4) |
 | 10 | Java-side `McpClientRegistry`, `McpClient.callTool`, `McpToolResultNormalizer` | the real components are `McpOrchestrationService`, `McpToolCatalog`/`McpToolDefinition`, `McpSyncClient`; transport, headers and credentials stay inside them | the request's isolation goals are met by construction — Python never receives a URL, a header or a token |
@@ -751,10 +751,10 @@ why the deviation was preferred to the alternative. Acceptance criteria 1–23, 
 | 17 | Criterion 31 — no unrestricted network access | not met in Layer 1 (the import guard is bypassable); met under `hardened=true` via `unshare --net`, which fails closed when unavailable | ADR-1; otherwise the container remains the boundary |
 | 18 | Criterion 24 — nested calls still produce audit events | structured audit log + metric on **every** surface; a forwarded `ToolCallRecord` only where a sink already exists | the four PR-workflow runners have no audit sink at all; installing one changes their boundary, so it is a follow-up (§3.9) |
 | 19 | Criterion 29 — Python has no direct access to application environment variables | met, with a note: the child environment is scrubbed by `ProcessSupport.scrubEnvironment`; the only variables added are the bridge socket path and the numeric limits | no application, database or provider secret is present in the child environment at any point |
-| 20 | "Should nested tool calls count against the same workflow-level quota?" | per-execution budget only; the outer `execute_code` call counts once as a normal tool call | otherwise the deterministic-batching win is taxed away (§11) |
+| 20 | "Should nested tool calls count against the same workflow-level quota?" | per-execution budget only; the outer `execute-code` call counts once as a normal tool call | otherwise the deterministic-batching win is taxed away (§11) |
 | 21 | "Should independent nested tool calls support parallel execution?" | sequential; the protocol shape allows a later change | keeps one outstanding request and makes the audit order deterministic |
 | 22 | Prompt guidance taught to the model | classpath templates (`prompts/native/*-tool-protocol.md`), LLM-facing English | a DB `system_prompts` change costs a migration and is clobbered by the next blunt `UPDATE` |
-| 23 | Tool name `execute_code` | kept exactly, although every sibling tool is kebab-case | recorded so the snake_case is not "corrected" at review by accident |
+| 23 | Tool name `execute_code` | renamed to `execute-code` | the house register is kebab-case (`write-file`, `get-issue`, `pr-diff`) and the maintainer chose it at phase-2 start — recorded because it is the one place the plan departs from the request's identifier |
 
 ## 10. Implementation order
 
@@ -774,9 +774,9 @@ Phase 1 — resolution layer (no process, fully unit-testable):
 Phase 2 — the tool surface:
 
 4. `ToolKind.AGENT_CONTROL`; the `ToolCatalog` entry + `agentControlToolNames()`;
-   `isSilent`/`bucketOf` arms; `BuiltinToolRegistry` line; `tool.execute_code.description` in all
+   `isSilent`/`bucketOf` arms; `BuiltinToolRegistry` line; `tool.execute-code.description` in all
    seven bundles. Tests, including the registry guard.
-5. `execute_code` added to the five PR-workflow `ALLOWED_TOOLS` sets.
+5. `execute-code` added to the five PR-workflow `ALLOWED_TOOLS` sets.
 6. `AgentToolRouter` dispatch branch. Strategy-level test.
 
 Phase 3 — the execution engine:
@@ -823,10 +823,41 @@ resources; (3) per-surface wiring + decorator; (4) observability + prompts; (5) 
 
 ---
 
+### Phase 1-2 as implemented (deltas from this plan)
+
+The plan is the design of record, so where the code deliberately differs from it, it says so here.
+None of these changes the architecture, and §9 remains the register of deviations from the feature
+request.
+
+| This plan said | Built as | Why |
+|---|---|---|
+| `BuiltinToolInvokers` in `agent/tools/`, `McpToolInvokers` in `mcp/` | both package-private in `agent.codeexecution` | keeps every new class in one package; no existing package gains one |
+| `forAgentLoop(…, Mode, Role, …)` | mode derived from `Role` inside the factory | a CODING-role/WRITER-mode mismatch is now unconstructable |
+| nine-parameter factory | a `McpToolAccess` record carries the three MCP collaborators | `references/coding-style.md`: an aggregate over a long parameter list |
+| `RecordToolCallObserver` in phase 1 | deferred to the audit phase | it needs `ToolCallRecord.origin`, which does not exist yet |
+| the observer "emits the metric" | logs only (warn on failure, debug on success) | `AgentMetrics` has no counter that can carry tool name and source, and feeding a tool name to `recordToolCall(provider)` would be a lie |
+| the invoker "unwraps `arguments.get(\"args\")`" | `ToolArguments` holds the extracted JSON-to-positional mapping | one source of truth for the property order, shared with `CodingAgentStrategy.toRequest` |
+
+Two sequencing corrections made while implementing, both to avoid shipping a hazard:
+
+- **The five PR-workflow `ALLOWED_TOOLS` sets moved out of phase 2.** Those sets are hardcoded, so
+  adding `execute-code` there advertises it to those agents' models *unconditionally*, while the
+  decorator that would handle a call does not exist yet. The four `AgentLoop` surfaces are safe to
+  register now because the bot whitelist is the gate and no `bot_tool_selections` row is seeded, so
+  nothing is advertised until an operator opts in. The five edits land with the decorator.
+- **`pr-diff` is `ToolKind.CONTEXT` with roles `CODING` + `WRITER`, not `REPOSITORY`.** The read-only
+  filter (`CONTEXT` + `REPOSITORY`) therefore lets it through, but it reads
+  `ToolCallContext.diffSummary`, which is null outside a PR-review context — so on a coding-issue run
+  a program would see `pr-diff` as available and every call to it would error. Still open: drop it
+  from the resolved set when `diffSummary` is null.
+- **A tool that cannot be executed is never advertised to Python.** `ResolvedToolSet.of` keeps only
+  tools that have an invoker, so a bot with an MCP selection but no usable MCP configuration does not
+  expose those tools — stronger than this plan stated, and asserted in `AgentToolResolverTest`.
+
 ## 11. Open at implementation time
 
 - **Default-configuration seed or not?** Recommendation: **no `bot_tool_selections` seed row**.
-  `execute_code` is not repository exploration, it changes model behaviour, and it should be an
+  `execute-code` is not repository exploration, it changes model behaviour, and it should be an
   explicit operator opt-in — reachable through the admin tool-configuration UI (hence the
   `BuiltinToolRegistry` line in §3.4) plus `agent.code-execution.enabled`. If the maintainer prefers
   it on by default, the seed is an idempotent `INSERT … WHERE c.default_entry = TRUE AND NOT EXISTS
@@ -836,7 +867,7 @@ resources; (3) per-surface wiring + decorator; (4) observability + prompts; (5) 
   unmerged branches, so a bare "next number" read from this checkout is not safe.
 - Does a nested tool call count against the workflow-level tool quota
   (`agent.validation.max-tool-executions`) or only against `max-tool-calls`? Recommendation: only
-  the per-execution budget, with the outer `execute_code` call itself counting once as a normal tool
+  the per-execution budget, with the outer `execute-code` call itself counting once as a normal tool
   call — otherwise the deterministic-batching win is taxed away.
 - Should the read-only policy (§3.8) be a config list rather than code, so an operator can opt into
   nested writes per deployment? Recommendation: config list in `CodeExecutionConfig`, defaulting to

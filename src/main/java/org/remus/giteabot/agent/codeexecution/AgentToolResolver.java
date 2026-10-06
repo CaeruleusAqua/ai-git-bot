@@ -16,7 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Builds the tool set one {@code execute_code} invocation may use, per agent surface.
+ * Builds the tool set one {@code execute-code} invocation may use, per agent surface.
  *
  * <p>Advertisement is the authority: the set is derived from the very descriptors the surface
  * already advertises ({@link ToolCatalog#nativeDescriptors}), then restricted to the read-only
@@ -34,7 +34,8 @@ public final class AgentToolResolver {
      * Never handed to Python.
      *
      * <ul>
-     *   <li>{@code execute_code} — recursion.</li>
+     *   <li>{@code execute-code} — recursion; it is registered, so this exclusion is what
+     *       keeps it out of Python's reach.</li>
      *   <li>{@code branch-switcher} — classified {@code CONTEXT} and read-only-looking, but it
      *       mutates git state, and the strategy's bookkeeping depends on it happening through
      *       {@code AgentRunContext.setBaseBranch}. A program switching branches mid-run
@@ -45,7 +46,7 @@ public final class AgentToolResolver {
      * </ul>
      */
     static final Set<String> EXCLUDED = Set.of(
-            "execute_code", "branch-switcher", "pr-test-run", "preview-status");
+            "execute-code", "branch-switcher", "pr-test-run", "preview-status");
 
     private AgentToolResolver() {
     }
