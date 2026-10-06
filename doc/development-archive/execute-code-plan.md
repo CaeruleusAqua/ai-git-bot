@@ -823,7 +823,7 @@ resources; (3) per-surface wiring + decorator; (4) observability + prompts; (5) 
 
 ---
 
-### Phase 1-2 as implemented (deltas from this plan)
+### Phase 1-3 as implemented (deltas from this plan)
 
 The plan is the design of record, so where the code deliberately differs from it, it says so here.
 None of these changes the architecture, and §9 remains the register of deviations from the feature
@@ -848,11 +848,34 @@ Two sequencing corrections made while implementing, both to avoid shipping a haz
 - **`pr-diff` is `ToolKind.CONTEXT` with roles `CODING` + `WRITER`, not `REPOSITORY`.** The read-only
   filter (`CONTEXT` + `REPOSITORY`) therefore lets it through, but it reads
   `ToolCallContext.diffSummary`, which is null outside a PR-review context — so on a coding-issue run
-  a program would see `pr-diff` as available and every call to it would error. Still open: drop it
-  from the resolved set when `diffSummary` is null.
+  a program would see `pr-diff` as available and every call to it would error. Resolved at phase 3: the resolved set drops
+  `pr-diff` when `ToolCallContext.diffSummary` is null, asserted both ways in
+  `AgentToolResolverTest`.
 - **A tool that cannot be executed is never advertised to Python.** `ResolvedToolSet.of` keeps only
   tools that have an invoker, so a bot with an MCP selection but no usable MCP configuration does not
   expose those tools — stronger than this plan stated, and asserted in `AgentToolResolverTest`.
+
+Phase 3 (the execution engine) added these, each recorded because the plan's wording differs:
+
+- **No protocol records: a tree parse and hand-built responses.** The wire format is a contract
+  with `ai_git_bot.py`, and both halves are easier to trust when the frames are visible in one
+  place. Reading a request as a tree rather than into a record also means an unknown field is not
+  fatal, so a program that hand-rolls a frame keeps working when a field is added.
+- **The serving thread is a platform daemon thread, not a virtual one.** There is one per
+  execution, so the scheduler buys nothing, and blocking NIO is the path with no pinning questions.
+- **`ProcessSupport` drains the output**, not a thread of our own: it already bounds the captured
+  bytes, escalates a timeout to a process-group kill, and reports `finished`/`exitCode`. The
+  service adds the truncation *marker*, which is why it captures `max-output-size + 1 KiB` — a
+  result that stopped exactly at the cap is otherwise indistinguishable from one that was cut off.
+- **`-u` was added to the argv.** Without it `print()` output sits in a pipe buffer, and a timeout
+  kills the program before those lines are ever readable — the diagnosis is the first thing lost.
+- **`-I` implies `-P` (Python 3.11+), so the script's own directory is not on `sys.path`.** The
+  bootstrap therefore confines `sys.path` — inserting the execution directory — *before* importing
+  the bridge, and installs the import guard after. The bridge needs the real `socket`; the program
+  must not be able to import it, and both tests exist to hold that ordering in place.
+- **Two config keys the §3.10 listing omitted**: `max-file-size` and `max-processes`. §3.6 requires
+  the bootstrap's `RLIMIT_FSIZE` and `RLIMIT_NPROC` values to come from the config class, so those
+  values need a key to come from.
 
 ## 11. Open at implementation time
 

@@ -3,7 +3,9 @@ package org.remus.giteabot.config;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
 
+import java.util.List;
 import java.util.List;
 
 @Data
@@ -47,6 +49,11 @@ public class AgentConfigProperties {
     private ValidationConfig validation = new ValidationConfig();
 
     /**
+     * Code-execution (the {@code execute-code} agent tool) settings.
+     */
+    private CodeExecutionConfig codeExecution = new CodeExecutionConfig();
+
+    /**
      * Context-size settings for prompts built during issue implementation.
      */
     private ContextConfig context = new ContextConfig();
@@ -82,6 +89,43 @@ public class AgentConfigProperties {
     private CriticConfig critic = new CriticConfig();
 
 
+    /**
+     * The {@code execute-code} sandbox knobs.
+     *
+     * <p>Only what is specific to spawning an interpreter lives here. The wall-clock timeout and
+     * the result caps are the ones every other tool call already uses
+     * ({@code agent.validation.tool-timeout-seconds}, {@code agent.budget.max-tool-result-chars}),
+     * which is what keeps one owner per limit. Sizes are {@link DataSize} so the property file can
+     * say {@code 100KB}.</p>
+     */
+    @Data
+    public static class CodeExecutionConfig {
+
+        /** Nested tool calls one program may make. The loop budget is per round, so none matches it. */
+        private int maxToolCalls = 50;
+
+        /** Cap on the submitted program itself. */
+        private DataSize maxCodeSize = DataSize.ofKilobytes(100);
+
+        /** {@code RLIMIT_AS} for the program and anything it spawns. */
+        private int maxMemoryMb = 256;
+
+        /** {@code RLIMIT_CPU}, the bound that survives the JVM timeout not firing. */
+        private int cpuSeconds = 120;
+
+        /** {@code RLIMIT_FSIZE}: the largest file the program may create. */
+        private DataSize maxFileSize = DataSize.ofMegabytes(10);
+
+        /**
+         * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. On a host where
+         * the service user already runs more processes than this, a program cannot spawn a child
+         * at all — that is the bound, not a bug.
+         */
+        private int maxProcesses = 64;
+
+        /** Interpreter to spawn. */
+        private String pythonBinary = "python3";
+    }
     @Data
     public static class SchemaConfig {
         /**
