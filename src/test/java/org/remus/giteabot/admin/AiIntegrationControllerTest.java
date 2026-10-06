@@ -1,6 +1,8 @@
 package org.remus.giteabot.admin;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.remus.giteabot.ai.AiProviderRegistry;
 import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
 import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
@@ -17,6 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -136,6 +139,54 @@ class AiIntegrationControllerTest {
         verifyNoInteractions(aiIntegrationService);
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "maxTokens, ''", "maxTokens, private-invalid-value", "maxTokens, 2147483648",
+            "contextWindowTokens, ''", "contextWindowTokens, private-invalid-value", "contextWindowTokens, 2147483648"
+    })
+    void save_invalidTokenNumbersShowASafeFlashMessage(String field, String value) throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .locale(Locale.ENGLISH)
+                        .param("providerType", "openrouter").param("apiKey", "private-new-key")
+                        .param(field, value))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/ai-integrations"))
+                .andExpect(flash().attribute("error",
+                        "Please enter valid numbers for the token limits and parallel worker limit."));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "openRouterRegion, private-invalid-region",
+            "openRouterDataCollection, private-invalid-policy",
+            "openRouterZdr, private-invalid-boolean"
+    })
+    void save_malformedPrivacySettingsStayBadRequestsEvenWithNumericErrors(String field, String value) throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("providerType", "openrouter").param("apiKey", "private-new-key")
+                        .param("maxTokens", "").param(field, value))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(not(containsString("private-new-key"))))
+                .andExpect(content().string(not(containsString(value))));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
+    @Test
+    void save_mixedNumericErrorsUseTheGenericFlashMessage() throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .locale(Locale.ENGLISH)
+                        .param("providerType", "ollama").param("maxTokens", "")
+                        .param("parallelWorkerLimit", "21"))
+                .andExpect(redirectedUrl("/ai-integrations"))
+                .andExpect(flash().attribute("error",
+                        "Please enter valid numbers for the token limits and parallel worker limit."));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
     @Test
     void save_googleAiIntegrationDelegatesToService() throws Exception {
         mockMvc.perform(post("/ai-integrations/save")
@@ -231,10 +282,11 @@ class AiIntegrationControllerTest {
 
     @Test
     void save_rejectsAParallelWorkerLimitOutsideTheRange() throws Exception {
-        for (String value : List.of("-5", "21")) {
+        for (String value : List.of("-5", "21", "", "private-invalid-value", "2147483648")) {
             mockMvc.perform(post("/ai-integrations/save")
                             .with(user("admin").roles("ADMIN"))
                             .with(csrf())
+                            .locale(Locale.ENGLISH)
                             .param("name", "Anthropic")
                             .param("providerType", "anthropic")
                             .param("apiUrl", "https://api.anthropic.com")
@@ -242,7 +294,7 @@ class AiIntegrationControllerTest {
                             .param("parallelWorkerLimit", value))
                     .andExpect(status().is3xxRedirection())
                     .andExpect(redirectedUrl("/ai-integrations"))
-                    .andExpect(flash().attributeExists("error"));
+                    .andExpect(flash().attribute("error", "The parallel worker limit must be between 0 and 20."));
         }
         verify(aiIntegrationService, never()).save(any(AiIntegration.class), anyBoolean());
     }

@@ -76,15 +76,20 @@ public class AiIntegrationController {
                        @RequestParam(required = false) String apiKey,
                        @RequestParam(required = false, defaultValue = "false") boolean clearApiKey,
                        RedirectAttributes redirectAttributes) {
-        // Preserve HTTP 400 for malformed settings without exposing submitted credentials.
-        if (bindingResult.getErrorCount() > bindingResult.getFieldErrorCount("parallelWorkerLimit")) {
+        // Numeric form mistakes get a safe flash message; malformed non-numeric settings stay HTTP 400.
+        int numericErrors = bindingResult.getFieldErrorCount("maxTokens")
+                + bindingResult.getFieldErrorCount("contextWindowTokens")
+                + bindingResult.getFieldErrorCount("parallelWorkerLimit");
+        if (bindingResult.getErrorCount() > numericErrors) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid AI integration settings");
         }
         // The form limits the value in the browser; this stops a hand-made POST
         // from storing a value the limiter would read as "unlimited".
         if (bindingResult.hasErrors()) {
+            String messageKey = bindingResult.getErrorCount() == bindingResult.getFieldErrorCount("parallelWorkerLimit")
+                    ? "flash.aiWorkerLimitOutOfRange" : "flash.aiNumericFieldsInvalid";
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage(
-                    "flash.aiWorkerLimitOutOfRange", null, LocaleContextHolder.getLocale()));
+                    messageKey, null, LocaleContextHolder.getLocale()));
             return "redirect:/ai-integrations";
         }
         try {
