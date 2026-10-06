@@ -61,6 +61,11 @@ public interface AiProviderMetadata {
     default void validateConfiguration(AiIntegration integration, String apiKey) {
     }
 
+    /** Whether changing settings requires rechecking a retained key against the provider. */
+    default boolean requiresRetainedKeyValidation(AiIntegration previous, AiIntegration updated) {
+        return false;
+    }
+
     /**
      * Builds a configured RestClient for this provider.
      *

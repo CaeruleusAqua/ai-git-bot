@@ -1,7 +1,11 @@
 package org.remus.giteabot.admin;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.remus.giteabot.ai.AiProviderRegistry;
+import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
+import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
 import org.remus.giteabot.ai.openrouter.OpenRouterProviderMetadata;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -15,6 +19,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -27,6 +32,7 @@ import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -84,8 +90,9 @@ class AiIntegrationControllerTest {
         AiIntegration integration = new AiIntegration();
         integration.setId(7L);
         integration.setProviderType("openrouter");
-        integration.setApiUrl("https://openrouter.ai/api");
+        integration.setApiUrl("https://eu.openrouter.ai/api");
         integration.setApiKey("private-stored-ciphertext");
+        integration.setOpenRouterRegion(OpenRouterRegion.EU);
         when(aiIntegrationService.findById(7L)).thenReturn(Optional.of(integration));
         when(providerRegistry.getProviderTypes()).thenReturn(List.of("openrouter"));
         when(providerRegistry.getDisplayNames()).thenReturn(Map.of("openrouter", "openrouter"));
@@ -100,7 +107,84 @@ class AiIntegrationControllerTest {
                 .andExpect(content().string(containsString("z-ai\\/glm-5.3-flash")))
                 .andExpect(content().string(containsString("xiaomi\\/mimo-v2.6-flash")))
                 .andExpect(content().string(containsString("readonly=\"readonly\"")))
+                .andExpect(content().string(containsString("id=\"openRouterRegion\"")))
+                .andExpect(content().string(containsString("id=\"openRouterDataCollection\"")))
+                .andExpect(content().string(containsString("id=\"openRouterZdr\"")))
+                .andExpect(content().string(containsString("Enterprise in-region routing")))
                 .andExpect(content().string(not(containsString("private-stored-ciphertext"))));
+    }
+
+    @Test
+    void save_bindsOpenRouterPrivacySettings() throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("providerType", "openrouter").param("name", "OpenRouter")
+                        .param("model", "author/model").param("apiKey", "new-key")
+                        .param("openRouterRegion", "US").param("openRouterDataCollection", "ALLOW")
+                        .param("openRouterZdr", "true"))
+                .andExpect(redirectedUrl("/ai-integrations"));
+
+        verify(aiIntegrationService).save(argThat(integration -> integration.getOpenRouterRegion() == OpenRouterRegion.US
+                && integration.getOpenRouterDataCollection() == OpenRouterDataCollection.ALLOW
+                && integration.isOpenRouterZdr()), eq(false));
+    }
+
+    @Test
+    void save_rejectsUnknownOpenRouterRegionBeforeCallingTheService() throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("providerType", "openrouter").param("apiKey", "private-new-key")
+                        .param("openRouterRegion", "https://untrusted.example"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(not(containsString("private-new-key"))));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "maxTokens, ''", "maxTokens, private-invalid-value", "maxTokens, 2147483648",
+            "contextWindowTokens, ''", "contextWindowTokens, private-invalid-value", "contextWindowTokens, 2147483648"
+    })
+    void save_invalidTokenNumbersShowASafeFlashMessage(String field, String value) throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .locale(Locale.ENGLISH)
+                        .param("providerType", "openrouter").param("apiKey", "private-new-key")
+                        .param(field, value))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/ai-integrations"))
+                .andExpect(flash().attribute("error",
+                        "Please enter valid numbers for the token limits and parallel worker limit."));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "openRouterRegion, private-invalid-region",
+            "openRouterDataCollection, private-invalid-policy",
+            "openRouterZdr, private-invalid-boolean"
+    })
+    void save_malformedPrivacySettingsStayBadRequestsEvenWithNumericErrors(String field, String value) throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("providerType", "openrouter").param("apiKey", "private-new-key")
+                        .param("maxTokens", "").param(field, value))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(not(containsString("private-new-key"))))
+                .andExpect(content().string(not(containsString(value))));
+
+        verifyNoInteractions(aiIntegrationService);
+    }
+
+    @Test
+    void save_mixedNumericErrorsUseTheGenericFlashMessage() throws Exception {
+        mockMvc.perform(post("/ai-integrations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .locale(Locale.ENGLISH)
+                        .param("providerType", "ollama").param("maxTokens", "")
+                        .param("parallelWorkerLimit", "21"))
+                .andExpect(redirectedUrl("/ai-integrations"))
+                .andExpect(flash().attribute("error",
+                        "Please enter valid numbers for the token limits and parallel worker limit."));
+
+        verifyNoInteractions(aiIntegrationService);
     }
 
     @Test
@@ -198,10 +282,11 @@ class AiIntegrationControllerTest {
 
     @Test
     void save_rejectsAParallelWorkerLimitOutsideTheRange() throws Exception {
-        for (String value : List.of("-5", "21")) {
+        for (String value : List.of("-5", "21", "", "private-invalid-value", "2147483648")) {
             mockMvc.perform(post("/ai-integrations/save")
                             .with(user("admin").roles("ADMIN"))
                             .with(csrf())
+                            .locale(Locale.ENGLISH)
                             .param("name", "Anthropic")
                             .param("providerType", "anthropic")
                             .param("apiUrl", "https://api.anthropic.com")
@@ -209,7 +294,7 @@ class AiIntegrationControllerTest {
                             .param("parallelWorkerLimit", value))
                     .andExpect(status().is3xxRedirection())
                     .andExpect(redirectedUrl("/ai-integrations"))
-                    .andExpect(flash().attributeExists("error"));
+                    .andExpect(flash().attribute("error", "The parallel worker limit must be between 0 and 20."));
         }
         verify(aiIntegrationService, never()).save(any(AiIntegration.class), anyBoolean());
     }
