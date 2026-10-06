@@ -70,7 +70,7 @@ class AgentReviewCompletionTest {
     private WebhookPayload payload;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         payload = AgentJackson.mapper().readValue("""
                 {"repository":{"name":"repo","owner":{"login":"owner"}},
                  "pull_request":{"number":1,"title":"Update example","head":{"ref":"feature"}}}

@@ -63,12 +63,12 @@ class PythonToolBridgeTest {
         JsonNode response = bridge.handle(
                 "{\"type\":\"tool_call\",\"id\":\"7\",\"name\":\"cat\",\"arguments\":{\"path\":\"a\"}}");
 
-        assertThat(response.path("type").asText()).isEqualTo("tool_result");
-        assertThat(response.path("id").asText()).isEqualTo("7");
+        assertThat(response.path("type").asString()).isEqualTo("tool_result");
+        assertThat(response.path("id").asString()).isEqualTo("7");
         JsonNode result = response.path("result");
         assertThat(result.path("success").asBoolean()).isTrue();
         assertThat(result.path("exitCode").asInt()).isZero();
-        assertThat(result.path("output").asText()).isEqualTo("file content");
+        assertThat(result.path("output").asString()).isEqualTo("file content");
         assertThat(result.has("error")).isFalse();
         assertThat(bridge.toolCalls()).isEqualTo(1);
     }
@@ -82,9 +82,9 @@ class PythonToolBridgeTest {
 
         JsonNode response = bridge.handle(call("write-file"));
 
-        assertThat(response.path("type").asText()).isEqualTo("tool_result");
+        assertThat(response.path("type").asString()).isEqualTo("tool_result");
         assertThat(response.path("result").path("success").asBoolean()).isFalse();
-        assertThat(response.path("result").path("error").asText())
+        assertThat(response.path("result").path("error").asString())
                 .isEqualTo("Tool 'write-file' is not enabled for this bot.");
     }
 
@@ -99,7 +99,7 @@ class PythonToolBridgeTest {
         bridge.handle("{\"type\":\"tool_call\",\"id\":\"1\",\"name\":\"cat\","
                 + "\"arguments\":{\"path\":\"a\",\"depth\":3}}");
 
-        assertThat(received.get().path("path").asText()).isEqualTo("a");
+        assertThat(received.get().path("path").asString()).isEqualTo("a");
         assertThat(received.get().path("depth").asInt()).isEqualTo(3);
     }
 
@@ -122,14 +122,14 @@ class PythonToolBridgeTest {
     void theBudgetStopsTheCallAfterTheConfiguredNumberOfCalls() {
         PythonToolBridge bridge = bridge(advertised("cat"), returns(ok("ok")), limits(2, 50_000));
 
-        assertThat(bridge.handle(call("cat")).path("type").asText()).isEqualTo("tool_result");
-        assertThat(bridge.handle(call("cat")).path("type").asText()).isEqualTo("tool_result");
+        assertThat(bridge.handle(call("cat")).path("type").asString()).isEqualTo("tool_result");
+        assertThat(bridge.handle(call("cat")).path("type").asString()).isEqualTo("tool_result");
 
         JsonNode refused = bridge.handle(call("cat"));
-        assertThat(refused.path("type").asText()).isEqualTo("tool_error");
-        assertThat(refused.path("error").path("code").asText())
+        assertThat(refused.path("type").asString()).isEqualTo("tool_error");
+        assertThat(refused.path("error").path("code").asString())
                 .isEqualTo(PythonToolBridge.TOOL_CALL_LIMIT);
-        assertThat(refused.path("error").path("message").asText()).contains("limit of 2");
+        assertThat(refused.path("error").path("message").asString()).contains("limit of 2");
         assertThat(bridge.toolCalls()).isEqualTo(2);
         assertThat(bridge.budgetExhausted()).isTrue();
     }
@@ -139,7 +139,7 @@ class PythonToolBridgeTest {
         PythonToolBridge bridge = bridge(advertised("cat"), returns(ok("x".repeat(100))),
                 limits(50, 10));
 
-        String output = bridge.handle(call("cat")).path("result").path("output").asText();
+        String output = bridge.handle(call("cat")).path("result").path("output").asString();
 
         assertThat(output).startsWith("x".repeat(10)).contains("truncated at 10 chars");
     }
@@ -152,8 +152,8 @@ class PythonToolBridgeTest {
                 .path("result").path("tools");
 
         assertThat(tools).hasSize(1);
-        assertThat(tools.get(0).path("name").asText()).isEqualTo("cat");
-        assertThat(tools.get(0).path("description").asText()).isEqualTo("Description of cat.");
+        assertThat(tools.get(0).path("name").asString()).isEqualTo("cat");
+        assertThat(tools.get(0).path("description").asString()).isEqualTo("Description of cat.");
     }
 
     @Test
@@ -163,8 +163,8 @@ class PythonToolBridgeTest {
         JsonNode result = bridge.handle("{\"type\":\"tools_describe\",\"id\":\"1\",\"name\":\"cat\"}")
                 .path("result");
 
-        assertThat(result.path("name").asText()).isEqualTo("cat");
-        assertThat(result.path("inputSchema").path("type").asText()).isEqualTo("object");
+        assertThat(result.path("name").asString()).isEqualTo("cat");
+        assertThat(result.path("inputSchema").path("type").asString()).isEqualTo("object");
     }
 
     @Test
@@ -173,8 +173,8 @@ class PythonToolBridgeTest {
 
         JsonNode response = bridge.handle("{\"type\":\"tools_describe\",\"id\":\"1\",\"name\":\"nope\"}");
 
-        assertThat(response.path("type").asText()).isEqualTo("tool_error");
-        assertThat(response.path("error").path("code").asText())
+        assertThat(response.path("type").asString()).isEqualTo("tool_error");
+        assertThat(response.path("error").path("code").asString())
                 .isEqualTo(PythonToolBridge.TOOL_NOT_ALLOWED);
     }
 
@@ -185,10 +185,10 @@ class PythonToolBridgeTest {
         for (String frame : List.of("this is not json", "[1,2,3]", "{\"type\":\"nonsense\"}",
                 "{\"type\":\"tool_call\"}")) {
             JsonNode response = bridge.handle(frame);
-            assertThat(response.path("type").asText())
+            assertThat(response.path("type").asString())
                     .as("frame %s", frame)
                     .isEqualTo("tool_error");
-            assertThat(response.path("error").path("code").asText())
+            assertThat(response.path("error").path("code").asString())
                     .as("frame %s", frame)
                     .isEqualTo(PythonToolBridge.BAD_REQUEST);
         }
@@ -202,6 +202,6 @@ class PythonToolBridgeTest {
         JsonNode response = bridge.handle("{\"type\":\"tool_call\",\"id\":\"1\",\"name\":\"cat\","
                 + "\"arguments\":{},\"future\":\"ignored\"}");
 
-        assertThat(response.path("type").asText()).isEqualTo("tool_result");
+        assertThat(response.path("type").asString()).isEqualTo("tool_result");
     }
 }
