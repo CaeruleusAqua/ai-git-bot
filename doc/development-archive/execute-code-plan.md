@@ -1,8 +1,8 @@
 # Plan — `execute-code`: In-Sandbox Python Tool Orchestration
 
 **Status:** Proposed
-**Scope:** One new agent tool (`execute-code`), one new read-only tool-resolution layer shared by
-every agentic surface, one new config block. **No DB migration.** No new runtime dependency
+**Scope:** One new agent tool (`execute-code`), one new dispatch path through the existing
+`AgentToolRouter`, one new config block. **No DB migration.** No new runtime dependency
 (`python3` already ships in the runtime image). No changes to the AI provider clients, the webhook
 layer, or any `PrWorkflow`'s domain logic.
 
@@ -398,36 +398,36 @@ on a validation tool's exit code and still read the error text.
 
 ### 3.8 Authorization, recursion, and agent-control exclusion
 
-- `ResolvedToolSet.find(name)` is the only entry point; a name absent from the set raises
-  `ToolNotAllowedException` → a `tool_error` envelope → a Python `ToolError`. A tool that exists
-  globally but is not enabled for this bot is simply **not in the set**, so it is unreachable
-  rather than rejected-on-execution.
+- `AgentToolRouter.execute(mode, context)` is the only entry point, and a program's call
+  re-enters it. `executeNested` flattens the JSON arguments with the shared `ToolArguments` helper
+  (the same one the coding strategy uses for the model's own calls), rebuilds the caller's
+  `ToolCallContext` around the requested tool, and dispatches. There is no second path, no second
+  policy and no per-family adapter: the bot's tool whitelist is the whole authorisation, exactly as
+  it is for the model's calls.
+- A refused or failed nested call is therefore an ordinary unsuccessful `ToolResult` carrying the
+  executor's own wording — the same text the model would have received. Python's `tool_error` is
+  reserved for the sandbox refusing to relay at all (budget exhausted, unparseable frame, unknown
+  request type), never for a tool the bot has not selected.
+- **`execute-code` itself is refused** (`cannot be called from a program`). That is the only
+  exclusion, and it is structural rather than policy: a program calling `execute-code` would nest
+  sandboxes.
 - There is no API that takes a server URL, a server alias, or a transport: `tools.call(name, args)`
-  is the whole surface.
-- `ResolvedToolSet.without(...)` is applied at construction, not at call time:
-  - `execute-code` itself (recursion — required).
-  - `branch-switcher`. Non-obvious and worth recording: it is classified `CONTEXT` and reads as
-    read-only, but it mutates git state and the agent's own bookkeeping depends on it happening
-    through `AgentRunContext.setBaseBranch` in the strategy. Letting a Python program switch
-    branches mid-execution desynchronises the strategy's `baseBranch` from the checkout, and the
-    commit/diff steps then operate on the wrong ref.
-  - `pr-test-run` and `preview-status` — they shell out to test frameworks and probe a deployment;
-    excluded by the read-only policy below, not by name.
-- **V1 exposes read-only tools only** (the policy the exclusions above come from). Built-in:
-  `CONTEXT` + `REPOSITORY`. PR-workflow: the read-only subset only, so
-  `doc-write`/`doc-delete`/`unit-test-write`/`i18n-*`/`pr-test-write` are **not** in the set in V1.
-- **MCP is the one family whose read/write nature cannot be derived from its metadata.** An MCP
-  `inputSchema` says nothing about whether a call mutates a remote system, and this repo carries
-  no per-MCP-tool capability flag. Resolution that keeps the boundary: the bot's existing
-  selection (`McpToolSelectionService` → the filtered `McpToolCatalog`) stays the gate, and the
-  resolved set is additionally filtered by `agent.code-execution.mcp-deny-tools` — a list of
-  qualified names or `<server>:` prefixes, **empty by default**. An operator who has selected a
-  mutating MCP tool can therefore exclude it from Python without losing it for direct LLM use.
-  Real capability metadata is a V2 item (§9 row 11, §11).
-  One honest note in favour of enabling writes later: because the decorator delegates to the *same*
-  executor with the *same* context, nested writes would already be recorded correctly
-  (`ReadmeSyncToolContext.recordCreated`, the `UnitTestCase` upsert). Enabling them is a policy and
-  audit decision, not a structural one — which is a good sign the delegation design is right.
+  is the whole surface. What a program may call is exactly the list the model was shown
+  (`availableTools(mode)` is the surface's own descriptor set), so the two cannot drift.
+- **Why the read-only resolution layer was removed** (maintainer decision, recorded here because it
+  replaces a design this plan argued for at length). `branch-switcher` is the case that exposed it:
+  classified `CONTEXT`, it reads as read-only, yet it mutates git state, and the strategy's
+  bookkeeping depends on that happening through `AgentRunContext.setBaseBranch`. A
+  `CONTEXT` + `REPOSITORY` allow-list let it straight through, which is the giveaway — a
+  Python-only policy was inferring capability from a taxonomy that does not carry it. MCP made the
+  same point from the other side: an `inputSchema` says nothing about whether a call mutates a
+  remote system. The bot's own selection is now the single policy. A bot that should not let a
+  program touch git should not have selected the tool for itself either. Consequence, stated
+  plainly: **nested writes are possible wherever the bot has a writing tool selected** — the same
+  tools its own model can call, with the same audit hooks, since the decorator delegates to the same
+  executor and context (`ReadmeSyncToolContext.recordCreated`, the `UnitTestCase` upsert).
+  `mcp-deny-tools` went with the layer (it existed only to narrow the second policy) and so did the
+  read-only exclusion of `pr-test-run`/`preview-status`.
 
 ### 3.9 Audit and metrics
 
@@ -464,20 +464,30 @@ New nested `AgentConfigProperties.CodeExecutionConfig` (prefix `agent.code-execu
 top):
 
 ```properties
-# Opt-in: the tool is registered but a bot only sees it once it is on the bot's tool whitelist.
-agent.code-execution.enabled=${AGENT_CODE_EXECUTION_ENABLED:false}
-agent.code-execution.timeout-seconds=${AGENT_CODE_EXECUTION_TIMEOUT_SECONDS:60}
 agent.code-execution.max-tool-calls=${AGENT_CODE_EXECUTION_MAX_TOOL_CALLS:50}
-agent.code-execution.max-output-size=${AGENT_CODE_EXECUTION_MAX_OUTPUT_SIZE:100KB}
-agent.code-execution.max-nested-result-chars=${AGENT_CODE_EXECUTION_MAX_NESTED_RESULT_CHARS:50000}
 agent.code-execution.max-code-size=${AGENT_CODE_EXECUTION_MAX_CODE_SIZE:100KB}
 agent.code-execution.max-memory-mb=${AGENT_CODE_EXECUTION_MAX_MEMORY_MB:256}
 agent.code-execution.cpu-seconds=${AGENT_CODE_EXECUTION_CPU_SECONDS:120}
+agent.code-execution.max-file-size=${AGENT_CODE_EXECUTION_MAX_FILE_SIZE:10MB}
+agent.code-execution.max-processes=${AGENT_CODE_EXECUTION_MAX_PROCESSES:64}
 agent.code-execution.python-binary=${AGENT_CODE_EXECUTION_PYTHON:python3}
-# Layer 2 (sandbox-approach.md §3.2) pass-through; false keeps the Layer 1 posture.
-agent.code-execution.hardened=${AGENT_CODE_EXECUTION_HARDENED:false}
-agent.code-execution.network=${AGENT_CODE_EXECUTION_NETWORK:none}
 ```
+
+Only what is specific to spawning an interpreter lives here: the argv, the rlimits the Python
+bootstrap applies, and the two size bounds on the submitted program and its tool-call count. The
+wall-clock timeout is `agent.validation.tool-timeout-seconds` and the result cap — the program's
+stdout *and* each nested result — is `agent.budget.max-tool-result-chars`, the properties every
+other tool call already uses. That is not thrift for its own sake: a shorter cap than the model's
+own is a cap that only hides output, and a second timeout setting is a second thing to get wrong.
+
+**Removed by the same decision** (maintainer: no general enablement, no networking rules):
+`enabled` (the bot's tool whitelist is the opt-in, exactly as for every other tool — with no
+`enabled` key there is also no deployment-level way to keep a whitelisted tool dark), `hardened`
+and `network` (networking is the container's business; `sandbox-approach.md` still describes the
+Layer 2 mechanism, but the tool does not carry a switch for it), and `mcp-deny-tools` (it narrowed
+the removed second policy). The plan's two defaults that changed with the reuse: the timeout is now
+300s (the shared tool-call default) rather than 60s, and the captured output stops at 8000 chars
+rather than 100KB — the marker says "chars" accordingly.
 
 Limits live in the config class and are read into `CodeExecutionLimits` — **not** as `DEFAULT_`
 constants on the record (the repo's single-source-of-truth rule for records vs config). Test call
@@ -742,13 +752,13 @@ why the deviation was preferred to the alternative. Acceptance criteria 1–23, 
 | 8 | Also exclude `delegate_task`, `change_model`, `change_workflow` | nothing to exclude — those three tools do not exist in this codebase | if one is added later it belongs in the same `without(...)` set |
 | 9 | Name MCP tools `<mcp-server-alias>.<native-tool-name>` (dotted) | stays `mcp:<server>:<tool>` verbatim | the dotted form would be LLM-visible *and* is what the persisted `mcp_selected_tools` rows key on, so renaming is a wire change plus a data migration for cosmetics (ADR-4) |
 | 10 | Java-side `McpClientRegistry`, `McpClient.callTool`, `McpToolResultNormalizer` | the real components are `McpOrchestrationService`, `McpToolCatalog`/`McpToolDefinition`, `McpSyncClient`; transport, headers and credentials stay inside them | the request's isolation goals are met by construction — Python never receives a URL, a header or a token |
-| 11 | Expose "read MCP-backed data / search MCP-backed data" in V1 | exposes the tools the bot already selected, minus a new **default-empty** `agent.code-execution.mcp-deny-tools` list | MCP `inputSchema` carries no read/write capability, so a genuine read-only split cannot be derived; the existing selection remains the gate, and operators can deny by name or `<server>:` prefix (§3.8) |
+| 11 | Expose "read MCP-backed data / search MCP-backed data" in V1 | exposes exactly the MCP tools the bot already selected — no separate list | MCP `inputSchema` carries no read/write capability, so a genuine read-only split cannot be derived; the existing selection is the gate, and `mcp-deny-tools` was removed with the second policy (§3.8) |
 | 12 | Generated bindings `from ai_git_bot_tools import github_search_issues` | follow-up, not V1 | the request itself sequences them after the generic `tools.call()` works; `tools.describe()` covers schema discovery |
-| 13 | Top-level `execute-code:` config block | `agent.code-execution.*` via `AgentConfigProperties.CodeExecutionConfig`, plus `cpu-seconds`, `max-nested-result-chars`, `python-binary`, `hardened`, `network`, `mcp-deny-tools` | agent behaviour has one config home in this repo, and the caps rule says so |
+| 13 | Top-level `execute-code:` config block | `agent.code-execution.*` via `AgentConfigProperties.CodeExecutionConfig`: limits and the interpreter only (`cpu-seconds`, `max-file-size`, `max-processes`, `python-binary`) — the timeout and the result cap reuse the normal tool-call properties, and `enabled`, `hardened`, `network`, `max-output-size`, `max-nested-result-chars`, `mcp-deny-tools` were removed (§3.10) | agent behaviour has one config home in this repo, and the caps rule says so |
 | 14 | `return_result(...)` left open alongside stdout | stdout only, as the request's own default | fewer mechanisms to teach the model; `tools.list()` / `tools.describe()` are the only other additions |
 | 15 | Sandbox left open: local process / Docker / gVisor / Firecracker | restricted local subprocess, with the util-linux Layer 2 prefix as opt-in | ADR-1: a `docker.sock` mount hands the app user root on the host (`sandbox-approach.md` §2.1) |
-| 16 | Criterion 28 & 30 — Python has no unrestricted application filesystem access, no Spring-bean access | **not met as an OS guarantee** in the default posture; met under `hardened=true` (`setpriv --reuid`), mitigated by `chmod 700` on the config/credential dirs | same uid is the Layer 1 posture (ADR-1; `sandbox-approach.md` ADR-3). What *is* met: no path is handed to Python and no tool bypasses the layer |
-| 17 | Criterion 31 — no unrestricted network access | not met in Layer 1 (the import guard is bypassable); met under `hardened=true` via `unshare --net`, which fails closed when unavailable | ADR-1; otherwise the container remains the boundary |
+| 16 | Criterion 28 & 30 — Python has no unrestricted application filesystem access, no Spring-bean access | **not met as an OS guarantee**: the sandbox runs as the service user, mitigated by `chmod 700` on the config/credential dirs. The `hardened` switch that would have set `setpriv --reuid` was removed (§3.10), so there is no config path to this posture | same uid is the Layer 1 posture (ADR-1; `sandbox-approach.md` ADR-3). What *is* met: no path is handed to Python and no tool call bypasses the router |
+| 17 | Criterion 31 — no unrestricted network access | not met as an OS guarantee: the container is the boundary. No import-level network blocking is implemented at all — the maintainer's decision was that networking is not the tool's business | ADR-1 |
 | 18 | Criterion 24 — nested calls still produce audit events | structured audit log + metric on **every** surface; a forwarded `ToolCallRecord` only where a sink already exists | the four PR-workflow runners have no audit sink at all; installing one changes their boundary, so it is a follow-up (§3.9) |
 | 19 | Criterion 29 — Python has no direct access to application environment variables | met, with a note: the child environment is scrubbed by `ProcessSupport.scrubEnvironment`; the only variables added are the bridge socket path and the numeric limits | no application, database or provider secret is present in the child environment at any point |
 | 20 | "Should nested tool calls count against the same workflow-level quota?" | per-execution budget only; the outer `execute-code` call counts once as a normal tool call | otherwise the deterministic-batching win is taxed away (§11) |
@@ -845,15 +855,12 @@ Two sequencing corrections made while implementing, both to avoid shipping a haz
   decorator that would handle a call does not exist yet. The four `AgentLoop` surfaces are safe to
   register now because the bot whitelist is the gate and no `bot_tool_selections` row is seeded, so
   nothing is advertised until an operator opts in. The five edits land with the decorator.
-- **`pr-diff` is `ToolKind.CONTEXT` with roles `CODING` + `WRITER`, not `REPOSITORY`.** The read-only
-  filter (`CONTEXT` + `REPOSITORY`) therefore lets it through, but it reads
-  `ToolCallContext.diffSummary`, which is null outside a PR-review context — so on a coding-issue run
-  a program would see `pr-diff` as available and every call to it would error. Resolved at phase 3: the resolved set drops
-  `pr-diff` when `ToolCallContext.diffSummary` is null, asserted both ways in
-  `AgentToolResolverTest`.
-- **A tool that cannot be executed is never advertised to Python.** `ResolvedToolSet.of` keeps only
-  tools that have an invoker, so a bot with an MCP selection but no usable MCP configuration does not
-  expose those tools — stronger than this plan stated, and asserted in `AgentToolResolverTest`.
+- **`pr-diff` needs no special case, and got none.** It is `ToolKind.CONTEXT` with roles
+  `CODING` + `WRITER` and reads `ToolCallContext.diffSummary`, which is null outside a PR-review
+  context. Under the removed read-only filter it needed the phase-3 fix of being dropped when
+  `diffSummary` is null; with the filter gone it is simply one of the tools the surface advertises,
+  and a program on a coding-issue run gets from it exactly what the model gets. The fix and its two
+  assertions went with `AgentToolResolverTest`.
 
 Phase 3 (the execution engine) added these, each recorded because the plan's wording differs:
 
@@ -873,16 +880,42 @@ Phase 3 (the execution engine) added these, each recorded because the plan's wor
   bootstrap therefore confines `sys.path` — inserting the execution directory — *before* importing
   the bridge, and installs the import guard after. The bridge needs the real `socket`; the program
   must not be able to import it, and both tests exist to hold that ordering in place.
-- **Two config keys the §3.10 listing omitted**: `max-file-size` and `max-processes`. §3.6 requires
-  the bootstrap's `RLIMIT_FSIZE` and `RLIMIT_NPROC` values to come from the config class, so those
-  values need a key to come from.
+- **The property set was cut from eleven keys to seven** (maintainer: *no general enablement, reuse
+  the properties from the normal tool-call, remove `hardened` and the network rules*). What survives
+  is what only a spawned interpreter has — the argv and the rlimits — plus `max-code-size` and
+  `max-tool-calls`. `max-file-size` and `max-processes` are in that set (§3.6 requires the
+  bootstrap's `RLIMIT_FSIZE`/`RLIMIT_NPROC` values to come from config). Gone: `enabled`,
+  `timeout-seconds`, `max-output-size`, `max-nested-result-chars`, `hardened`, `network`,
+  `mcp-deny-tools` (§3.10). The two behavioural defaults that moved with the reuse are the timeout
+  (60s → the shared 300s) and the output cap (100KB → the shared 8000 chars).
+- **Wiring, as implemented.** `AgentToolRouter` takes the sandbox as its eighth constructor
+  parameter — an injected bean, so the router constructs nothing and the `null` case is only the
+  test paths. It grew three members: `availableTools(mode)`
+  (`catalog.nativeDescriptors(role(mode), mcpToolCatalog, allowedBuiltinTools)`, the call the removed
+  resolver used, so Python and the model see one list), `executeNested(...)`, and
+  `executeAgentControl(...)`. The `AGENT_CONTROL` branch sits *after* `enforceWhitelist`, so a bot
+  that has not selected `execute-code` gets the standard refusal and never reaches the sandbox. The
+  bean is threaded through the two factories (one Lombok field each) to the four services; the coding
+  service picks it up from `AgentCollaborators`, and triage builds its router per run so it holds the
+  field. `AgentToolRouterExecuteCodeTest` (7 tests) holds the nested half: a real `cat` through the
+  router proves the arguments arrive flattened, a mock proves the whitelist gates programs too, and
+  two more prove `execute-code` is refused inside a program and that a bot without the tool never
+  reaches the sandbox.
+
+**Superseded wording.** Where §3.6, §4–§7, the criteria table and the ADRs still name
+`agent.code-execution.enabled`/`hardened`/`network`/`max-output-size`/`mcp-deny-tools`,
+`AgentToolResolver`, `ResolvedToolSet`, the `ToolCallObserver`, or the read-only policy, that text
+describes the plan as proposed. §3.8, §3.10 and this section carry the design as built; the
+scenario rows and criteria that depend on a removed knob are read with those substitutions.
 
 ## 11. Open at implementation time
 
 - **Default-configuration seed or not?** Recommendation: **no `bot_tool_selections` seed row**.
   `execute-code` is not repository exploration, it changes model behaviour, and it should be an
   explicit operator opt-in — reachable through the admin tool-configuration UI (hence the
-  `BuiltinToolRegistry` line in §3.4) plus `agent.code-execution.enabled`. If the maintainer prefers
+  `BuiltinToolRegistry` line in §3.4). There is no `enabled` switch: the whitelist is the only
+  opt-in, so a bot that has not selected the tool cannot reach the sandbox (§3.10). If the maintainer
+  prefers
   it on by default, the seed is an idempotent `INSERT … WHERE c.default_entry = TRUE AND NOT EXISTS
   (...)` in **both** `db/migration/h2/` and `db/migration/postgresql/`, plus the `data.sql` test
   seed. Either way, **take the version from `git log --all --name-only --pretty=format: --
@@ -892,9 +925,9 @@ Phase 3 (the execution engine) added these, each recorded because the plan's wor
   (`agent.validation.max-tool-executions`) or only against `max-tool-calls`? Recommendation: only
   the per-execution budget, with the outer `execute-code` call itself counting once as a normal tool
   call — otherwise the deterministic-batching win is taxed away.
-- Should the read-only policy (§3.8) be a config list rather than code, so an operator can opt into
-  nested writes per deployment? Recommendation: config list in `CodeExecutionConfig`, defaulting to
-  the read-only set, evaluated once at resolution time.
+- ~~Should the read-only policy (§3.8) be a config list?~~ **Decided: the policy is gone.** A
+  program may call whatever the bot selected; a per-deployment list would be a third place to get the
+  same decision wrong (§3.8).
 - `tools.list()` payload: names + one-line descriptions, or names only? Recommendation: names +
   short descriptions (it is one call, and the description is what lets the model pick without a
   `describe()` round-trip per candidate).
@@ -902,5 +935,6 @@ Phase 3 (the execution engine) added these, each recorded because the plan's wor
   in a follow-up; §3.9 assumes follow-up, so on those four surfaces a nested call produces a log
   line and a metric but no record. Say so when reporting rather than implying parity (§9 row 18).
 - Whether to derive per-MCP-tool read/write capability metadata (a selection flag, or a convention
-  over MCP tool annotations) so `mcp-deny-tools` becomes unnecessary. V1 keeps the operator list
-  because an MCP `inputSchema` carries no such signal (§9 row 11).
+  over MCP tool annotations). Still open, but no longer load-bearing: `mcp-deny-tools` was removed
+  with the second policy, so nothing waits on it. It would only ever inform the bot's own selection
+  (§9 row 11).

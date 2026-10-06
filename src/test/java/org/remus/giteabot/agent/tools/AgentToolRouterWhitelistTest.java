@@ -36,7 +36,7 @@ class AgentToolRouterWhitelistTest {
                                       McpToolCatalog mcpCatalog,
                                       McpOrchestrationService mcpOrchestration) {
         return new AgentToolRouter(tes, catalog, mcpOrchestration, null,
-                mcpCatalog, mock(RepositoryApiClient.class), allowed);
+                mcpCatalog, mock(RepositoryApiClient.class), allowed, null);
     }
 
     private static ToolCallContext ctx(String tool, List<String> args) {

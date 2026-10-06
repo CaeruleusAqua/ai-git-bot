@@ -1,14 +1,20 @@
 package org.remus.giteabot.agent.tools;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.agent.codeexecution.CodeExecutionScope;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionOutcome;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
+import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.McpConfiguration;
+import tools.jackson.databind.JsonNode;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,6 +50,11 @@ public class AgentToolRouter {
     private final RepositoryApiClient repositoryClient;
     /** Whitelist of built-in tool names; {@code null} disables enforcement (test paths only). */
     private final Set<String> allowedBuiltinTools;
+    /**
+     * The sandbox an {@code execute-code} call runs its program in. {@code null} means this
+     * deployment has none wired (test paths), and the tool says so instead of failing obscurely.
+     */
+    private final PythonExecutionService pythonExecution;
 
 
     public AgentToolRouter(ToolExecutionService toolExecutionService,
@@ -52,7 +63,8 @@ public class AgentToolRouter {
                            McpConfiguration mcpConfiguration,
                            McpToolCatalog mcpToolCatalog,
                            RepositoryApiClient repositoryClient,
-                           Set<String> allowedBuiltinTools) {
+                           Set<String> allowedBuiltinTools,
+                           PythonExecutionService pythonExecution) {
         this.toolExecutionService = toolExecutionService;
         this.catalog = catalog;
         this.mcpOrchestrationService = mcpOrchestrationService;
@@ -60,6 +72,7 @@ public class AgentToolRouter {
         this.mcpToolCatalog = mcpToolCatalog != null ? mcpToolCatalog : McpToolCatalog.empty();
         this.repositoryClient = repositoryClient;
         this.allowedBuiltinTools = allowedBuiltinTools;
+        this.pythonExecution = pythonExecution;
     }
 
     public boolean isMcpTool(String toolName) {
@@ -80,6 +93,9 @@ public class AgentToolRouter {
             return denied;
         }
         try {
+            if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
+                return executeAgentControl(mode, context);
+            }
             return switch (mode) {
                 case CODING -> executeCoding(context);
                 case WRITER -> executeWriter(context);
@@ -113,6 +129,55 @@ public class AgentToolRouter {
         return new ToolResult(false, -1, "",
                 "Tool '" + tool + "' is not enabled for this bot. Choose another tool from the "
                         + "available list or ask the operator to enable it in the bot's tool configuration.");
+    }
+
+    /** The tool surface this mode offers the model — exactly what a program may call. */
+    public List<ToolDescriptor> availableTools(Mode mode) {
+        return catalog.nativeDescriptors(role(mode), mcpToolCatalog, allowedBuiltinTools);
+    }
+
+    /**
+     * Runs one tool on behalf of a sandboxed program. Same dispatch as a direct call: the JSON
+     * arguments are flattened to the positional vector this surface's executors declare, and the
+     * result is the one the model itself would have been handed — a whitelist refusal included,
+     * which comes back in the executor's own words. {@code execute-code} is refused, so a program
+     * cannot nest sandboxes.
+     */
+    public ToolResult executeNested(Mode mode, ToolCallContext base, String tool, JsonNode arguments) {
+        if (tool == null || tool.isBlank()) {
+            return new ToolResult(false, -1, "", "Empty tool name");
+        }
+        if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
+            return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program");
+        }
+        ToolCallContext nested = new ToolCallContext(base.owner(), base.repo(), base.issueNumber(),
+                base.workspaceDir(),
+                ImplementationPlan.ToolRequest.builder()
+                        .id("execute-code-nested")
+                        .tool(tool)
+                        .args(ToolArguments.toPositional(tool, arguments))
+                        .build(),
+                base.diffSummary());
+        return execute(mode, nested);
+    }
+
+    private ToolResult executeAgentControl(Mode mode, ToolCallContext context) {
+        if (pythonExecution == null) {
+            return new ToolResult(false, -1, "", "execute-code is not available in this deployment");
+        }
+        List<String> args = context.args();
+        if (args.isEmpty() || args.get(0).isBlank()) {
+            return new ToolResult(false, -1, "",
+                    "execute-code needs the Python program as its first argument");
+        }
+        CodeExecutionScope scope = new CodeExecutionScope(availableTools(mode),
+                (tool, arguments) -> executeNested(mode, context, tool, arguments));
+        PythonExecutionOutcome outcome = pythonExecution.execute(args.get(0), scope);
+        return new ToolResult(outcome.success(), outcome.exitCode(), outcome.output(), outcome.error());
+    }
+
+    private static ToolCatalog.Role role(Mode mode) {
+        return mode == Mode.WRITER ? ToolCatalog.Role.WRITER : ToolCatalog.Role.CODING;
     }
 
     private ToolResult executeCoding(ToolCallContext ctx) {

@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.remus.giteabot.agent.AgentCollaborators;
 import org.remus.giteabot.agent.IssueImplementationContext;
 import org.remus.giteabot.agent.IssueImplementationService;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
@@ -46,6 +47,7 @@ public class AgentServiceFactory {
     private final McpOrchestrationService mcpOrchestrationService;
     private final McpToolSelectionService mcpToolSelectionService;
     private final BotToolSelectionService botToolSelectionService;
+    private final PythonExecutionService pythonExecution;
 
     /**
      * Creates a per-bot {@link IssueImplementationService} using the bot's AI and Git integrations.
@@ -70,7 +72,7 @@ public class AgentServiceFactory {
 
     private AgentCollaborators collaborators() {
         return new AgentCollaborators(promptService, agentConfig, agentSessionService,
-                toolExecutionService, toolCatalog, workspaceService);
+                toolExecutionService, toolCatalog, workspaceService, pythonExecution);
     }
 
     /**
@@ -86,7 +88,7 @@ public class AgentServiceFactory {
                 bot.getSystemPrompt().getWriterAgentSystemPrompt(), bot.getUsername(),
                 mcpOrchestrationService, bot.getMcpConfiguration(), mcpToolCatalog,
                 botToolSelectionService.allowedBuiltinTools(bot.getToolConfiguration()),
-                getContextWindowTokens(bot));
+                getContextWindowTokens(bot), pythonExecution);
     }
 
     private McpToolCatalog discoverMcpToolCatalog(Bot bot) {
