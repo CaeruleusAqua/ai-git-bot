@@ -84,6 +84,18 @@ public class AgentToolRouter {
      * of the corresponding agent service for the given mode.
      */
     public ToolResult execute(Mode mode, ToolCallContext context) {
+        return execute(mode, context, null);
+    }
+
+    /**
+     * The one dispatch path. Both a direct model call and a program's nested call come through here,
+     * so the whitelist gates them alike — only the log line tells them apart.
+     *
+     * @param origin {@code null} when the model called the tool itself, otherwise the control tool the
+     *               call came from. Without it a program's reads are logged identically to the model's
+     *               own and a run cannot be reconstructed afterwards.
+     */
+    private ToolResult execute(Mode mode, ToolCallContext context, String origin) {
         String tool = context.tool();
         if (tool.isBlank()) {
             return new ToolResult(false, -1, "", "Empty tool name");
@@ -91,6 +103,12 @@ public class AgentToolRouter {
         ToolResult denied = enforceWhitelist(tool);
         if (denied != null) {
             return denied;
+        }
+        if (origin == null) {
+            log.debug("Executing tool: {} {}", tool, String.join(" ", context.args()));
+        } else {
+            log.debug("Executing nested tool (from {}): {} {}", origin, tool,
+                    String.join(" ", context.args()));
         }
         try {
             if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
@@ -158,9 +176,16 @@ public class AgentToolRouter {
                         .args(ToolArguments.toPositional(tool, arguments))
                         .build(),
                 base.diffSummary());
-        return execute(mode, nested);
+        return execute(mode, nested, base.tool());
     }
 
+    /**
+     * Runs the program. Logged at INFO, unlike the per-call DEBUG lines: this is the one tool that
+     * spawns a process and folds an arbitrary number of reads into a single round, so an operator has
+     * to be able to see that it happened and how it went without turning on DEBUG for the whole bot.
+     * The program text itself is never logged — it is written by the model and may embed repository
+     * content.
+     */
     private ToolResult executeAgentControl(Mode mode, ToolCallContext context) {
         if (pythonExecution == null) {
             return new ToolResult(false, -1, "", "execute-code is not available in this deployment");
@@ -170,9 +195,18 @@ public class AgentToolRouter {
             return new ToolResult(false, -1, "",
                     "execute-code needs the Python program as its first argument");
         }
-        CodeExecutionScope scope = new CodeExecutionScope(availableTools(mode),
+        String program = args.get(0);
+        List<ToolDescriptor> surface = availableTools(mode);
+        log.info("execute-code: running a {}-char program against {} available tool(s)",
+                program.length(), surface.size());
+        long started = System.nanoTime();
+        CodeExecutionScope scope = new CodeExecutionScope(surface,
                 (tool, arguments) -> executeNested(mode, context, tool, arguments));
-        PythonExecutionOutcome outcome = pythonExecution.execute(args.get(0), scope);
+        PythonExecutionOutcome outcome = pythonExecution.execute(program, scope);
+        log.info("execute-code: finished in {} ms — success={}, exit={}, {} char(s) of output{}",
+                (System.nanoTime() - started) / 1_000_000, outcome.success(), outcome.exitCode(),
+                outcome.output() == null ? 0 : outcome.output().length(),
+                outcome.error() == null || outcome.error().isBlank() ? "" : ", error=" + outcome.error());
         return new ToolResult(outcome.success(), outcome.exitCode(), outcome.output(), outcome.error());
     }
 
@@ -183,7 +217,6 @@ public class AgentToolRouter {
     private ToolResult executeCoding(ToolCallContext ctx) {
         String tool = ctx.tool();
         List<String> args = ctx.args();
-        log.debug("Executing tool: {} {}", tool, String.join(" ", args));
         // Dispatch order: file > MCP > context > validation. Identical to the
         // historic in-line dispatch but driven by the central ToolCatalog
         // instead of stacking three boolean checks.
@@ -203,7 +236,6 @@ public class AgentToolRouter {
         String original = ctx.tool();
         String lower = original.strip().toLowerCase();
         List<String> args = ctx.args();
-        log.debug("Executing tool: {} {}", original, String.join(" ", args));
         switch (lower) {
             case "get-issue" -> {
                 Long issue = parseIssueNumber(args, ctx.issueNumber());
