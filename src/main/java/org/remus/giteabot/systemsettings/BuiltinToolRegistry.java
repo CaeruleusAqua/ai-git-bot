@@ -18,7 +18,7 @@ import java.util.Map;
  * writer-repository) and by role; for the admin UI and the
  * {@link BotToolConfiguration} whitelist we need a single flat view with a
  * stable lower-case identifier. The order of {@link #builtinTools()} is the
- * one used in the editor: file → context → validation → repository.</p>
+ * one used in the editor: file → context → validation → repository → agent-control.</p>
  *
  * <p>The operator-facing description is resolved from the message bundle
  * ({@code tool.<name>.description}) and falls back to the English native-API
@@ -44,6 +44,9 @@ public class BuiltinToolRegistry {
         addAll(byName, toolCatalog.contextToolNames(),          ToolKind.CONTEXT,    ToolCatalog.Role.CODING);
         addAll(byName, toolCatalog.validationToolNames(),       ToolKind.VALIDATION, ToolCatalog.Role.CODING);
         addAll(byName, toolCatalog.writerRepositoryToolNames(), ToolKind.REPOSITORY, ToolCatalog.Role.WRITER);
+        // Without this line the tool is registered but never appears in the admin
+        // tool-configuration UI, so no bot can put it on its whitelist.
+        addAll(byName, toolCatalog.agentControlToolNames(),      ToolKind.AGENT_CONTROL, ToolCatalog.Role.CODING);
         return List.copyOf(byName.values());
     }
 
