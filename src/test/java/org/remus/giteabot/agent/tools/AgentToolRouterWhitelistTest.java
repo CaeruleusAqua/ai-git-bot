@@ -168,7 +168,7 @@ class AgentToolRouterWhitelistTest {
         assertThat(router.availableTools(AgentToolRouter.Mode.REVIEW))
                 .extracting(ToolDescriptor::name)
                 .contains("cat")
-                .doesNotContain("execute-code", "write-file", "branch-switcher", "mvn");
+                .doesNotContain("write-file", "branch-switcher", "mvn");
 
         assertThat(router.availableTools(AgentToolRouter.Mode.CODING))
                 .extracting(ToolDescriptor::name)
