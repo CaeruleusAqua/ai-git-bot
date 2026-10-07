@@ -56,6 +56,17 @@ class ToolCatalogTest {
     }
 
     @Test
+    void executeIsAValidationTool() {
+        // `execute` is the repository-script validation tool: classification only,
+        // its argument handling lives in ToolExecutionService.
+        assertThat(catalog.validationToolNames()).contains("execute");
+        assertThat(catalog.kindOf("execute")).isEqualTo(ToolKind.VALIDATION);
+        assertThat(catalog.isValidation("execute")).isTrue();
+        assertThat(catalog.isSilent("execute")).isFalse();
+        assertThat(catalog.bucketOf("execute")).isEqualTo(ToolCatalog.DisplayBucket.VALIDATION);
+    }
+
+    @Test
     void mcpPrefixedToolIsMcpKind() {
         assertThat(catalog.kindOf("mcp:github:list_issues")).isEqualTo(ToolKind.MCP);
         assertThat(catalog.isMcp("mcp:github:list_issues")).isTrue();
@@ -166,7 +177,8 @@ class ToolCatalogTest {
                 "get-issue", "search-issues");
         // No mutations, no validation on writer.
         assertThat(names).doesNotContain("write-file", "patch-file", "mkdir", "delete-file",
-                "mvn", "gradle", "npm", "dotnet", "cargo", "go", "python3", "make", "cmake");
+                "mvn", "gradle", "npm", "dotnet", "cargo", "go", "python3", "make", "cmake",
+                "execute");
     }
 
     @Test
@@ -188,6 +200,16 @@ class ToolCatalogTest {
         assertThat(mvn.jsonSchema().get("properties").get("args").get("type").asString()).isEqualTo("array");
         assertThat(mvn.jsonSchema().get("properties").get("args").get("items").get("type").asString())
                 .isEqualTo("string");
+    }
+
+    @Test
+    void nativeDescriptors_executeCarriesPositionalArgsAndAScriptExample() {
+        ToolDescriptor execute = catalog.nativeDescriptors(ToolCatalog.Role.CODING, McpToolCatalog.empty(), null)
+                .stream().filter(d -> d.name().equals("execute")).findFirst().orElseThrow();
+        assertThat(execute.jsonSchema().get("properties").get("args").get("type").asString()).isEqualTo("array");
+        assertThat(execute.description())
+                .contains("validation script")
+                .contains("scripts/validate.sh");
     }
 
     @Test
