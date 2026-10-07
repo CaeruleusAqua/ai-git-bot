@@ -301,7 +301,7 @@ public class ToolCatalog {
             // refuses it, and the PR-workflow agents run their own executors with fixed tool sets, so
             // advertising it there would be a promise the dispatch does not keep.
             entry("execute-code", ToolKind.AGENT_CONTROL,
-                    EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
+                    EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW, Role.REVIEW),
                     "Run a Python program that can call the read-only tools available in this run "
                             + "and print one compact result. Reach for it when the answer takes "
                             + "more than one tool call, or a step between them: reading several "

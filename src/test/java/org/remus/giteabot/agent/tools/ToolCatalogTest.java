@@ -110,7 +110,7 @@ class ToolCatalogTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"rg", "find", "cat", "git-log", "git-blame", "tree",
-            "ctags-signatures", "ctags-deps", "pr-diff", "get-issue", "search-issues"})
+            "ctags-signatures", "ctags-deps", "pr-diff", "get-issue", "search-issues", "execute-code"})
     void readOnlyReviewToolsAreAvailableAcrossCatalogSurfaces(String name) {
         assertThat(catalog.describeFor(ToolCatalog.Role.REVIEW, name)).isPresent();
         assertThat(catalog.reviewToolNames(Set.of(name))).containsExactly(name);
@@ -302,7 +302,7 @@ class ToolCatalogTest {
                 .contains("pr-test-write", "pr-test-run", "preview-url", "preview-status",
                         "attach-artifact", "unit-test-write", "doc-write", "doc-delete",
                         "i18n-write", "i18n-delete")
-                .doesNotContain("cat", "write-file", "mvn", "get-issue", "execute-code");
+                .doesNotContain("cat", "write-file", "mvn", "get-issue");
 
         assertThat(catalog.builtinToolNames(ToolCatalog.Role.WRITER))
                 .contains("cat", "branch-switcher", "get-issue", "search-issues", "execute-code")
