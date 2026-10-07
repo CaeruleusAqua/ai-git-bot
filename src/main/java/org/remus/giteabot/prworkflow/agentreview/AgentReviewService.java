@@ -46,7 +46,7 @@ import java.util.regex.Pattern;
  *
  * <p>The flow mirrors {@link org.remus.giteabot.agent.IssueImplementationService}
  * but is strictly read-only: it clones a workspace, lets the LLM explore the
- * repository through {@link ToolCatalog.Role#WRITER} (read-only) tools and MCP,
+ * repository through {@link ToolCatalog.Role#REVIEW} (read-only) tools and selected MCP,
  * then posts a single review comment. When the operator enables the optional
  * formal review decision, the model classifies its findings by severity and the
  * application computes the formal action (approve / request changes) from
@@ -638,7 +638,9 @@ public class AgentReviewService {
         ToolingMode mode = (aiClient != null && aiClient.supportsNativeTools())
                 ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String base = systemPromptAssembler.assemble(context.reviewAgentSystemPrompt(), toolCatalog,
-                context.allowedBuiltinTools(), context.mcpToolCatalog(), mode,
+                //context.allowedBuiltinTools(), context.mcpToolCatalog(), mode,
+                //SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
+                toolCatalog.reviewToolNames(context.allowedBuiltinTools()), context.mcpToolCatalog(), mode,
                 SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
 
         if (!enableFormalDecision) {
