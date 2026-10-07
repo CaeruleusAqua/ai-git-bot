@@ -3,7 +3,11 @@
 -- Production seeds this through Flyway migration V12. Tests run with
 -- spring.flyway.enabled=false and let Hibernate create the schema via
 -- ddl-auto=create-drop, so the equivalent rows must be provided here.
--- Keep the tool list in sync with V12/V29/V37/V56.
+-- Keep the tool list in sync with V12/V29/V37.
+--
+-- `execute-code` is deliberately NOT seeded here either — same reasoning as the validation tools:
+-- a fresh installation must not start able to run code. The tool is opt-in per bot (its selection),
+-- and off deployment-wide unless agent.code-execution.enabled=true.
 
 INSERT INTO bot_tool_configurations (name, default_entry, created_at, updated_at)
 SELECT 'Default', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -32,8 +36,7 @@ CROSS JOIN (VALUES
     ('ripgrep',         'CONTEXT'),
     ('grep',            'CONTEXT'),
     ('get-issue',       'REPOSITORY'),
-    ('search-issues',   'REPOSITORY'),
-    ('execute-code',    'AGENT_CONTROL')
+    ('search-issues',   'REPOSITORY')
 ) AS v(tool_name, tool_kind)
 WHERE c.default_entry = TRUE
   AND NOT EXISTS (

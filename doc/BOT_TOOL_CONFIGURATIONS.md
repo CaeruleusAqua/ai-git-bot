@@ -206,10 +206,13 @@ application-level code:
    fresh installations and existing Default configurations expose every
    context-gathering tool. (V30 separately backfills `pr-diff` into custom
    configurations used by bots with the agentic-review workflow.)
-4. **V56** adds the `execute-code` control tool (`AGENT_CONTROL`) to the
-   Default configuration. There is no backfill into custom configurations this
-   time — a bot on its own configuration keeps its own choice — and because
-   Default cannot be edited, the row is permanent there.
+4. `execute-code` is **not** seeded into the Default configuration. Its program
+   runs as the service user inside the bot's own container, so it can read this
+   process's start-time environment and reach the network: that has to be an
+   operator's decision, revocable, and made per bot. Deployment-wide it is
+   additionally gated by `agent.code-execution.enabled` (default `false`), which
+   no tool selection can override. Hard isolation (separate uid, no network,
+   read-only rootfs) is the precondition for revisiting this default.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

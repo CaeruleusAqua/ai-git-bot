@@ -638,8 +638,6 @@ public class AgentReviewService {
         ToolingMode mode = (aiClient != null && aiClient.supportsNativeTools())
                 ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String base = systemPromptAssembler.assemble(context.reviewAgentSystemPrompt(), toolCatalog,
-                //context.allowedBuiltinTools(), context.mcpToolCatalog(), mode,
-                //SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
                 toolCatalog.reviewToolNames(context.allowedBuiltinTools()), context.mcpToolCatalog(), mode,
                 SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
 

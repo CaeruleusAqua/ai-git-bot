@@ -174,6 +174,10 @@ public class AgentToolRouter {
         if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
             return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program");
         }
+        if (!isCallableFromProgram(catalog.kindOf(tool), tool)) {
+            return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program: "
+                    + "a program may only read repository state, so call this one directly");
+        }
         ToolCallContext nested = new ToolCallContext(base.owner(), base.repo(), base.issueNumber(),
                 base.workspaceDir(),
                 ImplementationPlan.ToolRequest.builder()
@@ -184,6 +188,24 @@ public class AgentToolRouter {
                         .build(),
                 base.diffSummary());
         return execute(mode, nested, base.tool());
+    }
+
+    /**
+     * Whether a program may call a tool: reads only.
+     *
+     * <p>Writes, the branch switch and the validation tools stay model calls, because the strategy
+     * classifies a round by the tools the model asked for ({@code CodingAgentStrategy} counts context
+     * rounds, implementation attempts and validation separately): a mutation carried out inside a
+     * program would be accounted as a read-only round, and a branch it moved would not be the branch
+     * the strategy recorded. The same predicate filters the surface the program is offered, so it is
+     * never advertised a tool it cannot use.</p>
+     */
+    private static boolean isCallableFromProgram(ToolKind kind, String tool) {
+        if (kind == ToolKind.CONTEXT) {
+            // CONTEXT, but it moves the checkout — the one read-only kind with a side effect.
+            return !"branch-switcher".equals(tool);
+        }
+        return kind == ToolKind.REPOSITORY || kind == ToolKind.MCP;
     }
 
     /**
@@ -203,7 +225,9 @@ public class AgentToolRouter {
                     "execute-code needs the Python program as its first argument");
         }
         String program = args.getFirst();
-        List<ToolDescriptor> surface = availableTools(mode);
+        List<ToolDescriptor> surface = availableTools(mode).stream()
+                .filter(tool -> isCallableFromProgram(catalog.kindOf(tool.name()), tool.name()))
+                .toList();
         log.info("execute-code: running a {}-char program against {} available tool(s)",
                 program.length(), surface.size());
         long started = System.nanoTime();

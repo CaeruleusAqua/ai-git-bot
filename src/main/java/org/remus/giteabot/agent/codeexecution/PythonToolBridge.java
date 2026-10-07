@@ -1,6 +1,7 @@
 package org.remus.giteabot.agent.codeexecution;
 
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.util.TextSupport;
 import org.remus.giteabot.ai.ToolDescriptor;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -192,7 +193,7 @@ final class PythonToolBridge {
         if (value.length() <= maxNestedResultChars) {
             return value;
         }
-        return value.substring(0, maxNestedResultChars)
+        return TextSupport.cutAtCodePoint(value, maxNestedResultChars)
                 + "\n[nested result truncated at " + maxNestedResultChars + " chars]";
     }
 
@@ -209,7 +210,7 @@ final class PythonToolBridge {
         if (flattened.length() <= MAX_SUMMARY_CHARS) {
             return flattened;
         }
-        return flattened.substring(0, MAX_SUMMARY_CHARS - 3) + "...";
+        return TextSupport.cutAtCodePoint(flattened, MAX_SUMMARY_CHARS - 3) + "...";
     }
 
     private static String notAllowedMessage(String name) {

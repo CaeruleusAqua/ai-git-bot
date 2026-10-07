@@ -299,7 +299,7 @@ public class ToolCatalog {
             // ---- agent-control tool (dispatched before the tool families) ----
             entry("execute-code", ToolKind.AGENT_CONTROL,
                     EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
-                    "Run a Python program that can call the tools available in this request "
+                    "Run a Python program that can call the read-only tools available in this "
                             + "and print one compact result. Reach for it when the answer takes "
                             + "more than one tool call, or a step between them: reading several "
                             + "files and comparing what they declare, searching the tree and "
@@ -315,7 +315,9 @@ public class ToolCatalog {
                             + "checkout is not on its filesystem: read repository files with "
                             + "tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
                             + "tools.call(\"rg\", {\"args\": [\"pattern\"]}), not with open(). "
-                            + "print() hands the answer back.",
+                            + "Writes, the branch switch and the build tools are not callable from "
+                            + "inside a program — call those directly, where the round accounting "
+                            + "sees them. print() hands the answer back.",
                     objectSchema(
                             prop("code", "string", "Python source to execute."),
                             required("code")))

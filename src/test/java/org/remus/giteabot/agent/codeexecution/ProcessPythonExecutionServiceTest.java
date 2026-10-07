@@ -45,10 +45,30 @@ class ProcessPythonExecutionServiceTest {
         }
     }
 
+    /**
+     * A deployment that has switched code execution on: the shipped default is {@code false}, so every
+     * test here opts in explicitly — and a test that wants the switch off turns it back off through
+     * {@code tweak}.
+     */
     private static ProcessPythonExecutionService service(Consumer<AgentConfigProperties> tweak) {
         AgentConfigProperties config = new AgentConfigProperties();
         tweak.accept(config);
         return new ProcessPythonExecutionService(config);
+    }
+
+    private static boolean hasLoneSurrogate(String text) {
+        for (int i = 0; i < text.length(); i++) {
+            char current = text.charAt(i);
+            if (Character.isHighSurrogate(current)) {
+                if (i + 1 >= text.length() || !Character.isLowSurrogate(text.charAt(i + 1))) {
+                    return true;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(current)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<ToolDescriptor> advertised(String... names) {
@@ -69,6 +89,27 @@ class ProcessPythonExecutionServiceTest {
 
     private static PythonToolExecutor returns(ToolResult result) {
         return (tool, arguments) -> result;
+    }
+
+
+    @Test
+    void multiByteOutputWithinTheCapIsNotCalledTruncated() {
+        PythonExecutionOutcome outcome =
+                service(config -> config.getBudget().setMaxToolResultChars(50))
+                        .execute("print(chr(252) * 40)", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.output()).isEqualTo("ü".repeat(40) + "\n");
+        assertThat(outcome.output()).doesNotContain("truncated");
+    }
+
+    @Test
+    void truncationKeepsTheCapAndNeverSplitsASurrogatePair() {
+        PythonExecutionOutcome outcome =
+                service(config -> config.getBudget().setMaxToolResultChars(5))
+                        .execute("print(chr(0x1F600) * 4)", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.output()).contains("[output truncated at 5 chars]");
+        assertThat(hasLoneSurrogate(outcome.output())).isFalse();
     }
 
     @Test

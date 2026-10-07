@@ -2,6 +2,7 @@ package org.remus.giteabot.agent.codeexecution;
 
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.util.ProcessSupport;
+import org.remus.giteabot.util.TextSupport;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
@@ -43,8 +44,8 @@ import java.util.stream.Stream;
  *
  * <p>The sandbox decides nothing about which tools exist or whether the run is allowed: it relays a
  * name and its arguments to the surface's own executor ({@link PythonToolExecutor}) and hands the
- * answer back. The bot's tool whitelist is what decides whether a program runs at all, exactly as it
- * does for every other tool.</p>
+ * answer back. Two gates decide whether a program runs at all, and this service enforces the second
+ * itself: the deployment switch {@code agent.code-execution.enabled} and the bot's tool whitelist.</p>
  *
  * <p>Two deviations from the plan's wording, both deliberate: the serving thread is a platform daemon
  * thread rather than a virtual one (there is one per execution, so the scheduler buys nothing), and
@@ -72,6 +73,13 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
 
     /** The conventional timeout exit code, so a caller can tell it from the program's own. */
     private static final int EXIT_TIMEOUT = 124;
+
+    /**
+     * How long teardown waits for an in-flight nested call before the workspace it may be reading is
+     * deleted. {@code interrupt()} does not abort a call blocked on I/O, so this narrows the window
+     * rather than closing it.
+     */
+    private static final long SERVING_JOIN_MILLIS = 500;
 
     private final CodeExecutionLimits limits;
     private final ObjectMapper json = new ObjectMapper();
@@ -114,6 +122,7 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
                 } finally {
                     serving.interrupt();
                 }
+                awaitServing(serving);
                 return outcome(result, bridge);
             }
         } catch (IOException e) {
@@ -201,14 +210,28 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         }
     }
 
+    /**
+     * Waits for the serving thread to notice the interruption, bounded, so a nested call that is
+     * still in flight gets a chance to finish before the caller's {@code finally} deletes the
+     * workspace underneath it.
+     */
+    private static void awaitServing(Thread serving) {
+        try {
+            serving.join(SERVING_JOIN_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private PythonExecutionOutcome outcome(ProcessSupport.CommandResult result, PythonToolBridge bridge) {
         String output = result.output();
         int cap = limits.maxResultChars();
-        boolean truncated = output.getBytes(StandardCharsets.UTF_8).length > cap;
-        if (truncated) {
-            // Bounded by characters too: what the model reads is what it pays for.
-            output = output.length() > cap ? output.substring(0, cap) : output;
-            output = output + "\n[output truncated at " + cap + " chars]";
+        // Characters, the unit the marker names and every other result cap uses. A byte-based test
+        // called multi-byte output truncated when nothing was cut, and substring() at a character
+        // offset can split a surrogate pair.
+        if (output.length() > cap) {
+            output = TextSupport.cutAtCodePoint(output, cap)
+                    + "\n[output truncated at " + cap + " chars]";
         }
 
         String error = "";

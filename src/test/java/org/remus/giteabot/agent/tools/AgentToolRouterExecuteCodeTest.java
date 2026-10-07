@@ -46,6 +46,12 @@ class AgentToolRouterExecuteCodeTest {
 
     private static final AgentConfigProperties CONFIG = new AgentConfigProperties();
 
+    /** Opts in explicitly: the shipped default for {@code agent.code-execution.enabled} is false. */
+    private static ProcessPythonExecutionService optedInSandbox() {
+        AgentConfigProperties config = new AgentConfigProperties();
+        return new ProcessPythonExecutionService(config);
+    }
+
     /** Detected once: this is the only test here that needs a real interpreter. */
     private static boolean pythonAvailable;
 
@@ -213,7 +219,7 @@ class AgentToolRouterExecuteCodeTest {
                 """;
 
         ToolResult result = router(tools, botWithExecuteCode(),
-                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                optedInSandbox())
                 .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
 
         // The file's text made it: python -> bridge -> router -> the real cat -> back out of stdout.
@@ -243,7 +249,7 @@ class AgentToolRouterExecuteCodeTest {
                 null);
 
         ToolResult result = router(mock(ToolExecutionService.class), botWithExecuteCode(),
-                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                optedInSandbox())
                 .execute(AgentToolRouter.Mode.CODING, context);
 
         assertThat(result.success()).isTrue();
@@ -271,7 +277,7 @@ class AgentToolRouterExecuteCodeTest {
                 """;
 
         ToolResult result = router(tools, botWithExecuteCode(),
-                new ProcessPythonExecutionService(new AgentConfigProperties()))
+                optedInSandbox())
                 .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
 
         assertThat(result.success()).isTrue();
@@ -304,13 +310,47 @@ class AgentToolRouterExecuteCodeTest {
                 """;
 
         ToolResult result = router(tools, Set.of("execute-code", "find", "cat"),
-                new ProcessPythonExecutionService(CONFIG))
+                optedInSandbox())
                 .execute(AgentToolRouter.Mode.CODING, context(workspace, program));
 
         assertThat(result.success()).isTrue();
         assertThat(result.output())
                 .contains("item files: 2")
                 .contains("mdeg_110100-11_SWREQ_1.md");
+    }
+
+    /**
+     * A program reads repository state and nothing else. Writes, the branch switch and the build tools
+     * stay model calls: the strategy classifies a round by the tools the model asked for, so a
+     * mutation hidden inside a program would be booked as a read-only round.
+     */
+    @Test
+    void aProgramCannotMutateTheWorkspaceThroughTheToolSurface() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path workspace = Files.createTempDirectory("router-nested-write");
+        Files.writeString(workspace.resolve("README.md"), "readable\n");
+        ToolExecutionService tools =
+                new ToolExecutionService(CONFIG, new ToolCatalog(CONFIG), mock(WorkspaceService.class));
+        String program = """
+                written = tools.call("write-file", {"path": "generated.txt", "content": "x"})
+                print("write success:", written["success"])
+                switched = tools.call("branch-switcher", {"branch": "release"})
+                print("branch success:", switched["success"])
+                read = tools.call("cat", {"path": "README.md"})
+                print("read success:", read["success"], "|", read["output"].strip())
+                """;
+
+        ToolResult result = router(tools, Set.of("execute-code", "write-file", "branch-switcher", "cat"),
+                optedInSandbox()).execute(AgentToolRouter.Mode.CODING, context(workspace, program));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output())
+                .contains("write success: False")
+                .contains("branch success: False")
+                .contains("read success: True | 1 | readable");
+        assertThat(Files.exists(workspace.resolve("generated.txt")))
+                .as("a program cannot write through the tool surface")
+                .isFalse();
     }
 
 }
