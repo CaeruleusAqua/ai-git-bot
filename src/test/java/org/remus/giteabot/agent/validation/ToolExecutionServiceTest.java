@@ -70,6 +70,23 @@ class ToolExecutionServiceTest {
     }
 
     @Test
+    void executeContextTool_cat_treatsABlankSlotAsAnUnsuppliedLineArgument() throws IOException {
+        Path file = tempDir.resolve("src/Main.java");
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                line 1
+                line 2
+                line 3
+                """);
+
+        // {"path": …, "endLine": 3} arrives with the startLine slot blank rather than shifted into it.
+        ToolResult result = service.executeContextTool(tempDir, "cat", List.of("src/Main.java", "", "3"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("1 | line 1").contains("3 | line 3");
+    }
+
+    @Test
     void executeContextTool_rg_searchesWorkspace() throws IOException {
         Path file = tempDir.resolve("src/Config.java");
         Files.createDirectories(file.getParent());

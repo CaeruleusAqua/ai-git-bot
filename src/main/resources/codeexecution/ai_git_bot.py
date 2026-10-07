@@ -6,11 +6,12 @@ A program gets its tool surface from here:
 
     names = ai_git_bot.tools.list()
     schema = ai_git_bot.tools.describe("rg")
-    result = ai_git_bot.tools.call("rg", {"pattern": "TODO"})
+    result = ai_git_bot.tools.call("rg", {"args": ["TODO"]})
     print(result["output"])
 
 Every call becomes one JSON line on the AF_UNIX socket named by $AI_GIT_BOT_BRIDGE, and the
-reply is decoded back into Python objects. A refusal or a failure raises ToolError.
+reply is decoded back into Python objects. An ordinary refusal or a failed tool comes back as a
+result with ``success=False`` and an ``error`` string; ToolError is for a broken bridge itself.
 
 stdout is the program's own output channel and carries no protocol frames — the socket does.
 """
@@ -23,7 +24,7 @@ BRIDGE_ENV = "AI_GIT_BOT_BRIDGE"
 
 
 class ToolError(Exception):
-    """Raised when the agent refuses a tool or the tool itself fails."""
+    """Raised when the bridge itself fails — a closed socket, an unreadable reply."""
 
     def __init__(self, code, message):
         super().__init__("%s: %s" % (code, message))
@@ -83,8 +84,9 @@ class _Tools:
     def call(self, name, arguments=None):
         """Run one tool. Returns {"success", "exitCode"?, "output", "error"?}.
 
-        Raises ToolError when the tool is not available, when the execution's tool-call
-        budget is used up, or when the tool reports an error envelope.
+        A refusal (the tool is not on this surface) and a tool that failed both come back as a
+        result with ``success=False``. ToolError is raised when the sandbox itself would not relay
+        the call: the tool-call budget is used up, or the request is not one it understands.
         """
         return _connection().request(
             {"type": "tool_call", "name": name, "arguments": arguments or {}})

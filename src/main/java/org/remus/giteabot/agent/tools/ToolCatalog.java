@@ -297,9 +297,12 @@ public class ToolCatalog {
                 .withHint("**Drop a locale file that is no longer needed**: `i18n-delete` removes a matching locale file."),
 
             // ---- agent-control tool (dispatched before the tool families) ----
+            // Roles name the surfaces that dispatch it: coding, writer and triage. Read-only review
+            // refuses it, and the PR-workflow agents run their own executors with fixed tool sets, so
+            // advertising it there would be a promise the dispatch does not keep.
             entry("execute-code", ToolKind.AGENT_CONTROL,
                     EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW),
-                    "Run a Python program that can call the read-only tools available in this "
+                    "Run a Python program that can call the read-only tools available in this run "
                             + "and print one compact result. Reach for it when the answer takes "
                             + "more than one tool call, or a step between them: reading several "
                             + "files and comparing what they declare, searching the tree and "
@@ -311,10 +314,10 @@ public class ToolCatalog {
                             + "call. In the program, tools.list() shows what you may call, "
                             + "tools.describe(name) its arguments, and tools.call(name, "
                             + "arguments) calls it — a tool outside that set is refused. "
-                            + "The program runs in its own empty working directory, so the "
-                            + "checkout is not on its filesystem: read repository files with "
-                            + "tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
-                            + "tools.call(\"rg\", {\"args\": [\"pattern\"]}), not with open(). "
+                            + "The program starts in an empty working directory of its own, so "
+                            + "these tools are how you find the checkout: read repository files "
+                            + "with tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
+                            + "tools.call(\"rg\", {\"args\": [\"pattern\"]}). "
                             + "Writes, the branch switch and the build tools are not callable from "
                             + "inside a program — call those directly, where the round accounting "
                             + "sees them. print() hands the answer back.",

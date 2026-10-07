@@ -1,5 +1,7 @@
 package org.remus.giteabot.agent.codeexecution;
 
+import lombok.extern.slf4j.Slf4j;
+
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.util.ProcessSupport;
 import org.remus.giteabot.util.TextSupport;
@@ -44,14 +46,16 @@ import java.util.stream.Stream;
  *
  * <p>The sandbox decides nothing about which tools exist or whether the run is allowed: it relays a
  * name and its arguments to the surface's own executor ({@link PythonToolExecutor}) and hands the
- * answer back. Two gates decide whether a program runs at all, and this service enforces the second
- * itself: the deployment switch {@code agent.code-execution.enabled} and the bot's tool whitelist.</p>
+ * answer back. Whether a bot may run a program at all is decided before this service is reached: the
+ * tool is opt-in per bot, and {@link org.remus.giteabot.agent.tools.AgentToolRouter} refuses it when
+ * the bot's configuration does not select it.</p>
  *
  * <p>Two deviations from the plan's wording, both deliberate: the serving thread is a platform daemon
  * thread rather than a virtual one (there is one per execution, so the scheduler buys nothing), and
  * the process's output is drained by {@link ProcessSupport} rather than by a thread of our own — it
  * already bounds the captured bytes and escalates a timeout to a process-group kill.</p>
  */
+@Slf4j
 @Service
 public class ProcessPythonExecutionService implements PythonExecutionService {
 
@@ -73,13 +77,6 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
 
     /** The conventional timeout exit code, so a caller can tell it from the program's own. */
     private static final int EXIT_TIMEOUT = 124;
-
-    /**
-     * How long teardown waits for an in-flight nested call before the workspace it may be reading is
-     * deleted. {@code interrupt()} does not abort a call blocked on I/O, so this narrows the window
-     * rather than closing it.
-     */
-    private static final long SERVING_JOIN_MILLIS = 500;
 
     private final CodeExecutionLimits limits;
     private final ObjectMapper json = new ObjectMapper();
@@ -211,13 +208,27 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
     }
 
     /**
-     * Waits for the serving thread to notice the interruption, bounded, so a nested call that is
-     * still in flight gets a chance to finish before the caller's {@code finally} deletes the
-     * workspace underneath it.
+     * Waits for an in-flight nested call before the workspace it may be reading is deleted.
+     *
+     * <p>{@code interrupt()} does not abort a call blocked on I/O, so a program that ran out of time
+     * can leave one behind. The bound is the tool timeout the nested call is itself subject to: a call
+     * that respects its own timeout finishes inside it, and one that does not is reported instead of
+     * waited on for ever. Either way the workspace is removed underneath it, which is why the warning
+     * is not decoration.</p>
+     *
+     * <p>Nested calls run on {@code execute-code-bridge}, not on the agent's thread. Nothing depends on
+     * that difference today — the only {@link ThreadLocal}s in the codebase are the AI audit and retry
+     * contexts, and tool dispatch does not read them — but an executor that starts to will need its
+     * context handed over here.</p>
      */
-    private static void awaitServing(Thread serving) {
+    private void awaitServing(Thread serving) {
+        long bound = limits.timeout().toMillis();
         try {
-            serving.join(SERVING_JOIN_MILLIS);
+            serving.join(bound);
+            if (serving.isAlive()) {
+                log.warn("execute-code: a nested tool call is still running {} ms after the program "
+                        + "ended; the workspace is being removed underneath it", bound);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -229,9 +240,18 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         // Characters, the unit the marker names and every other result cap uses. A byte-based test
         // called multi-byte output truncated when nothing was cut, and substring() at a character
         // offset can split a surrogate pair.
-        if (output.length() > cap) {
-            output = TextSupport.cutAtCodePoint(output, cap)
-                    + "\n[output truncated at " + cap + " chars]";
+        boolean cutByChars = output.length() > cap;
+        if (cutByChars) {
+            output = TextSupport.cutAtCodePoint(output, cap);
+        }
+        // The capture is bounded in bytes, at this cap plus one slack window, so a result that never
+        // reaches the character cap can still have been cut: multi-byte text hits the byte budget
+        // first. Marking only the character cut would hand back a shortened result as a complete one.
+        boolean cutByBytes = output.getBytes(StandardCharsets.UTF_8).length >= cap + OUTPUT_SLACK_BYTES;
+        if (cutByChars) {
+            output = output + "\n[output truncated at " + cap + " chars]";
+        } else if (cutByBytes) {
+            output = output + "\n[output truncated at " + (cap + OUTPUT_SLACK_BYTES) + " bytes]";
         }
 
         String error = "";

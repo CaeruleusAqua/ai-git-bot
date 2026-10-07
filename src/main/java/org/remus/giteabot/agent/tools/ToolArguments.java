@@ -6,7 +6,6 @@ import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Converts the JSON argument object of a native tool call into the positional argument
@@ -61,9 +60,20 @@ public final class ToolArguments {
         // schema is the contract, and a tool that declares a property gets it.
         JsonNode properties = schema == null ? null : schema.get("properties");
         if (properties != null && properties.isObject()) {
-            for (Map.Entry<String, JsonNode> property : properties.properties()) {
-                JsonNode value = root.get(property.getKey());
-                if (value == null || value.isMissingNode() || value.isNull()) {
+            // A missing property is a hole, not a shorter vector: the executors read by declared
+            // index, so cat's {"path": "…", "endLine": 50} would otherwise arrive as startLine=50.
+            // Trailing holes are dropped — nothing follows them that they could shift.
+            List<String> declared = new ArrayList<>(properties.propertyNames());
+            int lastPresent = -1;
+            for (int i = 0; i < declared.size(); i++) {
+                if (isPresent(root.get(declared.get(i)))) {
+                    lastPresent = i;
+                }
+            }
+            for (int i = 0; i <= lastPresent; i++) {
+                JsonNode value = root.get(declared.get(i));
+                if (!isPresent(value)) {
+                    args.add("");
                     continue;
                 }
                 if (value.isArray()) {
@@ -84,6 +94,11 @@ public final class ToolArguments {
             args.add(root.toString());
         }
         return args;
+    }
+
+    /** Whether the caller sent a value for a declared property; a JSON null counts as absent. */
+    private static boolean isPresent(JsonNode value) {
+        return value != null && !value.isMissingNode() && !value.isNull();
     }
 
     private static String asString(JsonNode node) {

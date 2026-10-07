@@ -105,6 +105,15 @@ class ToolArgumentsTest {
                 .containsExactly(args.toString());
     }
 
+    @Test
+    void aSkippedOptionalPropertyKeepsThePositionOfTheOnesAfterIt() {
+        ObjectNode args = JSON.createObjectNode().put("path", "README.md").put("endLine", 50);
+
+        // cat reads startLine and endLine by position: without the hole this arrives as startLine=50.
+        assertThat(ToolArguments.toPositional("cat", args, schema("cat")))
+                .containsExactly("README.md", "", "50");
+    }
+
     private JsonNode schema(String tool) {
         return catalog.schemaOf(tool).orElse(null);
     }

@@ -77,8 +77,7 @@ configuration. This means:
   foreign-key constraint.
 - New built-in tools shipped in a later release are added to Default by
   follow-up migrations (V29 seeded `ctags-signatures` / `ctags-deps` and V37
-  `pr-diff`, both CONTEXT; V56 seeded the `execute-code` control tool, the only
-  AGENT_CONTROL member). Validation tools added through
+  `pr-diff`, both CONTEXT). Validation tools added through
   `agent.validation.available-tools` and any other built-in tools are
   **not** added to Default automatically — an admin opts in by editing the
   configuration in **System settings → Tool configurations**.
@@ -206,13 +205,17 @@ application-level code:
    fresh installations and existing Default configurations expose every
    context-gathering tool. (V30 separately backfills `pr-diff` into custom
    configurations used by bots with the agentic-review workflow.)
-4. `execute-code` is **not** seeded into the Default configuration. Its program
-   runs as the service user inside the bot's own container, so it can read this
-   process's start-time environment and reach the network: that has to be an
-   operator's decision, revocable, and made per bot. Deployment-wide it is
-   additionally gated by `agent.code-execution.enabled` (default `false`), which
-   no tool selection can override. Hard isolation (separate uid, no network,
-   read-only rootfs) is the precondition for revisiting this default.
+4. `execute-code` is **not** seeded into the Default configuration. Layer 1 of its
+   sandbox confines neither the filesystem nor the network: the program runs as
+   the service user inside the bot's own container, so it can read whatever that
+   user reads (`open("/absolute/path")`, `/proc/<jvm-pid>/environ` — this
+   process's start-time environment — `$HOME`) and it reaches the network anyway
+   (`subprocess`, `os.system`, `curl`; the import guard blocks the names it
+   knows, and a program that wants out does not use them). Enabling it is
+   therefore an operator's decision, made per bot — and what a program may
+   *call* is the read-only tool surface only, never a write, the branch switch or
+   a build. Hard isolation (separate uid, no network, read-only rootfs) is the
+   precondition for revisiting this default.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

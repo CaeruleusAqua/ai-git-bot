@@ -37,13 +37,20 @@ class AgentControlToolRegistrationTest {
     }
 
     @Test
-    void nativeDescriptors_advertiseItForEveryRoleThatMustReachIt() {
-        for (ToolCatalog.Role role : List.of(ToolCatalog.Role.CODING, ToolCatalog.Role.WRITER,
-                ToolCatalog.Role.PR_WORKFLOW)) {
+    void nativeDescriptors_areAdvertisedOnTheSurfacesThatDispatchIt() {
+        for (ToolCatalog.Role role : List.of(ToolCatalog.Role.CODING, ToolCatalog.Role.WRITER)) {
             assertThat(catalog.nativeDescriptors(role, null, Set.of(TOOL)))
                     .as(role.name())
                     .extracting(ToolDescriptor::name)
                     .containsExactly(TOOL);
+        }
+        // Read-only review refuses it, and the PR-workflow agents run their own executors with fixed
+        // tool sets: advertising it there would be a promise their dispatch does not keep.
+        for (ToolCatalog.Role role : List.of(ToolCatalog.Role.REVIEW, ToolCatalog.Role.PR_WORKFLOW)) {
+            assertThat(catalog.nativeDescriptors(role, null, Set.of(TOOL)))
+                    .as(role.name())
+                    .extracting(ToolDescriptor::name)
+                    .doesNotContain(TOOL);
         }
     }
 

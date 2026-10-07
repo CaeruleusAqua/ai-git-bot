@@ -1,9 +1,13 @@
 """Applied before a user program: resource limits, the import guard, sys.path confinement.
 
-Layer 1 of the sandbox, and defence-in-depth only. The container is the real isolation
-boundary (sandbox-approach.md / the execute-code plan, ADR-1): every step here is cheap and
-raises the cost of an accident, and none of it is claimed to stop a program that is actively
-trying to get out. A stub like ``ctypes`` is exactly what an import guard cannot contain.
+Layer 1 of the sandbox, and defence-in-depth only: it confines neither the filesystem nor the
+network. The boundary is the container the program shares with the JVM (sandbox-approach.md /
+the execute-code plan, ADR-1), so the program runs as the service user and reads whatever that
+user reads — ``open("/absolute/path")``, ``/proc/<jvm-pid>/environ`` (this process's start-time
+environment), ``$HOME`` — and it reaches the network regardless of the import list below:
+subprocess, os.system and anything the guard cannot name still work, and a stub like ``ctypes``
+is exactly what an import guard cannot contain. Every step here is cheap and raises the cost of
+an accident; none of it is claimed to stop a program that is actively trying to get out.
 
 Every limit arrives as an environment variable set by Java, so the value has one owner:
 AgentConfigProperties.CodeExecutionConfig. A limit that cannot be set on this platform is
@@ -16,7 +20,10 @@ import sys
 
 _USER_PROGRAM = sys.argv[1] if len(sys.argv) > 1 else None
 
-_BLOCKED = ("socket", "ssl", "http", "urllib", "ftplib", "smtplib", "asyncio", "ctypes")
+# The C modules behind socket/ssl are separate names, so they need their own entries; a program that
+# wants the network need not bother with either (subprocess, os.system, ctypes).
+_BLOCKED = ("socket", "_socket", "ssl", "_ssl", "http", "urllib", "ftplib", "smtplib", "asyncio",
+            "ctypes")
 
 _RECURSION_LIMIT = 1000
 

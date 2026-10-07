@@ -241,8 +241,17 @@ public class AgentToolRouter {
         return new ToolResult(outcome.success(), outcome.exitCode(), outcome.output(), outcome.error());
     }
 
+    /**
+     * The descriptor surface a mode is offered — the same role its dispatch gate uses. Review is a
+     * read-only surface ({@link ToolCatalog#reviewToolNames}), so advertising it the mutating coding
+     * surface it would refuse only makes the model ask for what it cannot have.
+     */
     private static ToolCatalog.Role role(Mode mode) {
-        return mode == Mode.WRITER ? ToolCatalog.Role.WRITER : ToolCatalog.Role.CODING;
+        return switch (mode) {
+            case CODING -> ToolCatalog.Role.CODING;
+            case WRITER -> ToolCatalog.Role.WRITER;
+            case REVIEW -> ToolCatalog.Role.REVIEW;
+        };
     }
 
     private ToolResult executeCoding(ToolCallContext ctx) {

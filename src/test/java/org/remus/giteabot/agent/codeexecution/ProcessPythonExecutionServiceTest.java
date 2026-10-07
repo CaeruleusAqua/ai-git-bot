@@ -45,11 +45,6 @@ class ProcessPythonExecutionServiceTest {
         }
     }
 
-    /**
-     * A deployment that has switched code execution on: the shipped default is {@code false}, so every
-     * test here opts in explicitly — and a test that wants the switch off turns it back off through
-     * {@code tweak}.
-     */
     private static ProcessPythonExecutionService service(Consumer<AgentConfigProperties> tweak) {
         AgentConfigProperties config = new AgentConfigProperties();
         tweak.accept(config);
@@ -234,11 +229,14 @@ class ProcessPythonExecutionServiceTest {
     void theNetworkModulesAreRefusedInsideTheProgram() {
         Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
 
-        PythonExecutionOutcome outcome = service(config -> { })
-                .execute("import socket\n", scope(List.of(), returns(ok(""))));
+        // The C modules behind socket/ssl are separate import names, so the guard has to name them too.
+        for (String module : List.of("socket", "_socket", "ssl", "_ssl")) {
+            PythonExecutionOutcome outcome = service(config -> { })
+                    .execute("import " + module + "\n", scope(List.of(), returns(ok(""))));
 
-        assertThat(outcome.success()).isFalse();
-        assertThat(outcome.output()).contains("is not available inside execute-code");
+            assertThat(outcome.success()).as(module).isFalse();
+            assertThat(outcome.output()).as(module).contains("is not available inside execute-code");
+        }
     }
 
     @Test
@@ -312,10 +310,10 @@ class ProcessPythonExecutionServiceTest {
 
     /**
      * The program's working directory is its own scratch space, not the checkout: a repository read
-     * goes through the tool surface, where the bot's whitelist decides what exists. Making the
-     * checkout reachable by path would hand every program reads its tool configuration never granted
-     * — which is why the tool description spells out {@code tools.call("cat", ...)} instead of
-     * {@code open()}.
+     * goes through the tool surface, where the bot's whitelist decides what exists — which is why the
+     * tool description spells out {@code tools.call("cat", ...)}. A program could still open an
+     * absolute path if it knew one (layer 1 confines no filesystem); the working directory simply
+     * never hands it one.
      */
     @Test
     void theProgramsWorkingDirectoryHoldsNothingButTheSandbox() {
@@ -340,5 +338,22 @@ class ProcessPythonExecutionServiceTest {
 
         assertThat(outcome.success()).isFalse();
         assertThat(outcome.error()).contains("over the limit of 10 bytes");
+    }
+
+    /**
+     * The capture is bounded in bytes, so multi-byte output can be cut before the character cap is
+     * reached. Without a marker the caller reads a shortened result as a complete one.
+     */
+    @Test
+    void multiByteOutputCutByTheByteBudgetIsMarkedTruncated() {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+
+        // 2000 two-byte characters are 4000 bytes: past the byte budget (2000 + 1024), while the
+        // character count stays under the 2000-character cap, so only the byte test can see the cut.
+        PythonExecutionOutcome outcome =
+                service(config -> config.getBudget().setMaxToolResultChars(2000))
+                        .execute("print(chr(0xFC) * 2000)", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.output()).contains("[output truncated at 3024 bytes]");
     }
 }

@@ -116,9 +116,12 @@ public class AgentConfigProperties {
         private DataSize maxFileSize = DataSize.ofMegabytes(10);
 
         /**
-         * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. On a host where
-         * the service user already runs more processes than this, a program cannot spawn a child
-         * at all — that is the bound, not a bug.
+         * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. It counts every task
+         * of the uid, this JVM's threads included, and it is not enforced at all for uid 0 — so it
+         * only becomes a real bound once the program has a uid of its own (layer 2). Until then a
+         * program shares the budget: where the service user already runs more tasks than this, the
+         * program cannot start a thread or spawn a child at all. That is the limit working as
+         * specified, not a bug — raise it if your programs legitimately need threads.
          */
         private int maxProcesses = 64;
 

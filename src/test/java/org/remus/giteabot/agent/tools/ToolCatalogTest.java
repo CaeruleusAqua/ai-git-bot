@@ -301,11 +301,11 @@ class ToolCatalogTest {
         assertThat(catalog.builtinToolNames(ToolCatalog.Role.PR_WORKFLOW))
                 .contains("pr-test-write", "pr-test-run", "preview-url", "preview-status",
                         "attach-artifact", "unit-test-write", "doc-write", "doc-delete",
-                        "i18n-write", "i18n-delete", "execute-code")
-                .doesNotContain("cat", "write-file", "mvn", "get-issue");
+                        "i18n-write", "i18n-delete")
+                .doesNotContain("cat", "write-file", "mvn", "get-issue", "execute-code");
 
         assertThat(catalog.builtinToolNames(ToolCatalog.Role.WRITER))
-                .contains("cat", "branch-switcher", "get-issue", "search-issues")
+                .contains("cat", "branch-switcher", "get-issue", "search-issues", "execute-code")
                 .doesNotContain("write-file", "mvn", "pr-test-write");
     }
 }
