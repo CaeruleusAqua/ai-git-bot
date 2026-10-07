@@ -169,9 +169,8 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     public StepDecision step(AgentRunContext ctx, String aiResponse, int round) {
         ImplementationPlan plan = responseParser.parseAiResponse(aiResponse);
 
-        // Collect every read-only request the model made: context tools
-        // (requestTools), action tools (runTools — e.g. get-issue/search-issues,
-        // all harmless in WRITER mode) and explicit file requests.
+        // Collect legacy tool requests (requestTools/runTools) and explicit file requests.
+        // The REVIEW router rejects tools not explicitly enabled for read-only review.
         List<ImplementationPlan.ToolRequest> toolRequests = new ArrayList<>();
         List<String> requestFiles = null;
         if (plan != null) {
@@ -308,7 +307,7 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     /**
      * Converts a native {@link ToolCall} into the positional-args
      * {@link ImplementationPlan.ToolRequest} that {@link AgentToolRouter}
-     * expects. Only the read-only WRITER tool schemas are relevant here.
+     * expects. Advertised schemas come from the REVIEW toolbox and selected MCP catalog.
      */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
         List<String> args = new ArrayList<>();
