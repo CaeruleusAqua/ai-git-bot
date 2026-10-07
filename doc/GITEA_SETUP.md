@@ -2,7 +2,7 @@
 
 This guide walks you through preparing your Gitea instance to work with AI-Git-Bot.
 
-> **Note:** For other Git providers, see [GitHub Setup](GITHUB_SETUP.md), [GitLab Setup](GITLAB_SETUP.md), or [Bitbucket Setup](BITBUCKET_SETUP.md).
+> **Note:** For other Git providers, see [GitHub Setup](GITHUB_SETUP.md), [GitLab Setup](GITLAB_SETUP.md), [Bitbucket Setup](BITBUCKET_SETUP.md), or [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md).
 
 ## 1. Create the Bot User
 

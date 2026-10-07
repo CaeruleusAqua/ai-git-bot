@@ -110,6 +110,7 @@ src/main/java/org/remus/giteabot/
 ├── ai/              # AI provider abstraction and implementations (anthropic, google, llamacpp, ollama, openai)
 ├── ausage/          # AI usage tracking
 ├── audit/           # Audit trail
+├── azuredevops/     # Azure DevOps integration
 ├── bitbucket/       # Bitbucket integration
 ├── config/          # Configuration classes and prompt service
 ├── eventhook/       # Event hook handling
