@@ -168,7 +168,7 @@ public class GitIntegrationService {
                 || integration.getUsername() != null && integration.getUsername().length() > 255) {
             throw new IllegalArgumentException("Invalid Git integration fields");
         }
-        if (!isBlank(integration.getToken()) && encryptionService.encrypt(integration.getToken()).length() > 255) {
+        if (!isBlank(integration.getToken()) && encryptionService.encrypt(integration.getToken()).length() > 1000) {
             throw new IllegalArgumentException("API token exceeds the storage limit");
         }
         GitIntegration existing = integration.getId() == null ? null
