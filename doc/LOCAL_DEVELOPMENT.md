@@ -10,6 +10,15 @@ This guide covers building, testing, and running AI-Git-Bot locally for developm
 - **OpenSSH client tools** (`ssh`, `ssh-keygen`, and `ssh-keyscan`) on `PATH`
   when using SSH Git transport in native or executable-JAR runs. The official
   Docker image includes them through `openssh-client`.
+- **Git 2.43 or later**
+
+## Developing on Windows
+
+Running the bot natively on Windows is not supported: it shells out to `git`, `ssh` and
+other POSIX tooling that assumes a Linux environment. Use WSL instead and install the
+[prerequisites](#prerequisites) inside your WSL distribution as well as on your Windows host. See
+[IntelliJ IDEA's WSL guide](https://www.jetbrains.com/help/idea/how-to-use-wsl-development-environment-in-product.html)
+for IDE setup. To only run the bot, you can use the Docker image.
 
 ## Build & Test
 

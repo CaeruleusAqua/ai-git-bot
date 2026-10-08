@@ -201,21 +201,21 @@
                         </goals>
                         <configuration>
                             <rules>
-                                <!-- Enforces Java 21+ as documented in doc/LOCAL_DEVELOPMENT.md:L12 -->
+                                <!-- Enforces Java 21+ as documented in doc/LOCAL_DEVELOPMENT.md#prerequisites -->
                                 <requireJavaVersion>
                                     <version>[21,)</version>
                                 </requireJavaVersion>
-                                <!-- Enforces Maven 3.9+ as documented in doc/LOCAL_DEVELOPMENT.md:L13 -->
+                                <!-- Enforces Maven 3.9+ as documented in doc/LOCAL_DEVELOPMENT.md#prerequisites -->
                                 <requireMavenVersion>
                                     <version>[3.9.0,)</version>
                                 </requireMavenVersion>
-                                <!-- Enforces Linux OS as documented in doc/LOCAL_DEVELOPMENT.md:L5-7, L11 -->
+                                <!-- Enforces Linux OS as documented in doc/LOCAL_DEVELOPMENT.md#developing-on-windows -->
                                 <requireOS>
                                     <name>linux</name>
                                     <message>
-                                        This project requires a Linux environment to build because tests are
-                                        incompatible with other operating systems. Please run the build inside a
-                                        Docker container as described in doc/LOCAL_DEVELOPMENT.md.
+                                        This project requires a Linux environment to build: the tests and the bot itself
+                                        shell out to git, ssh and other POSIX tooling. On Windows, build inside WSL as
+                                        described in doc/LOCAL_DEVELOPMENT.md ("Developing on Windows").
                                     </message>
                                 </requireOS>
                                 <bannedDependencies>
