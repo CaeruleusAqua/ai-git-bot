@@ -64,7 +64,7 @@ RUN set -eux; \
         golang-go \
         gcc g++ make cmake \
         ruby ruby-bundler \
-        libcap2-bin \
+        sudo \
         ubuntu-keyring \
     && rm -rf /var/lib/apt/lists/*
 
@@ -157,49 +157,56 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------
 # execute-code sandbox identity
 #
-# The `execute-code` tool runs a model-written Python program. It must not run as
-# appuser: `/proc/<jvm-pid>/environ` is readable by same-uid processes, so the
-# program would see every secret the app was started with. `sandbox` is the uid
-# that program runs as, and appuser joins the `sandbox` group so it can hand over
-# the throwaway workspace (0770/0640/0660 — ProcessPythonExecutionService).
+# The `execute-code` tool runs a model-written Python program, and it must not run
+# as appuser — for two separate reasons: `/proc/<jvm-pid>/environ` is readable by
+# same-uid processes, so the program would see every secret the app was started
+# with, and appuser is the account that runs repository-supplied build scripts and
+# plugins, so whatever appuser can reach, a repository can reach.
 #
-# Switching uid needs privilege, and a file-capability binary is the smallest
-# grant that leaves the app itself non-root:
-#   * setpriv carries CAP_SETUID/CAP_SETGID and is what the JVM execs;
-#   * the JVM needs CAP_KILL, because it can no longer signal a child that runs
-#     as a different uid (SIGKILL is uid-checked, and the wall-clock timeout
-#     depends on it);
-#   * both are 0750 root:appgroup and `sandbox` is deliberately NOT in appgroup,
-#     so the program cannot exec them and switch back — anything the program can
-#     reach stays world-readable, which no credential here is (workspace
-#     credential files and SSH keys are 0600, see WorkspaceService).
-# Why this is not a hole: exec of a file without its own capabilities clears
-# them, so no child of the JVM inherits these; a later write to either file
-# clears its capabilities; and the caps stay subject to the container's bounding
-# set, so a runtime started with --cap-drop=ALL makes execute-code fail closed
-# instead of quietly running the program as appuser.
+# The switch is sudo, provisioned by docker/install-execute-code-sandbox.sh, which
+# is copied in and run below. Read that script for the detail; the shape is one
+# account per slot, the pool file the JVM allocates them from, and a single rule
 #
-# The account name, the group and the helper path below are also the defaults of
-# agent.code-execution.sandbox-user / -group / -setpriv-binary in
-# application.properties, so the image is sandboxed without any environment
-# variable; renaming one here means renaming it there (or overriding
-# AGENT_CODE_EXECUTION_SANDBOX_USER / _GROUP / _SETPRIV, as docker-compose.yml
-# does).
+#     appuser ALL=(execute-code-10001,…) NOPASSWD: ALL
+#
+# with no (root) and no (ALL) runas, so the service can become a sandbox slot and
+# nothing else. sudo is the only switch that can be restricted to named targets: a
+# copy of setpriv carrying CAP_SETUID is one --reuid=0 away from root for whoever
+# can exec it, and appuser can; runuser refuses non-root callers and su wants a
+# password.
+#
+# One slot per running execution, so two runs never share a uid. With a single
+# sandbox uid a program can read the next run's source, connect to its bridge
+# socket — answered with that run's bot whitelist — and signal its process. The
+# throwaway workspace is handed over by chgrp to the slot's group, which the
+# service user is a member of (ProcessPythonExecutionService).
+#
+# What is deliberately NOT done here: no capability is set on any binary, and in
+# particular not on java. A binary carrying one runs in secure-execution mode
+# (AT_SECURE), where the loader ignores $ORIGIN in RUNPATH and LD_LIBRARY_PATH, so
+# the launcher stops finding libjli.so and the image does not start. None is
+# needed: the timeout's process-group kill cannot reach a program that has a uid
+# of its own, so the service stops it the way sudo allows — as the slot, by uid
+# (`sudo -u <slot> kill -KILL -- -1`), which needs no capability at all.
+#
+# The pool path and the sudo path are the defaults of
+# agent.code-execution.sandbox-slots / -sudo-binary in application.properties, so
+# the image is sandboxed without any environment variable; docker-compose.yml
+# forwards both for an override. A runtime that cannot switch — no sudo, a pool
+# that is missing or unusable — makes execute-code fail closed instead of quietly
+# running the program as appuser.
+#
+# The two ARGs size the pool; the script stays in the image (/usr/local/src), so a
+# running container can be provisioned the same way a host is.
 # ---------------------------------------------------------------------------
+ARG EXECUTE_CODE_FIRST_SLOT=10001
+ARG EXECUTE_CODE_SLOT_COUNT=16
+COPY docker/install-execute-code-sandbox.sh /usr/local/src/
 RUN set -eux; \
-    groupadd -g 10001 sandbox; \
-    useradd -u 10001 -g sandbox -M -s /usr/sbin/nologin sandbox; \
-    usermod -aG sandbox appuser; \
-    mkdir -p /usr/local/libexec; \
-    cp /usr/bin/setpriv /usr/local/libexec/execute-code-setpriv; \
-    chown root:appgroup /usr/local/libexec/execute-code-setpriv; \
-    chmod 0750 /usr/local/libexec/execute-code-setpriv; \
-    setcap cap_setuid,cap_setgid+ep /usr/local/libexec/execute-code-setpriv; \
-    java_bin="$(readlink -f /opt/java/openjdk/bin/java)"; \
-    chown root:appgroup "$java_bin"; \
-    chmod 0750 "$java_bin"; \
-    setcap cap_kill+ep "$java_bin"; \
-    getcap /usr/local/libexec/execute-code-setpriv "$java_bin"
+    chmod 0755 /usr/local/src/install-execute-code-sandbox.sh; \
+    EXECUTE_CODE_FIRST_SLOT="$EXECUTE_CODE_FIRST_SLOT" \
+    EXECUTE_CODE_SLOT_COUNT="$EXECUTE_CODE_SLOT_COUNT" \
+        /usr/local/src/install-execute-code-sandbox.sh appuser
 
 # ---------------------------------------------------------------------------
 # Playwright + Cypress — installed GLOBALLY under /usr/local/lib/node_modules

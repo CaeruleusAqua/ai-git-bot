@@ -118,8 +118,8 @@ public class AgentConfigProperties {
         /**
          * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. It counts every task
          * of the uid and is not enforced at all for uid 0, so it only bounds a program that has a
-         * uid of its own — where {@code sandbox-user} leaves it running as the service user, it
-         * shares that user's budget: on a service user that already runs more tasks than this, the
+         * uid of its own — where {@code sandbox-slots} is blank the program runs as the service
+         * user and shares that user's budget: on a service user that already runs more tasks than
          * program cannot start a thread or spawn a child at all. That is the limit working as
          * specified, not a bug — raise it if your programs legitimately need threads.
          */
@@ -129,25 +129,28 @@ public class AgentConfigProperties {
         private String pythonBinary = "python3";
 
         /**
-         * Unprivileged account the interpreter is switched to before it starts, so a program cannot
-         * read what the service user reads — this JVM's start-time environment included. Blank — the
-         * field default, so unit tests and a deployment that names none keep the old behaviour —
-         * runs the program as the service user; {@code application.properties} defaults it to
-         * {@code sandbox}, the account the Dockerfile provisions. The switch needs a {@code setpriv}
-         * carrying {@code CAP_SETUID}/{@code CAP_SETGID}, and the JVM needs {@code CAP_KILL} to stop
-         * a program it can no longer signal by uid — both are provisioned in the Dockerfile.
+         * The pool of identities the interpreter may be switched to before it starts, so a program
+         * cannot read what the service user reads — this JVM's start-time environment included. One
+         * line of {@code name uid gid} per slot. Blank — the field default, so unit tests and a
+         * deployment that names none keep the old behaviour — runs the program as the service user;
+         * {@code application.properties} defaults it to the file the installer writes.
+         *
+         * <p>Naming the file is not on its own enough to switch: the slots are accounts sudo may
+         * become, and the rule the installer generates from the same file is what grants that — with
+         * no {@code (root)} and no {@code (ALL)} runas, so the service can become a slot and nothing
+         * else. sudo rather than a copy of {@code setpriv} carrying {@code CAP_SETUID}, because such
+         * a copy hands root to whoever can exec it with one {@code --reuid=0} and the service user is
+         * the one that runs repository code. Every execution takes one slot, so concurrent runs never
+         * share a uid — nor the workspace group that follows from it. See
+         * {@code docker/install-execute-code-sandbox.sh}.</p>
          */
-        private String sandboxUser = "";
+        private String sandboxSlots = "";
 
         /**
-         * Group the interpreter runs with and the group the throwaway workspace is opened to. Both
-         * accounts must be members (the image adds the service user to it); the account's primary
-         * group is the right choice. Blank is only valid while {@code sandbox-user} is blank.
+         * The {@code sudo} the switch is made with. Only worth overriding to exercise the sandbox
+         * without provisioning one: a stand-in that records the invocation and execs the rest.
          */
-        private String sandboxGroup = "";
-
-        /** Binary that performs the uid switch. Must carry {@code CAP_SETUID}/{@code CAP_SETGID}. */
-        private String setprivBinary = "setpriv";
+        private String sudoBinary = "/usr/bin/sudo";
     }
     @Data
     public static class SchemaConfig {

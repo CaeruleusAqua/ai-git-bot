@@ -21,14 +21,13 @@ import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.nio.file.attribute.UserPrincipalNotFoundException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -43,15 +42,18 @@ import java.util.stream.Stream;
  * ({@code sandbox-approach.md} / the execute-code plan, ADR-1) — nothing in this class claims
  * otherwise.</p>
  *
- * <p>Where the deployment names a sandbox account, the program is not run as the service user at
- * all: {@link #command} puts {@code setpriv} in front of the interpreter, and the temp directory,
- * the files in it and the bridge socket are opened to the account's group. The program then reads
- * neither the service user's files nor this JVM's start-time environment
- * ({@code /proc/<jvm-pid>/environ} is granted to same-uid readers only). Two things are needed on
- * the JVM side and both are provisioned in the image (see the Dockerfile): a {@code setpriv} that
- * carries {@code CAP_SETUID}/{@code CAP_SETGID}, because a non-root JVM cannot switch uid on its
- * own, and {@code CAP_KILL} on the JVM itself, because the child it produced can no longer be
- * signalled by uid.</p>
+ * <p>Where the deployment names a sandbox pool, the program does not run as the service user at
+ * all: {@link #command} has sudo switch to one slot of the pool before the interpreter starts, and
+ * the temp directory, the files in it and the bridge socket are opened to that slot's group. The
+ * program then reads neither the service user's files nor this JVM's start-time environment
+ * ({@code /proc/<jvm-pid>/environ} is granted to same-uid readers only). The identity is per
+ * execution rather than one sandbox account for all of them, and that is not a detail: with one
+ * shared uid a program can list {@code /tmp/execute-code-*}, read a concurrent run's source, connect
+ * to its bridge socket — served with that run's bot whitelist — and kill its process.
+ * {@link SandboxSlots} holds the pool; {@code docker/install-execute-code-sandbox.sh} provisions it
+ * along with the sudo rule that reaches it, and that rule can name nothing but those slots. Nothing
+ * here needs a capability of the JVM's own, on java or on any other binary: switching to the slot and
+ * signalling what it owns are both things the rule already allows.</p>
  *
  * <p>stdout carries the program's output and nothing else. Tool calls travel over an {@code AF_UNIX}
  * socket in the temp directory (permissions are filesystem permissions: no port, nothing to
@@ -84,6 +86,14 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
     private static final String BRIDGE_THREAD = "execute-code-bridge";
 
     /**
+     * How long an execution waits for a free identity before the run fails. A slot is held for the
+     * length of one execution, so waiting longer than the longest run cannot help; this is long
+     * enough for a normal run to finish, and short enough to give back a usable error rather than a
+     * stalled tool call when the pool is genuinely too small.
+     */
+    private static final Duration SANDBOX_SLOT_WAIT = Duration.ofSeconds(30);
+
+    /**
      * Permissions the workspace, the files in it and the bridge socket carry when the program runs
      * as a sandbox account: reachable by the group both accounts share and by nobody else. The group
      * is what makes that possible without giving the JVM a second privilege — it owns the directory
@@ -104,10 +114,12 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
     private static final int EXIT_TIMEOUT = 124;
 
     private final CodeExecutionLimits limits;
+    private final SandboxSlots slots;
     private final ObjectMapper json = new ObjectMapper();
 
     public ProcessPythonExecutionService(AgentConfigProperties config) {
         this.limits = CodeExecutionLimits.from(config);
+        this.slots = new SandboxSlots(limits.sandboxSlots(), limits.sudoBinary(), SANDBOX_SLOT_WAIT);
     }
 
     @Override
@@ -123,41 +135,52 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         }
 
         Path workspace = null;
+        SandboxSlots.Slot slot = null;
         try {
-            GroupPrincipal sandboxGroup = sandboxGroup();
+            if (!limits.sandboxSlots().isBlank()) {
+                // An identity of this execution's own (SandboxSlots). A pool with no free slot fails
+                // the run: falling back to the service user is the one thing the pool is there to
+                // prevent.
+                slot = slots.acquire();
+                if (slot == null) {
+                    return PythonExecutionOutcome.failed(1, "", "sandbox failure: all "
+                            + slots.size() + " sandbox slots are in use");
+                }
+            }
             workspace = Files.createTempDirectory("execute-code-");
-            if (sandboxGroup == null) {
+            if (slot == null) {
                 restrictToOwner(workspace);
             } else {
-                openToSandbox(workspace, sandboxGroup, SANDBOX_DIRECTORY_MODE);
+                openToSandbox(workspace, slot.gid(), SANDBOX_DIRECTORY_MODE);
             }
             writeResource(workspace, BOOTSTRAP_FILE, BOOTSTRAP_RESOURCE);
             writeResource(workspace, MODULE_FILE, MODULE_RESOURCE);
             Files.writeString(workspace.resolve(PROGRAM_FILE), code, StandardCharsets.UTF_8);
-            if (sandboxGroup != null) {
+            if (slot != null) {
                 // The program has to read all three and the JVM created them, so their group is
                 // settled here rather than by a umask.
                 for (String file : List.of(BOOTSTRAP_FILE, MODULE_FILE, PROGRAM_FILE)) {
-                    openToSandbox(workspace.resolve(file), sandboxGroup, SANDBOX_FILE_MODE);
+                    openToSandbox(workspace.resolve(file), slot.gid(), SANDBOX_FILE_MODE);
                 }
             }
 
             Path socketPath = workspace.resolve(SOCKET_FILE);
             try (ServerSocketChannel server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)) {
                 server.bind(UnixDomainSocketAddress.of(socketPath));
-                if (sandboxGroup != null) {
+                if (slot != null) {
                     // Connecting to a unix socket needs write permission on it, so the socket is the
-                    // one path the group may write.
-                    openToSandbox(socketPath, sandboxGroup, SANDBOX_SOCKET_MODE);
+                    // one path in the workspace the group may write.
+                    openToSandbox(socketPath, slot.gid(), SANDBOX_SOCKET_MODE);
                 }
                 PythonToolBridge bridge = new PythonToolBridge(scope.available(), scope.executor(),
                         limits, json);
                 Thread serving = startServing(server, bridge);
                 ProcessSupport.CommandResult result;
                 try {
-                    result = ProcessSupport.run(command(workspace),
+                    result = ProcessSupport.run(command(workspace, slot),
                             limits.timeout().toSeconds(), TimeUnit.SECONDS,
-                            limits.maxResultChars() + OUTPUT_SLACK_BYTES);
+                            limits.maxResultChars() + OUTPUT_SLACK_BYTES,
+                            cleanupOf(slot));
                 } finally {
                     serving.interrupt();
                 }
@@ -171,6 +194,7 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
             return PythonExecutionOutcome.failed(1, "", "execution interrupted");
         } finally {
             deleteRecursively(workspace);
+            slots.release(slot);
         }
     }
 
@@ -179,18 +203,34 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
      * environment, the user site directory and the script's path entry, {@code -u} keeps the
      * program's output arriving instead of sitting in a pipe buffer (a timeout would otherwise lose
      * the lines that explain what it was doing), {@code -B} keeps the sandbox directory free of
-     * bytecode. A configured sandbox account puts {@code setpriv} in front of the interpreter, so
-     * the program never starts with the service user's identity and drops it afterwards.
+     * bytecode.
+     *
+     * @param slot the pool identity this execution runs as, or {@code null} for layer 1 only. A slot
+     *        puts sudo in front of the interpreter — {@code sudo -n -u <slot> -- python3 …} — which
+     *        switches uid and gid before the interpreter starts, so the program never holds the
+     *        service user's identity, not even for the instant between fork and exec. sudo is the only
+     *        switch that can be restricted to named targets; the rule the installer writes allows the
+     *        slots and nothing else ({@code docker/install-execute-code-sandbox.sh}). The slot's
+     *        primary gid is the one group the workspace is opened to.
      */
-    ProcessBuilder command(Path workspace) {
+    ProcessBuilder command(Path workspace, SandboxSlots.Slot slot) {
+        Map<String, String> environment = sandboxEnvironment(workspace);
         List<String> argv = new ArrayList<>();
-        if (!limits.sandboxUser().isBlank()) {
-            argv.add(limits.setprivBinary());
-            argv.add("--reuid=" + limits.sandboxUser());
-            argv.add("--regid=" + limits.sandboxGroup());
-            // No supplementary groups: the account keeps its primary group only, which is the one the
-            // workspace is opened to.
-            argv.add("--clear-groups");
+        if (slot != null) {
+            argv.add(limits.sudoBinary());
+            // -n: never ask for a password. A switch that would need one is a provisioning error, and
+            // the answer to it is a failed run, not a prompt on a socket nobody is reading.
+            argv.add("-n");
+            argv.add("-u");
+            argv.add(slot.name());
+            argv.add("--");
+            // sudo rebuilds the environment from its own defaults, so the variables below cannot be
+            // handed over the way layer 1 hands them over. None of them is a secret — a path and four
+            // limits — so the argv is a fine carrier, and `env` execs the interpreter itself.
+            argv.add("env");
+            for (Map.Entry<String, String> variable : environment.entrySet()) {
+                argv.add(variable.getKey() + "=" + variable.getValue());
+            }
         }
         argv.add(limits.pythonBinary());
         argv.add("-I");
@@ -205,9 +245,22 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         processBuilder.redirectErrorStream(true);
 
         // The environment is replaced first; the sandbox's own variables are added after, or the
-        // scrub would remove them.
+        // scrub would remove them. Layer 1 adds them here; a sandboxed run already carries them in
+        // the argv, because sudo does not pass the caller's environment on.
         ProcessSupport.scrubEnvironment(processBuilder);
-        Map<String, String> environment = processBuilder.environment();
+        if (slot == null) {
+            processBuilder.environment().putAll(environment);
+        }
+        return processBuilder;
+    }
+
+    /**
+     * What the program needs from the environment: where to find the bridge, the limits the bootstrap
+     * applies to itself, and where its temporary files go. Ordered, so the argv a sandboxed run builds
+     * from it is the same on every execution.
+     */
+    private Map<String, String> sandboxEnvironment(Path workspace) {
+        Map<String, String> environment = new LinkedHashMap<>();
         environment.put(BRIDGE_ENV, workspace.resolve(SOCKET_FILE).toString());
         environment.put("AI_GIT_BOT_LIMIT_AS_BYTES", Long.toString(limits.maxMemoryBytes()));
         environment.put("AI_GIT_BOT_LIMIT_CPU_SECONDS", Integer.toString(limits.cpuSeconds()));
@@ -215,7 +268,16 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         environment.put("AI_GIT_BOT_LIMIT_NPROC", Integer.toString(limits.maxProcesses()));
         // Temp files land in the directory that is deleted with the execution, not in /tmp.
         environment.put("TMPDIR", workspace.toString());
-        return processBuilder;
+        return environment;
+    }
+
+    /**
+     * What the timeout runs in place of the process-group kill, for a sandboxed execution: the JVM
+     * cannot signal a process of another uid, so the program is stopped as the identity that owns it
+     * ({@link SandboxSlots#stop}). {@code null} for layer 1, which keeps the default kill.
+     */
+    private Runnable cleanupOf(SandboxSlots.Slot slot) {
+        return slot == null ? null : () -> slots.stop(slot);
     }
 
     private Thread startServing(ServerSocketChannel server, PythonToolBridge bridge) {
@@ -338,38 +400,21 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
     }
 
     /**
-     * The group both accounts share, or {@code null} when the deployment names no sandbox account.
+     * Opens one path in the workspace to the identity that owns this execution.
      *
-     * <p>Fails rather than degrades: a configured account that cannot be resolved, or that is named
-     * without the group the workspace needs, must not leave the program running as the service user —
-     * that is the whole point of configuring it.</p>
-     */
-    private GroupPrincipal sandboxGroup() throws IOException {
-        String user = limits.sandboxUser();
-        if (user.isBlank()) {
-            return null;
-        }
-        String group = limits.sandboxGroup();
-        if (group.isBlank()) {
-            throw new IOException("sandbox account '" + user + "' is configured without a sandbox group");
-        }
-        try {
-            return FileSystems.getDefault().getUserPrincipalLookupService()
-                    .lookupPrincipalByGroupName(group);
-        } catch (UserPrincipalNotFoundException e) {
-            throw new IOException("sandbox group '" + group + "' does not exist");
-        }
-    }
-
-    /**
-     * Opens one path in the workspace to the sandbox account's group.
+     * <p>The slot's gid is the one thing the JVM and the program share (the JVM as a member of the
+     * slot's group, the program as its primary group), so this is how the program reaches the
+     * bootstrap, its own source, its {@code TMPDIR} and the bridge socket without the directory
+     * becoming world-accessible — and it is why the next run's program, which has a slot of its own,
+     * cannot reach any of them.</p>
      *
-     * <p>The group is the one thing both accounts share (the JVM as its member, the program as its
-     * primary group), so this is how the program reaches the bootstrap, its own source, its
-     * {@code TMPDIR} and the bridge socket without the directory having to become world-accessible.</p>
+     * <p>Set by number, not by name: the pool file carries the gid, and the group is a number
+     * everywhere else in this path too. Fails rather than degrades — a JVM that is not a member of
+     * the slot's group cannot chgrp to it, and a program that cannot read its own bootstrap must not
+     * be the fallback.</p>
      */
-    private static void openToSandbox(Path path, GroupPrincipal group, String mode) throws IOException {
-        Files.setAttribute(path, "posix:group", group);
+    private static void openToSandbox(Path path, long gid, String mode) throws IOException {
+        Files.setAttribute(path, "unix:gid", (int) gid);
         Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode));
     }
 

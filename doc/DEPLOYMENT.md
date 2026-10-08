@@ -309,33 +309,51 @@ The Dockerfile uses a **multi-stage build**:
 Key features:
 - Maven dependency layer caching for fast rebuilds
 - Non-root `appuser` for security
-- A second, lower-privileged account (`sandbox`, uid `10001`) that the
-  `execute-code` program runs as, so it can read neither `appuser`'s files nor
-  the JVM's start-time environment
+- A pool of lower-privileged accounts (`execute-code-10001` … `10016`) the
+  `execute-code` program runs as — one per execution, so it can read neither
+  `appuser`'s files nor the JVM's start-time environment, and cannot reach a
+  concurrent run, which one sandbox account for all of them would allow
+- No capability on any binary, the `java` binary included
 - Health check via `/actuator/health` (interval: 30s, start period: 30s)
 - JVM tuning: `UseContainerSupport` and `MaxRAMPercentage=75.0`
 
-The `execute-code` interpreter is switched to the `sandbox` account with a
-capability-carrying `setpriv` copy
-(`/usr/local/libexec/execute-code-setpriv`, `CAP_SETUID`/`CAP_SETGID`, mode
-`0750 root:appgroup`). The JVM itself carries `CAP_KILL`, because a child running
-as another uid can no longer be signalled by uid and the wall-clock timeout
-depends on it. The sandbox account is kept out of `appgroup`, so a program
-cannot execute either binary and switch back. If the container is started with
-`--cap-drop=ALL`, or on a runtime that ignores file capabilities, `execute-code`
-fails closed rather than running the program as `appuser`; set
-`AGENT_CODE_EXECUTION_SANDBOX_USER=` (with `AGENT_CODE_EXECUTION_SANDBOX_GROUP=`)
-to opt out explicitly instead.
+The image runs `docker/install-execute-code-sandbox.sh` at build time. It creates
+the pool accounts, writes the pool file the JVM allocates slots from
+(`/etc/execute-code/sandbox-slots`), and writes a single sudo rule —
+`appuser ALL=(execute-code-10001,…) NOPASSWD: ALL`, with no `(root)` and no
+`(ALL)` runas, so the service can become a sandbox slot and nothing else —
+checked with `visudo` before it is installed. sudo is the only switch that can be
+restricted to named targets: a copy of `setpriv` carrying `CAP_SETUID` is one
+`--reuid=0` away from root for whoever can exec it, and `appuser` is the account
+that runs repository-supplied build scripts and plugins.
 
-The account name and the helper path are the defaults in `application.properties`
-(`agent.code-execution.sandbox-user` / `-group` / `-setpriv-binary`, each
-overridable via the `AGENT_CODE_EXECUTION_*` environment variables and wired into
+Nothing carries a capability, `java` in particular. A binary with file
+capabilities runs in secure-execution mode (`AT_SECURE`), where the loader ignores
+`$ORIGIN` in `RUNPATH` and `LD_LIBRARY_PATH`, so the JDK launcher stops finding
+`libjli.so` and the image does not start. None is needed either: the timeout's
+process-group kill cannot reach a program that has a uid of its own — sudo hands it
+a pty, hence a session of its own — so the run is stopped the way the rule allows,
+as the slot and by uid (`sudo -u <slot> kill -KILL -- -1`).
+
+The pool path and the sudo path are the defaults in `application.properties`
+(`agent.code-execution.sandbox-slots` / `-sudo-binary`, overridable through
+`AGENT_CODE_EXECUTION_SANDBOX_SLOTS` / `AGENT_CODE_EXECUTION_SUDO` and wired into
 `docker-compose.yml`), so the image needs no environment variable to be sandboxed.
-A run outside the image — a local `mvn spring-boot:run`, say — has to create them
-first: `groupadd -g 10001 sandbox`, `useradd -u 10001 -g sandbox -M -s
-/usr/sbin/nologin sandbox`, add the JVM user to the group, and make a `setpriv`
-carrying `CAP_SETUID`/`CAP_SETGID` reachable at the configured path (or override
-the three variables to point at your own).
+A pool that is missing or unusable — no sudo, a slot sudo will not switch to —
+makes `execute-code` fail closed rather than running the program as `appuser`; set
+`AGENT_CODE_EXECUTION_SANDBOX_SLOTS=` to opt out explicitly instead.
+
+A run outside the image — a local `mvn spring-boot:run`, say — provisions the same
+thing with the image's own script:
+
+```bash
+sudo ./docker/install-execute-code-sandbox.sh "$(id -un)"
+```
+
+It needs `sudo` installed, and the JVM has to be a member of every slot's group,
+so start it in a fresh session (`sudo -u`, a new login; a running shell keeps the
+groups it started with). The workspace is handed over to the slot with `chgrp`,
+which is a membership check for exactly that reason.
 
 ### Architectures
 

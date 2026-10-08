@@ -13,10 +13,12 @@ import java.time.Duration;
  * uses, so there is one owner per limit and a sandboxed run cannot outlive a normal one. Test call
  * sites use inline literals matching the shipped defaults.</p>
  *
- * <p>{@code sandboxUser}/{@code sandboxGroup} name the account the interpreter is switched to and
- * the group the workspace is opened to; both blank means the program runs as the service user
- * (layer 1 only). {@code setprivBinary} is the binary that performs the switch and must carry
- * {@code CAP_SETUID}/{@code CAP_SETGID}.</p>
+ * <p>{@code sandboxSlots} is the pool of identities the interpreter is switched to before it starts,
+ * one per execution, so the program reads neither the service user's files nor this JVM's start-time
+ * environment. Blank means the program runs as the service user (layer 1 only). {@code sudoBinary} is
+ * what performs the switch: only sudo can be restricted to named target users, and the rule the
+ * installer generates from that same pool file allows the slots and nothing else, so the service can
+ * become a slot and never root.</p>
  */
 public record CodeExecutionLimits(Duration timeout,
                                   int maxToolCalls,
@@ -27,9 +29,8 @@ public record CodeExecutionLimits(Duration timeout,
                                   long maxFileSizeBytes,
                                   int maxProcesses,
                                   String pythonBinary,
-                                  String sandboxUser,
-                                  String sandboxGroup,
-                                  String setprivBinary) {
+                                  String sandboxSlots,
+                                  String sudoBinary) {
 
     public static CodeExecutionLimits from(AgentConfigProperties config) {
         AgentConfigProperties.CodeExecutionConfig code = config.getCodeExecution();
@@ -43,9 +44,8 @@ public record CodeExecutionLimits(Duration timeout,
                 code.getMaxFileSize().toBytes(),
                 code.getMaxProcesses(),
                 orEmpty(code.getPythonBinary()),
-                orEmpty(code.getSandboxUser()),
-                orEmpty(code.getSandboxGroup()),
-                orEmpty(code.getSetprivBinary()));
+                orEmpty(code.getSandboxSlots()),
+                orEmpty(code.getSudoBinary()));
     }
 
     private static int toIntBytes(long bytes) {

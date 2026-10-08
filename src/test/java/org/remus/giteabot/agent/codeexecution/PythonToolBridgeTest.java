@@ -25,8 +25,7 @@ class PythonToolBridgeTest {
 
     private static CodeExecutionLimits limits(int maxToolCalls, int maxNestedChars) {
         return new CodeExecutionLimits(Duration.ofSeconds(60), maxToolCalls, maxNestedChars,
-                100_000, 256L * 1024 * 1024, 120, 10L * 1024 * 1024, 64, "python3",
-                "", "", "setpriv");
+                100_000, 256L * 1024 * 1024, 120, 10L * 1024 * 1024, 64, "python3", "", "");
     }
 
     private static CodeExecutionLimits limits() {

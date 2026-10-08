@@ -273,16 +273,24 @@ Option 1 configs through `sandbox-uid`/`sandbox-gid` for hardened deployments.
 - DEPLOYMENT.md gains a "hardening without Docker" section: file permissions, optional
   sandbox user provisioning, userns restrictions on Ubuntu.
 
-**Implementation note — options 1 and 2 both went in, for `execute-code` only.** The tool now
-takes an optional `sandbox-user`/`sandbox-group` (`agent.code-execution.*`): when set, the
-interpreter is prefixed with `setpriv --reuid=… --regid=… --clear-groups` and the throwaway
-workspace is opened to the group both accounts share, so the option-1 identity separation is
-real where it matters most. A non-root JVM cannot switch uid, so the privilege is a
-file-capability grant instead of root: a `setpriv` copy carrying `CAP_SETUID`/`CAP_SETGID`,
-executable by the service user only (the sandbox account is kept out of that group, so it cannot
-exec it back), plus `CAP_KILL` for the JVM, which can no longer signal a child running as
-another uid. The `setpriv`/`unshare --net`/`prlimit` prefix of §3.2 for *validation* commands is
-still unbuilt; those continue to run as the service user.
+**Implementation note — options 1 and 2 both went in, for `execute-code` only.** The tool takes
+an optional sandbox pool (`agent.code-execution.sandbox-slots`): when set, the interpreter is
+prefixed with `sudo -n -u <slot> --` and the throwaway workspace is opened to the group that slot
+owns, so the option-1 identity separation is real where it matters most. One slot per execution,
+not one sandbox account for all of them: with a single shared uid a program can read a concurrent
+run's source, connect to its bridge socket — answered with that run's bot whitelist — and signal
+its process.
+
+A non-root JVM cannot switch uid, so the privilege has to come from somewhere, and it comes from
+sudo: the rule `docker/install-execute-code-sandbox.sh` writes names the pool accounts and nothing
+else — no `(root)`, no `(ALL)` runas. That replaced the first attempt, which gave a `setpriv` copy
+`CAP_SETUID`/`CAP_SETGID` and the JVM `CAP_KILL`. A tool carrying `CAP_SETUID` is not limited to
+one target, so `appuser` — the account that runs repository build scripts and plugins — could
+`--reuid=0` its way to root; and the capability on `java` also put the JVM in secure-execution
+mode, where the loader ignores `$ORIGIN` and `libjli.so` stops being found. The per-run uid
+removed the need for `CAP_KILL` too: the timeout stops a run as the slot, by uid. The
+`unshare --net`/`prlimit` prefix of §3.2 for *validation* commands is still unbuilt; those
+continue to run as the service user.
 
 ---
 

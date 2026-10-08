@@ -10,6 +10,10 @@ import org.springframework.util.unit.DataSize;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
+import java.net.StandardProtocolFamily;
+import java.net.UnixDomainSocketAddress;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -124,7 +128,7 @@ class ProcessPythonExecutionServiceTest {
     void theArgvIsolatesTheInterpreterAndCarriesTheSandboxEnvironment() throws IOException {
         Path workspace = Files.createTempDirectory("execute-code-argv-");
         try {
-            ProcessBuilder processBuilder = service(config -> { }).command(workspace);
+            ProcessBuilder processBuilder = service(config -> { }).command(workspace, null);
 
             assertThat(processBuilder.command()).containsExactly("python3", "-I", "-u", "-B",
                     workspace.resolve("bootstrap.py").toString(),
@@ -143,105 +147,287 @@ class ProcessPythonExecutionServiceTest {
     }
 
     @Test
-    void aConfiguredSandboxAccountIsSwitchedToBeforeTheInterpreterStarts() throws IOException {
+    void aConfiguredPoolPutsSudoAndTheSandboxEnvironmentInFrontOfTheInterpreter() throws IOException {
         Path workspace = Files.createTempDirectory("execute-code-argv-");
         try {
-            ProcessBuilder processBuilder = service(config -> {
-                config.getCodeExecution().setSandboxUser("sandbox");
-                config.getCodeExecution().setSandboxGroup("sandbox");
-                config.getCodeExecution().setSetprivBinary("/usr/local/libexec/execute-code-setpriv");
-            }).command(workspace);
+            ProcessBuilder processBuilder = service(config -> config.getCodeExecution()
+                    .setSandboxSlots("/etc/execute-code/sandbox-slots"))
+                    .command(workspace, new SandboxSlots.Slot("execute-code-10007", 10007L, 10007L));
 
-            // setpriv first: the program must never start as the service user and drop afterwards.
+            // sudo first, and -n so a switch that would have to ask for a password fails the run
+            // instead of asking: the program must never start with the service user's identity and
+            // drop it afterwards, and the slot is what decides which identity it starts with instead —
+            // one per execution, so a concurrent run is a different principal. The variables travel in
+            // the argv because sudo rebuilds the environment from its own defaults.
             assertThat(processBuilder.command()).containsExactly(
-                    "/usr/local/libexec/execute-code-setpriv",
-                    "--reuid=sandbox", "--regid=sandbox", "--clear-groups",
+                    "/usr/bin/sudo", "-n", "-u", "execute-code-10007", "--", "env",
+                    "AI_GIT_BOT_BRIDGE=" + workspace.resolve("bridge.sock"),
+                    "AI_GIT_BOT_LIMIT_AS_BYTES=268435456",
+                    "AI_GIT_BOT_LIMIT_CPU_SECONDS=120",
+                    "AI_GIT_BOT_LIMIT_FSIZE_BYTES=10485760",
+                    "AI_GIT_BOT_LIMIT_NPROC=64",
+                    "TMPDIR=" + workspace,
                     "python3", "-I", "-u", "-B",
                     workspace.resolve("bootstrap.py").toString(),
                     workspace.resolve("program.py").toString());
-            assertThat(processBuilder.environment()).containsKey("AI_GIT_BOT_BRIDGE");
+            assertThat(processBuilder.environment()).doesNotContainKey("AI_GIT_BOT_BRIDGE");
         } finally {
             Files.deleteIfExists(workspace);
         }
     }
 
     /**
-     * The switch needs both names: without the shared group the workspace cannot be opened to the
-     * program, and a program that cannot read its own bootstrap is not a smaller problem than one
-     * running as the service user. Refusing beats half-configuring.
+     * A deployment that named a pool has decided the program must not run as the service user, so a
+     * pool that cannot even be read is a failed run — not a quiet fallback, and not a program that
+     * runs with the service user's reach.
      */
     @Test
-    void aSandboxAccountWithoutAGroupIsRefusedBeforeAnythingIsSpawned() {
-        PythonExecutionOutcome outcome =
-                service(config -> config.getCodeExecution().setSandboxUser("sandbox"))
-                        .execute("print('hello')", scope(List.of(), returns(ok(""))));
+    void aPoolThatCannotBeReadFailsTheRunInsteadOfRunningAsTheServiceUser() {
+        PythonExecutionOutcome outcome = service(config -> config.getCodeExecution()
+                .setSandboxSlots("/etc/execute-code/no-such-sandbox-slots"))
+                .execute("print('hello')", scope(List.of(), returns(ok(""))));
 
         assertThat(outcome.success()).isFalse();
-        assertThat(outcome.error()).contains("without a sandbox group");
+        assertThat(outcome.error()).contains("sandbox failure:");
+        assertThat(outcome.output()).doesNotContain("hello");
     }
 
     /**
-     * A configured account that cannot be resolved must fail the run, not quietly fall back to the
-     * service user — the fallback is exactly what the setting exists to prevent.
+     * The workspace is handed to a slot's group by the JVM itself, and chgrp is a membership check: a
+     * pool naming a group this JVM was never added to must fail the run. Accepting it would leave
+     * either a program that cannot read its own bootstrap or — the case that matters — one that ran
+     * anyway. Skipped as root, where group membership is not checked.
      */
     @Test
-    void anUnknownSandboxGroupFailsTheRunInsteadOfRunningAsTheServiceUser() {
-        PythonExecutionOutcome outcome = service(config -> {
-            config.getCodeExecution().setSandboxUser("sandbox");
-            config.getCodeExecution().setSandboxGroup("no-such-sandbox-group");
-        }).execute("print('hello')", scope(List.of(), returns(ok(""))));
+    void aSlotTheJvmCannotHandTheWorkspaceToFailsTheRun() throws IOException {
+        Assumptions.assumeTrue(serviceUserUid() != 0, "running as root: chgrp is not checked");
+        Path directory = Files.createTempDirectory("execute-code-slots-");
+        try {
+            // 12345 is nobody's group: the deployment forgot to add the service user to the pool.
+            Path pool = SandboxTestSupport.poolFile(directory, "execute-code-12345", 12345, 12345);
+            Path sudo = SandboxTestSupport.fakeSudo(directory, directory.resolve("sudo.log"));
+            ProcessPythonExecutionService sandboxed = service(config -> {
+                config.getCodeExecution().setSandboxSlots(pool.toString());
+                config.getCodeExecution().setSudoBinary(sudo.toString());
+            });
 
-        assertThat(outcome.success()).isFalse();
-        assertThat(outcome.error()).contains("no-such-sandbox-group");
+            PythonExecutionOutcome outcome = sandboxed.execute("print('hello')",
+                    scope(List.of(), returns(ok(""))));
+
+            assertThat(outcome.success()).isFalse();
+            assertThat(outcome.error()).contains("sandbox failure:");
+            assertThat(outcome.output()).doesNotContain("hello");
+        } finally {
+            SandboxTestSupport.delete(directory);
+        }
     }
 
     /**
-     * The hardened path end to end, against a real second uid. It needs a deployment that
-     * provisioned one — the shipped image does — so it is skipped unless the three system
-     * properties name it:
+     * What the service does around the switch, with a pool naming a slot this test run can actually be
+     * given: the workspace carries the slot's group and the modes the program needs, the socket is
+     * writable by that group and by nobody else, and the tool surface is reachable.
+     */
+    @Test
+    void aSandboxedRunOpensItsWorkspaceToItsOwnSlot() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path directory = Files.createTempDirectory("execute-code-slots-");
+        try {
+            long slot = SandboxTestSupport.ownGid(directory);
+            Path pool = SandboxTestSupport.poolFile(directory, "execute-code-test", slot, slot);
+            Path sudo = SandboxTestSupport.fakeSudo(directory, directory.resolve("sudo.log"));
+            ProcessPythonExecutionService sandboxed = service(config -> {
+                config.getCodeExecution().setSandboxSlots(pool.toString());
+                config.getCodeExecution().setSudoBinary(sudo.toString());
+            });
+
+            PythonExecutionOutcome outcome = sandboxed.execute("""
+                    import os
+                    import stat
+
+                    print("dir", oct(stat.S_IMODE(os.stat(".").st_mode)), os.stat(".").st_gid)
+                    print("socket", oct(stat.S_IMODE(os.stat("bridge.sock").st_mode)))
+                    print("tool", tools.call("cat", {"path": "README.md"})["output"])
+                    """, scope(advertised("cat"), returns(ok("FILE-CONTENT"))));
+
+            assertThat(outcome.error()).isEmpty();
+            assertThat(outcome.output())
+                    .contains("dir 0o770 " + slot)
+                    .contains("socket 0o660")
+                    .contains("tool FILE-CONTENT");
+        } finally {
+            SandboxTestSupport.delete(directory);
+        }
+    }
+
+    /**
+     * A slot goes back when the run ends, or the second run would be refused on a pool that has
+     * nothing in flight. One slot, two runs.
+     */
+    @Test
+    void aSlotIsHandedOutAgainAfterARun() throws IOException {
+        Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
+        Path directory = Files.createTempDirectory("execute-code-slots-");
+        try {
+            long slot = SandboxTestSupport.ownGid(directory);
+            Path pool = SandboxTestSupport.poolFile(directory, "execute-code-test", slot, slot);
+            Path sudo = SandboxTestSupport.fakeSudo(directory, directory.resolve("sudo.log"));
+            ProcessPythonExecutionService sandboxed = service(config -> {
+                config.getCodeExecution().setSandboxSlots(pool.toString());
+                config.getCodeExecution().setSudoBinary(sudo.toString());
+            });
+
+            assertThat(sandboxed.execute("print('first')", scope(List.of(), returns(ok("")))).output())
+                    .isEqualTo("first\n");
+            assertThat(sandboxed.execute("print('second')", scope(List.of(), returns(ok("")))).output())
+                    .isEqualTo("second\n");
+        } finally {
+            SandboxTestSupport.delete(directory);
+        }
+    }
+
+    /**
+     * The hardened path end to end, against a real pool and the deployment's sudo. It needs a
+     * deployment that provisioned one — the shipped image does — so it is skipped unless a system
+     * property names that pool:
      *
      * <pre>
-     * mvn -Dtest=ProcessPythonExecutionServiceTest test -Dsandbox.test.user=sandbox \
-     *     -Dsandbox.test.group=sandbox -Dsandbox.test.setpriv=/usr/local/libexec/execute-code-setpriv
+     * mvn -Dtest=ProcessPythonExecutionServiceTest test \
+     *     -Dsandbox.test.slots=/etc/execute-code/sandbox-slots
      * </pre>
      *
-     * <p>The uid alone is not the property under test: a program that runs as another user but can
-     * still read this JVM's start-time environment has gained nothing, and one that can no longer
-     * reach the bridge socket has lost the tool surface. Both ends are asserted here.
+     * <p>The uid alone is not the property under test. A program that runs as another user but can
+     * still read this JVM's start-time environment has gained nothing; one that can no longer reach
+     * the bridge socket has lost the tool surface; and one that can walk into the next run's workspace
+     * and talk to <em>its</em> bridge socket is not isolated at all — which is the failure a single
+     * sandbox uid permits and a slot per execution does not. All of it is asserted here.</p>
      */
     @Test
-    void aSandboxedProgramReadsNoServiceEnvironmentButStillReachesTheTools() throws IOException {
-        String user = System.getProperty("sandbox.test.user", "");
-        String group = System.getProperty("sandbox.test.group", "");
-        String setpriv = System.getProperty("sandbox.test.setpriv", "");
-        Assumptions.assumeTrue(!user.isBlank() && !group.isBlank() && !setpriv.isBlank(),
-                "no sandbox account is provisioned for this run");
-        Assumptions.assumeTrue(Files.isExecutable(Path.of(setpriv)),
-                "the configured setpriv binary is not executable here");
+    void aSandboxedProgramReadsNoServiceEnvironmentAndNoOtherRun() throws IOException {
+        Path pool = sandboxSlots();
+        Assumptions.assumeTrue(pool != null, "no sandbox pool is provisioned for this run");
+
+        List<Long> poolGids = poolGids(pool);
+        Assumptions.assumeTrue(poolGids.size() >= 2, "a pool of one cannot show that runs are strangers");
+        // The last slot, because the service hands out the first free one and the decoy has to be a
+        // workspace the running program does not own.
+        Path decoy = decoyWorkspace(poolGids.getLast());
 
         String program = """
+                import glob
                 import os
+                import subprocess
+                import sys
+
                 print("uid", os.getuid())
                 try:
-                    raw = open("/proc/%d/environ" % os.getppid(), "rb").read()
+                    raw = open("/proc/" + str(os.getppid()) + "/environ", "rb").read()
                     print("READ", len(raw))
                 except OSError as error:
                     print("refused", type(error).__name__)
+
+                other = glob.glob("/tmp/execute-code-decoy-*")[0]
+                try:
+                    open(other + "/program.py").read()
+                    print("DECOY REACHED")
+                except OSError as error:
+                    print("decoy refused", type(error).__name__)
+                probe = subprocess.run([sys.executable, "-I", "-c",
+                        "import socket, sys; s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])",
+                        other + "/bridge.sock"], capture_output=True)
+                print("socket", probe.stderr.decode().strip().splitlines()[-1] if probe.returncode else "REACHED")
+
                 print("tool", tools.call("cat", {"path": "README.md"})["output"])
                 """;
 
-        PythonExecutionOutcome outcome = service(config -> {
-            config.getCodeExecution().setSandboxUser(user);
-            config.getCodeExecution().setSandboxGroup(group);
-            config.getCodeExecution().setSetprivBinary(setpriv);
-        }).execute(program, scope(advertised("cat"), (tool, arguments) -> ok("FILE-CONTENT")));
+        PythonExecutionOutcome outcome;
+        try {
+            outcome = service(config -> {
+                config.getCodeExecution().setSandboxSlots(pool.toString());
+                config.getCodeExecution().setSudoBinary(sandboxSudo());
+            }).execute(program, scope(advertised("cat"), (tool, arguments) -> ok("FILE-CONTENT")));
+        } finally {
+            SandboxTestSupport.delete(decoy);
+        }
 
-        int serviceUserUid = (Integer) Files.getAttribute(Path.of("/proc/self"), "unix:uid");
         assertThat(outcome.error()).isEmpty();
-        assertThat(outcome.output()).doesNotContain("uid " + serviceUserUid + "\n");
-        assertThat(outcome.output()).contains("refused");
+        assertThat(outcome.output()).doesNotContain("uid " + serviceUserUid() + "\n");
+        assertThat(outcome.output()).contains("refused PermissionError");
         assertThat(outcome.output()).doesNotContain("READ ");
+        assertThat(outcome.output()).contains("decoy refused PermissionError");
+        assertThat(outcome.output()).doesNotContain("DECOY REACHED");
+        assertThat(outcome.output()).contains("socket PermissionError");
+        assertThat(outcome.output()).doesNotContain("socket REACHED");
         assertThat(outcome.output()).contains("tool FILE-CONTENT");
+    }
+
+    /**
+     * The wall-clock timeout has to work across the identity boundary, or it stops being a timeout:
+     * the JVM can no longer signal the program it started, and the process-group kill cannot reach a
+     * program that has a session of its own, so the run is stopped the way sudo allows — as the slot,
+     * by uid. Without that, the endless program below would run on to its {@code RLIMIT_CPU}.
+     */
+    @Test
+    void aTimedOutSandboxedProgramIsStillStopped() {
+        Path pool = sandboxSlots();
+        Assumptions.assumeTrue(pool != null, "no sandbox pool is provisioned for this run");
+
+        PythonExecutionOutcome outcome = service(config -> {
+            config.getCodeExecution().setSandboxSlots(pool.toString());
+            config.getCodeExecution().setSudoBinary(sandboxSudo());
+            config.getValidation().setToolTimeoutSeconds(2);
+        }).execute("print('before the loop')\nwhile True:\n    pass\n", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(outcome.exitCode()).isEqualTo(124);
+        assertThat(outcome.error()).contains("timed out after 2s");
+        assertThat(outcome.output()).contains("before the loop");
+    }
+
+    /** The provisioned pool, or {@code null} when this run was not told to use one. */
+    private static Path sandboxSlots() {
+        String pool = System.getProperty("sandbox.test.slots", "");
+        if (pool.isBlank() || !Files.isReadable(Path.of(pool))) {
+            return null;
+        }
+        return Path.of(pool);
+    }
+
+    /** The sudo the deployment switches with. Overridable only to point the test elsewhere. */
+    private static String sandboxSudo() {
+        return System.getProperty("sandbox.test.sudo", "/usr/bin/sudo");
+    }
+
+    private static int serviceUserUid() throws IOException {
+        return (Integer) Files.getAttribute(Path.of("/proc/self"), "unix:uid");
+    }
+
+    /** The groups the pool hands out: what a decoy workspace has to carry to be another slot's. */
+    private static List<Long> poolGids(Path pool) throws IOException {
+        return Files.readAllLines(pool, StandardCharsets.UTF_8).stream()
+                .map(String::trim)
+                .filter(line -> !line.isEmpty())
+                .map(line -> Long.parseLong(line.split("\\s+")[2]))
+                .toList();
+    }
+
+    /**
+     * What a concurrent run's workspace looks like: the service user owns it, one slot's group is on
+     * it, and it holds the two things a shared sandbox uid would hand over — a program to read and a
+     * bridge socket to talk to. The test builds it because the service deletes its own workspace when
+     * a run ends, and because this one can be aimed at a slot the running program does not have.
+     */
+    private static Path decoyWorkspace(long gid) throws IOException {
+        Path decoy = Files.createTempDirectory("execute-code-decoy-");
+        SandboxTestSupport.openToGroup(decoy, gid, "rwxrwx---");
+        Path program = decoy.resolve("program.py");
+        Files.writeString(program, "print('the other run')\n", StandardCharsets.UTF_8);
+        SandboxTestSupport.openToGroup(program, gid, "rw-r-----");
+        Path socket = decoy.resolve("bridge.sock");
+        try (ServerSocketChannel server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)) {
+            server.bind(UnixDomainSocketAddress.of(socket));
+            SandboxTestSupport.openToGroup(socket, gid, "rw-rw----");
+        }
+        return decoy;
     }
 
     @Test

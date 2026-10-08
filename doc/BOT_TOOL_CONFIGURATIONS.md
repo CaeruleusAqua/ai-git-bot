@@ -207,12 +207,15 @@ application-level code:
    configurations used by bots with the agentic-review workflow.)
 4. `execute-code` is **not** seeded into the Default configuration. Its sandbox
    confines neither the filesystem nor the network. Where the deployment names a
-   sandbox account (the shipped image does) the program runs as that uid, so it
-   reads neither the service user's files nor this JVM's start-time environment
-   (`/proc/<jvm-pid>/environ`); where none is named it runs as the service user
-   and reads whatever that user reads (`open("/absolute/path")`, `$HOME`). Either
-   way it reaches the network (`subprocess`, `os.system`, `curl`; the import guard
-   blocks the names it knows, and a program that wants out does not use them).
+   sandbox pool (the shipped image does) the program runs as one of its
+   identities, one per execution, so it reads neither the service user's files nor
+   this JVM's start-time environment (`/proc/<jvm-pid>/environ`) — and, because no
+   two runs share an identity, it cannot read a concurrent run's program, answer
+   on its bridge socket or signal its process; where no pool is named it runs as
+   the service user and reads whatever that user reads
+   (`open("/absolute/path")`, `$HOME`). Either way it reaches the network
+   (`subprocess`, `os.system`, `curl`; the import guard blocks the names it knows,
+   and a program that wants out does not use them).
    Enabling it is therefore an operator's decision, made per bot — and what a
    program may *call* is the read-only tool surface only, never a write, the
    branch switch or a build. Network isolation, on top of the uid separation, is

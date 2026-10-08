@@ -35,12 +35,13 @@ services:
       # Timeout (seconds) for each validation command the coding agent runs: the
       # build/test tools and any repository-provided `execute` script.
       AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS: ${AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS:-300}
-      # execute-code runs the model-written program as this account and group, both created by the
-      # image (uid/gid 10001). Listed here so a stack can point them somewhere else; an empty value
-      # for both runs the program as appuser (see DEPLOYMENT.md before doing that).
-      AGENT_CODE_EXECUTION_SANDBOX_USER: ${AGENT_CODE_EXECUTION_SANDBOX_USER:-sandbox}
-      AGENT_CODE_EXECUTION_SANDBOX_GROUP: ${AGENT_CODE_EXECUTION_SANDBOX_GROUP:-sandbox}
-      AGENT_CODE_EXECUTION_SETPRIV: ${AGENT_CODE_EXECUTION_SETPRIV:-/usr/local/libexec/execute-code-setpriv}
+      # execute-code runs the model-written program as one of the identities in this pool, one slot
+      # per execution, switching to it with sudo before the interpreter starts. Both the pool and the
+      # sudo rule that allows the switch are created by the image from the same file; listed here so a
+      # stack can point them somewhere else. An empty pool runs the program as appuser (see
+      # DEPLOYMENT.md before doing that).
+      AGENT_CODE_EXECUTION_SANDBOX_SLOTS: ${AGENT_CODE_EXECUTION_SANDBOX_SLOTS:-/etc/execute-code/sandbox-slots}
+      AGENT_CODE_EXECUTION_SUDO: ${AGENT_CODE_EXECUTION_SUDO:-/usr/bin/sudo}
       # Optional: capture raw AI request/response payloads in the usage audit log.
       # Disabled by default because payloads can be large and may contain sensitive prompts.
       AI_USAGE_RAW_PAYLOADS_ENABLED: ${AI_USAGE_RAW_PAYLOADS_ENABLED:-false}
