@@ -309,8 +309,33 @@ The Dockerfile uses a **multi-stage build**:
 Key features:
 - Maven dependency layer caching for fast rebuilds
 - Non-root `appuser` for security
+- A second, lower-privileged account (`sandbox`, uid `10001`) that the
+  `execute-code` program runs as, so it can read neither `appuser`'s files nor
+  the JVM's start-time environment
 - Health check via `/actuator/health` (interval: 30s, start period: 30s)
 - JVM tuning: `UseContainerSupport` and `MaxRAMPercentage=75.0`
+
+The `execute-code` interpreter is switched to the `sandbox` account with a
+capability-carrying `setpriv` copy
+(`/usr/local/libexec/execute-code-setpriv`, `CAP_SETUID`/`CAP_SETGID`, mode
+`0750 root:appgroup`). The JVM itself carries `CAP_KILL`, because a child running
+as another uid can no longer be signalled by uid and the wall-clock timeout
+depends on it. The sandbox account is kept out of `appgroup`, so a program
+cannot execute either binary and switch back. If the container is started with
+`--cap-drop=ALL`, or on a runtime that ignores file capabilities, `execute-code`
+fails closed rather than running the program as `appuser`; set
+`AGENT_CODE_EXECUTION_SANDBOX_USER=` (with `AGENT_CODE_EXECUTION_SANDBOX_GROUP=`)
+to opt out explicitly instead.
+
+The account name and the helper path are the defaults in `application.properties`
+(`agent.code-execution.sandbox-user` / `-group` / `-setpriv-binary`, each
+overridable via the `AGENT_CODE_EXECUTION_*` environment variables and wired into
+`docker-compose.yml`), so the image needs no environment variable to be sandboxed.
+A run outside the image — a local `mvn spring-boot:run`, say — has to create them
+first: `groupadd -g 10001 sandbox`, `useradd -u 10001 -g sandbox -M -s
+/usr/sbin/nologin sandbox`, add the JVM user to the group, and make a `setpriv`
+carrying `CAP_SETUID`/`CAP_SETGID` reachable at the configured path (or override
+the three variables to point at your own).
 
 ### Architectures
 

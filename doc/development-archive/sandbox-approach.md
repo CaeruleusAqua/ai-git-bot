@@ -273,6 +273,17 @@ Option 1 configs through `sandbox-uid`/`sandbox-gid` for hardened deployments.
 - DEPLOYMENT.md gains a "hardening without Docker" section: file permissions, optional
   sandbox user provisioning, userns restrictions on Ubuntu.
 
+**Implementation note — options 1 and 2 both went in, for `execute-code` only.** The tool now
+takes an optional `sandbox-user`/`sandbox-group` (`agent.code-execution.*`): when set, the
+interpreter is prefixed with `setpriv --reuid=… --regid=… --clear-groups` and the throwaway
+workspace is opened to the group both accounts share, so the option-1 identity separation is
+real where it matters most. A non-root JVM cannot switch uid, so the privilege is a
+file-capability grant instead of root: a `setpriv` copy carrying `CAP_SETUID`/`CAP_SETGID`,
+executable by the service user only (the sandbox account is kept out of that group, so it cannot
+exec it back), plus `CAP_KILL` for the JVM, which can no longer signal a child running as
+another uid. The `setpriv`/`unshare --net`/`prlimit` prefix of §3.2 for *validation* commands is
+still unbuilt; those continue to run as the service user.
+
 ---
 
 ## 4. Implementation Plan

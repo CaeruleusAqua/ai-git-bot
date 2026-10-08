@@ -64,6 +64,7 @@ RUN set -eux; \
         golang-go \
         gcc g++ make cmake \
         ruby ruby-bundler \
+        libcap2-bin \
         ubuntu-keyring \
     && rm -rf /var/lib/apt/lists/*
 
@@ -152,6 +153,53 @@ RUN set -eux; \
     useradd -m -u 1000 -g appgroup -s /bin/bash appuser; \
     mkdir -p /app /app/prompts; \
     chown -R appuser:appgroup /app /home/appuser
+
+# ---------------------------------------------------------------------------
+# execute-code sandbox identity
+#
+# The `execute-code` tool runs a model-written Python program. It must not run as
+# appuser: `/proc/<jvm-pid>/environ` is readable by same-uid processes, so the
+# program would see every secret the app was started with. `sandbox` is the uid
+# that program runs as, and appuser joins the `sandbox` group so it can hand over
+# the throwaway workspace (0770/0640/0660 — ProcessPythonExecutionService).
+#
+# Switching uid needs privilege, and a file-capability binary is the smallest
+# grant that leaves the app itself non-root:
+#   * setpriv carries CAP_SETUID/CAP_SETGID and is what the JVM execs;
+#   * the JVM needs CAP_KILL, because it can no longer signal a child that runs
+#     as a different uid (SIGKILL is uid-checked, and the wall-clock timeout
+#     depends on it);
+#   * both are 0750 root:appgroup and `sandbox` is deliberately NOT in appgroup,
+#     so the program cannot exec them and switch back — anything the program can
+#     reach stays world-readable, which no credential here is (workspace
+#     credential files and SSH keys are 0600, see WorkspaceService).
+# Why this is not a hole: exec of a file without its own capabilities clears
+# them, so no child of the JVM inherits these; a later write to either file
+# clears its capabilities; and the caps stay subject to the container's bounding
+# set, so a runtime started with --cap-drop=ALL makes execute-code fail closed
+# instead of quietly running the program as appuser.
+#
+# The account name, the group and the helper path below are also the defaults of
+# agent.code-execution.sandbox-user / -group / -setpriv-binary in
+# application.properties, so the image is sandboxed without any environment
+# variable; renaming one here means renaming it there (or overriding
+# AGENT_CODE_EXECUTION_SANDBOX_USER / _GROUP / _SETPRIV, as docker-compose.yml
+# does).
+# ---------------------------------------------------------------------------
+RUN set -eux; \
+    groupadd -g 10001 sandbox; \
+    useradd -u 10001 -g sandbox -M -s /usr/sbin/nologin sandbox; \
+    usermod -aG sandbox appuser; \
+    mkdir -p /usr/local/libexec; \
+    cp /usr/bin/setpriv /usr/local/libexec/execute-code-setpriv; \
+    chown root:appgroup /usr/local/libexec/execute-code-setpriv; \
+    chmod 0750 /usr/local/libexec/execute-code-setpriv; \
+    setcap cap_setuid,cap_setgid+ep /usr/local/libexec/execute-code-setpriv; \
+    java_bin="$(readlink -f /opt/java/openjdk/bin/java)"; \
+    chown root:appgroup "$java_bin"; \
+    chmod 0750 "$java_bin"; \
+    setcap cap_kill+ep "$java_bin"; \
+    getcap /usr/local/libexec/execute-code-setpriv "$java_bin"
 
 # ---------------------------------------------------------------------------
 # Playwright + Cypress — installed GLOBALLY under /usr/local/lib/node_modules

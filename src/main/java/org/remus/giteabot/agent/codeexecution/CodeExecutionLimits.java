@@ -12,6 +12,11 @@ import java.time.Duration;
  * {@code agent.code-execution.*}: the timeout and the result cap are the ones every other tool call
  * uses, so there is one owner per limit and a sandboxed run cannot outlive a normal one. Test call
  * sites use inline literals matching the shipped defaults.</p>
+ *
+ * <p>{@code sandboxUser}/{@code sandboxGroup} name the account the interpreter is switched to and
+ * the group the workspace is opened to; both blank means the program runs as the service user
+ * (layer 1 only). {@code setprivBinary} is the binary that performs the switch and must carry
+ * {@code CAP_SETUID}/{@code CAP_SETGID}.</p>
  */
 public record CodeExecutionLimits(Duration timeout,
                                   int maxToolCalls,
@@ -21,7 +26,10 @@ public record CodeExecutionLimits(Duration timeout,
                                   int cpuSeconds,
                                   long maxFileSizeBytes,
                                   int maxProcesses,
-                                  String pythonBinary) {
+                                  String pythonBinary,
+                                  String sandboxUser,
+                                  String sandboxGroup,
+                                  String setprivBinary) {
 
     public static CodeExecutionLimits from(AgentConfigProperties config) {
         AgentConfigProperties.CodeExecutionConfig code = config.getCodeExecution();
@@ -34,10 +42,17 @@ public record CodeExecutionLimits(Duration timeout,
                 code.getCpuSeconds(),
                 code.getMaxFileSize().toBytes(),
                 code.getMaxProcesses(),
-                code.getPythonBinary());
+                orEmpty(code.getPythonBinary()),
+                orEmpty(code.getSandboxUser()),
+                orEmpty(code.getSandboxGroup()),
+                orEmpty(code.getSetprivBinary()));
     }
 
     private static int toIntBytes(long bytes) {
         return (int) Math.min(bytes, Integer.MAX_VALUE);
+    }
+
+    private static String orEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

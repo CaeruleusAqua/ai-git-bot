@@ -117,9 +117,9 @@ public class AgentConfigProperties {
 
         /**
          * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. It counts every task
-         * of the uid, this JVM's threads included, and it is not enforced at all for uid 0 — so it
-         * only becomes a real bound once the program has a uid of its own (layer 2). Until then a
-         * program shares the budget: where the service user already runs more tasks than this, the
+         * of the uid and is not enforced at all for uid 0, so it only bounds a program that has a
+         * uid of its own — where {@code sandbox-user} leaves it running as the service user, it
+         * shares that user's budget: on a service user that already runs more tasks than this, the
          * program cannot start a thread or spawn a child at all. That is the limit working as
          * specified, not a bug — raise it if your programs legitimately need threads.
          */
@@ -127,6 +127,27 @@ public class AgentConfigProperties {
 
         /** Interpreter to spawn. */
         private String pythonBinary = "python3";
+
+        /**
+         * Unprivileged account the interpreter is switched to before it starts, so a program cannot
+         * read what the service user reads — this JVM's start-time environment included. Blank — the
+         * field default, so unit tests and a deployment that names none keep the old behaviour —
+         * runs the program as the service user; {@code application.properties} defaults it to
+         * {@code sandbox}, the account the Dockerfile provisions. The switch needs a {@code setpriv}
+         * carrying {@code CAP_SETUID}/{@code CAP_SETGID}, and the JVM needs {@code CAP_KILL} to stop
+         * a program it can no longer signal by uid — both are provisioned in the Dockerfile.
+         */
+        private String sandboxUser = "";
+
+        /**
+         * Group the interpreter runs with and the group the throwaway workspace is opened to. Both
+         * accounts must be members (the image adds the service user to it); the account's primary
+         * group is the right choice. Blank is only valid while {@code sandbox-user} is blank.
+         */
+        private String sandboxGroup = "";
+
+        /** Binary that performs the uid switch. Must carry {@code CAP_SETUID}/{@code CAP_SETGID}. */
+        private String setprivBinary = "setpriv";
     }
     @Data
     public static class SchemaConfig {

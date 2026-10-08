@@ -143,6 +143,108 @@ class ProcessPythonExecutionServiceTest {
     }
 
     @Test
+    void aConfiguredSandboxAccountIsSwitchedToBeforeTheInterpreterStarts() throws IOException {
+        Path workspace = Files.createTempDirectory("execute-code-argv-");
+        try {
+            ProcessBuilder processBuilder = service(config -> {
+                config.getCodeExecution().setSandboxUser("sandbox");
+                config.getCodeExecution().setSandboxGroup("sandbox");
+                config.getCodeExecution().setSetprivBinary("/usr/local/libexec/execute-code-setpriv");
+            }).command(workspace);
+
+            // setpriv first: the program must never start as the service user and drop afterwards.
+            assertThat(processBuilder.command()).containsExactly(
+                    "/usr/local/libexec/execute-code-setpriv",
+                    "--reuid=sandbox", "--regid=sandbox", "--clear-groups",
+                    "python3", "-I", "-u", "-B",
+                    workspace.resolve("bootstrap.py").toString(),
+                    workspace.resolve("program.py").toString());
+            assertThat(processBuilder.environment()).containsKey("AI_GIT_BOT_BRIDGE");
+        } finally {
+            Files.deleteIfExists(workspace);
+        }
+    }
+
+    /**
+     * The switch needs both names: without the shared group the workspace cannot be opened to the
+     * program, and a program that cannot read its own bootstrap is not a smaller problem than one
+     * running as the service user. Refusing beats half-configuring.
+     */
+    @Test
+    void aSandboxAccountWithoutAGroupIsRefusedBeforeAnythingIsSpawned() {
+        PythonExecutionOutcome outcome =
+                service(config -> config.getCodeExecution().setSandboxUser("sandbox"))
+                        .execute("print('hello')", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(outcome.error()).contains("without a sandbox group");
+    }
+
+    /**
+     * A configured account that cannot be resolved must fail the run, not quietly fall back to the
+     * service user — the fallback is exactly what the setting exists to prevent.
+     */
+    @Test
+    void anUnknownSandboxGroupFailsTheRunInsteadOfRunningAsTheServiceUser() {
+        PythonExecutionOutcome outcome = service(config -> {
+            config.getCodeExecution().setSandboxUser("sandbox");
+            config.getCodeExecution().setSandboxGroup("no-such-sandbox-group");
+        }).execute("print('hello')", scope(List.of(), returns(ok(""))));
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(outcome.error()).contains("no-such-sandbox-group");
+    }
+
+    /**
+     * The hardened path end to end, against a real second uid. It needs a deployment that
+     * provisioned one — the shipped image does — so it is skipped unless the three system
+     * properties name it:
+     *
+     * <pre>
+     * mvn -Dtest=ProcessPythonExecutionServiceTest test -Dsandbox.test.user=sandbox \
+     *     -Dsandbox.test.group=sandbox -Dsandbox.test.setpriv=/usr/local/libexec/execute-code-setpriv
+     * </pre>
+     *
+     * <p>The uid alone is not the property under test: a program that runs as another user but can
+     * still read this JVM's start-time environment has gained nothing, and one that can no longer
+     * reach the bridge socket has lost the tool surface. Both ends are asserted here.
+     */
+    @Test
+    void aSandboxedProgramReadsNoServiceEnvironmentButStillReachesTheTools() throws IOException {
+        String user = System.getProperty("sandbox.test.user", "");
+        String group = System.getProperty("sandbox.test.group", "");
+        String setpriv = System.getProperty("sandbox.test.setpriv", "");
+        Assumptions.assumeTrue(!user.isBlank() && !group.isBlank() && !setpriv.isBlank(),
+                "no sandbox account is provisioned for this run");
+        Assumptions.assumeTrue(Files.isExecutable(Path.of(setpriv)),
+                "the configured setpriv binary is not executable here");
+
+        String program = """
+                import os
+                print("uid", os.getuid())
+                try:
+                    raw = open("/proc/%d/environ" % os.getppid(), "rb").read()
+                    print("READ", len(raw))
+                except OSError as error:
+                    print("refused", type(error).__name__)
+                print("tool", tools.call("cat", {"path": "README.md"})["output"])
+                """;
+
+        PythonExecutionOutcome outcome = service(config -> {
+            config.getCodeExecution().setSandboxUser(user);
+            config.getCodeExecution().setSandboxGroup(group);
+            config.getCodeExecution().setSetprivBinary(setpriv);
+        }).execute(program, scope(advertised("cat"), (tool, arguments) -> ok("FILE-CONTENT")));
+
+        int serviceUserUid = (Integer) Files.getAttribute(Path.of("/proc/self"), "unix:uid");
+        assertThat(outcome.error()).isEmpty();
+        assertThat(outcome.output()).doesNotContain("uid " + serviceUserUid + "\n");
+        assertThat(outcome.output()).contains("refused");
+        assertThat(outcome.output()).doesNotContain("READ ");
+        assertThat(outcome.output()).contains("tool FILE-CONTENT");
+    }
+
+    @Test
     void aProgramCanCallAToolThroughTheBridge() {
         Assumptions.assumeTrue(pythonAvailable, "python3 is not installed");
         String program = """

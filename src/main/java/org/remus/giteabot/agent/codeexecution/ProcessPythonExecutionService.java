@@ -21,10 +21,15 @@ import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.GroupPrincipal;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipalNotFoundException;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -37,6 +42,16 @@ import java.util.stream.Stream;
  * wall-clock timeout enforced here. The container is the real isolation boundary
  * ({@code sandbox-approach.md} / the execute-code plan, ADR-1) — nothing in this class claims
  * otherwise.</p>
+ *
+ * <p>Where the deployment names a sandbox account, the program is not run as the service user at
+ * all: {@link #command} puts {@code setpriv} in front of the interpreter, and the temp directory,
+ * the files in it and the bridge socket are opened to the account's group. The program then reads
+ * neither the service user's files nor this JVM's start-time environment
+ * ({@code /proc/<jvm-pid>/environ} is granted to same-uid readers only). Two things are needed on
+ * the JVM side and both are provisioned in the image (see the Dockerfile): a {@code setpriv} that
+ * carries {@code CAP_SETUID}/{@code CAP_SETGID}, because a non-root JVM cannot switch uid on its
+ * own, and {@code CAP_KILL} on the JVM itself, because the child it produced can no longer be
+ * signalled by uid.</p>
  *
  * <p>stdout carries the program's output and nothing else. Tool calls travel over an {@code AF_UNIX}
  * socket in the temp directory (permissions are filesystem permissions: no port, nothing to
@@ -69,6 +84,16 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
     private static final String BRIDGE_THREAD = "execute-code-bridge";
 
     /**
+     * Permissions the workspace, the files in it and the bridge socket carry when the program runs
+     * as a sandbox account: reachable by the group both accounts share and by nobody else. The group
+     * is what makes that possible without giving the JVM a second privilege — it owns the directory
+     * either way.
+     */
+    private static final String SANDBOX_DIRECTORY_MODE = "rwxrwx---";
+    private static final String SANDBOX_FILE_MODE = "rw-r-----";
+    private static final String SANDBOX_SOCKET_MODE = "rw-rw----";
+
+    /**
      * Captured beyond the configured cap, purely so truncation can be detected: with the cap passed
      * straight through, a result that stopped exactly at the cap would be indistinguishable from one
      * that was cut off.
@@ -99,15 +124,32 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
 
         Path workspace = null;
         try {
+            GroupPrincipal sandboxGroup = sandboxGroup();
             workspace = Files.createTempDirectory("execute-code-");
-            restrictToOwner(workspace);
+            if (sandboxGroup == null) {
+                restrictToOwner(workspace);
+            } else {
+                openToSandbox(workspace, sandboxGroup, SANDBOX_DIRECTORY_MODE);
+            }
             writeResource(workspace, BOOTSTRAP_FILE, BOOTSTRAP_RESOURCE);
             writeResource(workspace, MODULE_FILE, MODULE_RESOURCE);
             Files.writeString(workspace.resolve(PROGRAM_FILE), code, StandardCharsets.UTF_8);
+            if (sandboxGroup != null) {
+                // The program has to read all three and the JVM created them, so their group is
+                // settled here rather than by a umask.
+                for (String file : List.of(BOOTSTRAP_FILE, MODULE_FILE, PROGRAM_FILE)) {
+                    openToSandbox(workspace.resolve(file), sandboxGroup, SANDBOX_FILE_MODE);
+                }
+            }
 
             Path socketPath = workspace.resolve(SOCKET_FILE);
             try (ServerSocketChannel server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)) {
                 server.bind(UnixDomainSocketAddress.of(socketPath));
+                if (sandboxGroup != null) {
+                    // Connecting to a unix socket needs write permission on it, so the socket is the
+                    // one path the group may write.
+                    openToSandbox(socketPath, sandboxGroup, SANDBOX_SOCKET_MODE);
+                }
                 PythonToolBridge bridge = new PythonToolBridge(scope.available(), scope.executor(),
                         limits, json);
                 Thread serving = startServing(server, bridge);
@@ -137,13 +179,26 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
      * environment, the user site directory and the script's path entry, {@code -u} keeps the
      * program's output arriving instead of sitting in a pipe buffer (a timeout would otherwise lose
      * the lines that explain what it was doing), {@code -B} keeps the sandbox directory free of
-     * bytecode.
+     * bytecode. A configured sandbox account puts {@code setpriv} in front of the interpreter, so
+     * the program never starts with the service user's identity and drops it afterwards.
      */
     ProcessBuilder command(Path workspace) {
-        ProcessBuilder processBuilder = new ProcessBuilder(
-                limits.pythonBinary(), "-I", "-u", "-B",
-                workspace.resolve(BOOTSTRAP_FILE).toString(),
-                workspace.resolve(PROGRAM_FILE).toString());
+        List<String> argv = new ArrayList<>();
+        if (!limits.sandboxUser().isBlank()) {
+            argv.add(limits.setprivBinary());
+            argv.add("--reuid=" + limits.sandboxUser());
+            argv.add("--regid=" + limits.sandboxGroup());
+            // No supplementary groups: the account keeps its primary group only, which is the one the
+            // workspace is opened to.
+            argv.add("--clear-groups");
+        }
+        argv.add(limits.pythonBinary());
+        argv.add("-I");
+        argv.add("-u");
+        argv.add("-B");
+        argv.add(workspace.resolve(BOOTSTRAP_FILE).toString());
+        argv.add(workspace.resolve(PROGRAM_FILE).toString());
+        ProcessBuilder processBuilder = new ProcessBuilder(argv);
         processBuilder.directory(workspace.toFile());
         // stdout and stderr are one stream: the program's output is the tool result, and a traceback
         // belongs in it rather than in a log nobody reads.
@@ -280,6 +335,42 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
             }
             Files.copy(content, directory.resolve(fileName));
         }
+    }
+
+    /**
+     * The group both accounts share, or {@code null} when the deployment names no sandbox account.
+     *
+     * <p>Fails rather than degrades: a configured account that cannot be resolved, or that is named
+     * without the group the workspace needs, must not leave the program running as the service user —
+     * that is the whole point of configuring it.</p>
+     */
+    private GroupPrincipal sandboxGroup() throws IOException {
+        String user = limits.sandboxUser();
+        if (user.isBlank()) {
+            return null;
+        }
+        String group = limits.sandboxGroup();
+        if (group.isBlank()) {
+            throw new IOException("sandbox account '" + user + "' is configured without a sandbox group");
+        }
+        try {
+            return FileSystems.getDefault().getUserPrincipalLookupService()
+                    .lookupPrincipalByGroupName(group);
+        } catch (UserPrincipalNotFoundException e) {
+            throw new IOException("sandbox group '" + group + "' does not exist");
+        }
+    }
+
+    /**
+     * Opens one path in the workspace to the sandbox account's group.
+     *
+     * <p>The group is the one thing both accounts share (the JVM as its member, the program as its
+     * primary group), so this is how the program reaches the bootstrap, its own source, its
+     * {@code TMPDIR} and the bridge socket without the directory having to become world-accessible.</p>
+     */
+    private static void openToSandbox(Path path, GroupPrincipal group, String mode) throws IOException {
+        Files.setAttribute(path, "posix:group", group);
+        Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(mode));
     }
 
     private static void restrictToOwner(Path directory) {

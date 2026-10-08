@@ -205,17 +205,18 @@ application-level code:
    fresh installations and existing Default configurations expose every
    context-gathering tool. (V30 separately backfills `pr-diff` into custom
    configurations used by bots with the agentic-review workflow.)
-4. `execute-code` is **not** seeded into the Default configuration. Layer 1 of its
-   sandbox confines neither the filesystem nor the network: the program runs as
-   the service user inside the bot's own container, so it can read whatever that
-   user reads (`open("/absolute/path")`, `/proc/<jvm-pid>/environ` — this
-   process's start-time environment — `$HOME`) and it reaches the network anyway
-   (`subprocess`, `os.system`, `curl`; the import guard blocks the names it
-   knows, and a program that wants out does not use them). Enabling it is
-   therefore an operator's decision, made per bot — and what a program may
-   *call* is the read-only tool surface only, never a write, the branch switch or
-   a build. Hard isolation (separate uid, no network, read-only rootfs) is the
-   precondition for revisiting this default.
+4. `execute-code` is **not** seeded into the Default configuration. Its sandbox
+   confines neither the filesystem nor the network. Where the deployment names a
+   sandbox account (the shipped image does) the program runs as that uid, so it
+   reads neither the service user's files nor this JVM's start-time environment
+   (`/proc/<jvm-pid>/environ`); where none is named it runs as the service user
+   and reads whatever that user reads (`open("/absolute/path")`, `$HOME`). Either
+   way it reaches the network (`subprocess`, `os.system`, `curl`; the import guard
+   blocks the names it knows, and a program that wants out does not use them).
+   Enabling it is therefore an operator's decision, made per bot — and what a
+   program may *call* is the read-only tool surface only, never a write, the
+   branch switch or a build. Network isolation, on top of the uid separation, is
+   what would make a different default defensible.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

@@ -2,12 +2,16 @@
 
 Layer 1 of the sandbox, and defence-in-depth only: it confines neither the filesystem nor the
 network. The boundary is the container the program shares with the JVM (sandbox-approach.md /
-the execute-code plan, ADR-1), so the program runs as the service user and reads whatever that
-user reads — ``open("/absolute/path")``, ``/proc/<jvm-pid>/environ`` (this process's start-time
-environment), ``$HOME`` — and it reaches the network regardless of the import list below:
-subprocess, os.system and anything the guard cannot name still work, and a stub like ``ctypes``
-is exactly what an import guard cannot contain. Every step here is cheap and raises the cost of
-an accident; none of it is claimed to stop a program that is actively trying to get out.
+the execute-code plan, ADR-1). Where the deployment names a sandbox user — the shipped image
+does — the interpreter was switched to that uid before this module loaded, so the program reads
+neither the service user's files (``open("/absolute/path")``, ``$HOME``) nor this process's
+start-time environment (``/proc/<jvm-pid>/environ``, which the kernel grants to same-uid readers
+only). Where no sandbox user is configured the program runs as the service user and reads
+everything that user reads. Either way it reaches the network regardless of the import list
+below: subprocess, os.system and anything the guard cannot name still work, and a stub like
+``ctypes`` is exactly what an import guard cannot contain. Every step here is cheap and raises
+the cost of an accident; none of it is claimed to stop a program that is actively trying to get
+out.
 
 Every limit arrives as an environment variable set by Java, so the value has one owner:
 AgentConfigProperties.CodeExecutionConfig. A limit that cannot be set on this platform is
