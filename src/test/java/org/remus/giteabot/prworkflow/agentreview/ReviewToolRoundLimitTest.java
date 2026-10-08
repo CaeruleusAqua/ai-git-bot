@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.loop.AgentRunContext;
 import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
@@ -22,6 +23,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -70,7 +72,7 @@ class ReviewToolRoundLimitTest {
         ToolCatalog catalog = new ToolCatalog(new AgentConfigProperties());
         Set<String> allowed = Set.of("get-issue");
         AgentToolRouter router = new AgentToolRouter(null, catalog, null, null,
-                McpToolCatalog.empty(), repositoryClient, allowed);
+                McpToolCatalog.empty(), repositoryClient, allowed, mock(PythonExecutionService.class));
         return new ReviewAgentStrategy("sys", router, catalog, McpToolCatalog.empty(),
                 allowed, null, null, null, 5, maxToolRounds);
     }
