@@ -101,7 +101,7 @@ public class AgentConfigProperties {
     public static class CodeExecutionConfig {
 
         /** Nested tool calls one program may make. The loop budget is per round, so none matches it. */
-        private int maxToolCalls = 50;
+        private int maxToolCalls = 150;
 
         /** Cap on the submitted program itself. */
         private DataSize maxCodeSize = DataSize.ofKilobytes(100);

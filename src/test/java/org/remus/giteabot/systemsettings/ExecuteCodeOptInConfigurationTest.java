@@ -17,9 +17,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  * service user inside this container, able to read its start-time environment, opt-out rather than
  * opt-in for every bot that never configured its own tools.
  *
- * <p>Running code stays an operator decision: the bot's tool selection is the per-bot opt-in and
- * {@code agent.code-execution.enabled} (default {@code false}) is the deployment switch.</p>
- *
  * <p>Standalone Flyway/H2 probe (the Spring test profile runs with Flyway disabled) that migrates the
  * whole chain. No version is pinned, so the test cannot rot when the next migration is added.</p>
  */

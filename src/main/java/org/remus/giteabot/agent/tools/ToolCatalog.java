@@ -297,9 +297,6 @@ public class ToolCatalog {
                 .withHint("**Drop a locale file that is no longer needed**: `i18n-delete` removes a matching locale file."),
 
             // ---- agent-control tool (dispatched before the tool families) ----
-            // Roles name the surfaces that dispatch it: coding, writer and triage. Read-only review
-            // refuses it, and the PR-workflow agents run their own executors with fixed tool sets, so
-            // advertising it there would be a promise the dispatch does not keep.
             entry("execute-code", ToolKind.AGENT_CONTROL,
                     EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW, Role.REVIEW),
                     "Run a Python program that can call the read-only tools available in this run "

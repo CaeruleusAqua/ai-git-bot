@@ -46,7 +46,6 @@ class AgentToolRouterExecuteCodeTest {
 
     private static final AgentConfigProperties CONFIG = new AgentConfigProperties();
 
-    /** Opts in explicitly: the shipped default for {@code agent.code-execution.enabled} is false. */
     private static ProcessPythonExecutionService optedInSandbox() {
         AgentConfigProperties config = new AgentConfigProperties();
         return new ProcessPythonExecutionService(config);
