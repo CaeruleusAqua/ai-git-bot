@@ -9,6 +9,7 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
@@ -344,7 +345,7 @@ public final class AgentLoop {
      * connection aborted) and streaming transport failures wrapped in
      * {@link ResourceAccessException} (read timeout, mid-stream connection
      * drop, malformed stream line — see {@link
-     * org.remus.giteabot.ai.StreamingLineReader}).
+     * org.remus.giteabot.ai.StreamingLineReader}), and HTTP 408 request timeouts.
      *
      * <p>All other failures, and any failure on the second attempt, are
      * re-thrown to the caller.</p>
@@ -362,6 +363,7 @@ public final class AgentLoop {
                         null, budget.maxTokensPerCall());
             } catch (RuntimeException e) {
                 boolean promptTooLong = e instanceof HttpClientErrorException clientError
+                        && clientError.getStatusCode().value() != HttpStatus.REQUEST_TIMEOUT.value()
                         && aiClient.isPromptTooLongError(clientError);
                 boolean transientNetworkFailure = isTransientNetworkFailure(e);
 
@@ -396,6 +398,10 @@ public final class AgentLoop {
             // StreamingLineReader); a retry is the intended recovery, so treat
             // the whole family as transient rather than matching the message.
             switch (current) {
+                case HttpClientErrorException clientError
+                        when clientError.getStatusCode().value() == HttpStatus.REQUEST_TIMEOUT.value() -> {
+                    return true;
+                }
                 case ResourceAccessException resourceAccessException -> {
                     return true;
                 }
