@@ -98,10 +98,23 @@ class ToolArgumentsTest {
     }
 
     @Test
-    void anUnknownArgumentShapeStillCarriesItsData() {
-        ObjectNode args = JSON.createObjectNode().put("somethingElse", 1);
+    void aDeclaredToolWithAnUnknownShapeCarriesNoArgument() {
+        // execute-code declares `code`; a call naming something else matches no property, so
+        // nothing reaches the executor — which must then report the missing argument instead of
+        // running the raw object (a valid Python dict literal that would exit 0 silently).
+        ObjectNode args = JSON.createObjectNode().put("program", "print(1)");
 
         assertThat(ToolArguments.toPositional("execute-code", args, schema("execute-code")))
+                .isEmpty();
+    }
+
+    @Test
+    void aToolWithoutASchemaStillCarriesItsRawObject() {
+        // Validation tools (and unknown names) declare no schema, so the raw object is the only
+        // thing there is to pass.
+        ObjectNode args = JSON.createObjectNode().put("custom", "x");
+
+        assertThat(ToolArguments.toPositional("mvn", args, null))
                 .containsExactly(args.toString());
     }
 

@@ -11,6 +11,7 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowCancelledException;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
@@ -66,8 +67,8 @@ class ReadmeSyncWritebackTest {
         doReturn(43L).when(client).createPullRequest(eq("acme"), eq("repo"), anyString(), anyString(), anyString(),
                 eq("feature/docs"));
         ReadmeSyncAgent agent = mock(ReadmeSyncAgent.class);
-        when(agent.write(any(), any(), anyString(), any(), anyInt())).thenAnswer(invocation -> {
-            ReadmeSyncToolContext context = invocation.getArgument(1);
+        when(agent.write(any(), any(), any(), anyString(), any(), anyInt())).thenAnswer(invocation -> {
+            ReadmeSyncToolContext context = invocation.getArgument(2);
             checkout.set(context.workspace());
             Files.writeString(context.workspace().resolve("README.md"), generatedText);
             Files.writeString(context.workspace().resolve("new.md"), "new documentation\n");
@@ -78,7 +79,8 @@ class ReadmeSyncWritebackTest {
             return new ReadmeSyncAgent.Result(3, "done", false);
         });
         service = new ReadmeSyncService(client, mock(AiClient.class), new SystemPrompt(),
-                new WorkspaceService(root.resolve("workspaces").toString()), agent);
+                new WorkspaceService(root.resolve("workspaces").toString()), agent,
+                mock(WorkflowToolSurfaceFactory.class));
     }
 
     @ParameterizedTest

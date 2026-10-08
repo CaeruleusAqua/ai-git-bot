@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
 import java.nio.channels.Channels;
@@ -39,7 +40,7 @@ import java.util.stream.Stream;
  * <p>{@code python3 -I -u -B bootstrap.py program.py}, in a fresh 0700 temp directory that is also
  * its cwd and {@code TMPDIR}, with a scrubbed environment, rlimits applied by the bootstrap, and a
  * wall-clock timeout enforced here. The container is the real isolation boundary
- * ({@code sandbox-approach.md} / the execute-code plan, ADR-1) — nothing in this class claims
+ * ({@code doc/development-archive/sandbox-approach.md}, ADR-1) — nothing in this class claims
  * otherwise.</p>
  *
  * <p>Where the deployment names a sandbox pool, the program does not run as the service user at
@@ -112,6 +113,15 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
 
     /** The conventional timeout exit code, so a caller can tell it from the program's own. */
     private static final int EXIT_TIMEOUT = 124;
+
+    /**
+     * How long teardown waits for an in-flight nested call before the workspace is deleted. The
+     * tool timeout is too long to hold the agent thread here: the nested call is already bounded by
+     * its own timeout ({@code agent.validation.tool-timeout-seconds}, enforced by the executor it
+     * reaches), so a call that respects it finishes well inside this window, and one that does not
+     * is reported rather than waited on for minutes.
+     */
+    private static final Duration NESTED_TEARDOWN_WAIT = Duration.ofSeconds(10);
 
     private final CodeExecutionLimits limits;
     private final SandboxSlots slots;
@@ -193,6 +203,14 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
             Thread.currentThread().interrupt();
             return PythonExecutionOutcome.failed(1, "", "execution interrupted");
         } finally {
+            if (slot != null) {
+                // The program created its temp files and any directories as the slot, and the JVM —
+                // which owns the workspace but only holds the slot's group — cannot traverse a
+                // directory the program made 0700, let alone delete inside it. Clear the contents as
+                // the slot first, then delete what the JVM still owns. Without this the workspace
+                // (and everything under it) leaks silently on every run.
+                slots.delete(slot, workspace);
+            }
             deleteRecursively(workspace);
             slots.release(slot);
         }
@@ -328,10 +346,11 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
      * Waits for an in-flight nested call before the workspace it may be reading is deleted.
      *
      * <p>{@code interrupt()} does not abort a call blocked on I/O, so a program that ran out of time
-     * can leave one behind. The bound is the tool timeout the nested call is itself subject to: a call
-     * that respects its own timeout finishes inside it, and one that does not is reported instead of
-     * waited on for ever. Either way the workspace is removed underneath it, which is why the warning
-     * is not decoration.</p>
+     * can leave one behind. The bound is a short, fixed window ({@link #NESTED_TEARDOWN_WAIT}), not
+     * the tool timeout: the nested call is already bounded by its own timeout, so waiting the full
+     * tool timeout (300 s by default) to confirm it is stuck only stalls the agent thread. A call
+     * that outlives the window is reported instead of waited on, and the workspace is removed
+     * underneath it — which is why the warning is not decoration.</p>
      *
      * <p>Nested calls run on {@code execute-code-bridge}, not on the agent's thread. Nothing depends on
      * that difference today — the only {@link ThreadLocal}s in the codebase are the AI audit and retry
@@ -339,7 +358,7 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
      * context handed over here.</p>
      */
     private void awaitServing(Thread serving) {
-        long bound = limits.timeout().toMillis();
+        long bound = NESTED_TEARDOWN_WAIT.toMillis();
         try {
             serving.join(bound);
             if (serving.isAlive()) {
@@ -431,16 +450,26 @@ public class ProcessPythonExecutionService implements PythonExecutionService {
         if (root == null) {
             return;
         }
+        List<Path> undeleted = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(root)) {
             paths.sorted(Comparator.reverseOrder()).forEach(path -> {
                 try {
                     Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                    // A file the program left locked; the temp directory is not precious.
+                } catch (IOException e) {
+                    undeleted.add(path);
                 }
             });
-        } catch (IOException ignored) {
-            // The directory was already gone.
+        } catch (IOException | UncheckedIOException e) {
+            // The directory was already gone, or the JVM cannot walk into it — a slot-owned
+            // directory the shared group does not reach. Say so: a silent leak is exactly what
+            // this method exists to prevent.
+            log.warn("execute-code: could not walk {} for deletion: {}", root, e.getMessage());
+            return;
+        }
+        if (!undeleted.isEmpty()) {
+            log.warn("execute-code: {} path(s) under {} could not be deleted and will leak: {}",
+                    undeleted.size(), root,
+                    undeleted.size() <= 5 ? undeleted : undeleted.subList(0, 5));
         }
     }
 }

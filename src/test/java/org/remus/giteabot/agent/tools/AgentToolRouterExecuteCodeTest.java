@@ -188,7 +188,35 @@ class AgentToolRouterExecuteCodeTest {
                         context(Files.createTempDirectory("router-noarg")));
 
         assertThat(result.success()).isFalse();
-        assertThat(result.error()).contains("needs the Python program as its first argument");
+        assertThat(result.error()).contains("\"code\"");
+    }
+
+    /**
+     * A model call that names the wrong property ({@code program} instead of {@code code}) must be
+     * refused, not run. The mapping leaves no argument for a declared tool whose shape it does not
+     * recognise — the raw object used to fall through and evaluate as a silent, successful no-op.
+     */
+    @Test
+    void aCallThatNamesTheWrongPropertyIsRefusedInsteadOfRun() throws IOException {
+        ToolCatalog catalog = new ToolCatalog(CONFIG);
+        ToolCallContext context = new ToolCallContext("owner", "repo", 1L,
+                Files.createTempDirectory("router-wrong-arg"),
+                ImplementationPlan.ToolRequest.builder()
+                        .id("tool-1")
+                        .tool("execute-code")
+                        .args(ToolArguments.toPositional("execute-code",
+                                node("{\"program\": \"print('should not run')\"}"),
+                                catalog.schemaOf("execute-code").orElse(null)))
+                        .build(),
+                null);
+
+        ToolResult result = router(mock(ToolExecutionService.class), botWithExecuteCode(),
+                optedInSandbox())
+                .execute(AgentToolRouter.Mode.CODING, context);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.output()).isEmpty();
+        assertThat(result.error()).contains("\"code\"");
     }
 
     @Test

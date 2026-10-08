@@ -299,7 +299,7 @@ public class ToolCatalog {
             // ---- agent-control tool (dispatched before the tool families) ----
             entry("execute-code", ToolKind.AGENT_CONTROL,
                     EnumSet.of(Role.CODING, Role.WRITER, Role.PR_WORKFLOW, Role.REVIEW),
-                    "Run a Python program that can call the read-only tools available in this run "
+                    "Run a Python program that can call the tools this run makes available to it "
                             + "and print one compact result. Reach for it when the answer takes "
                             + "more than one tool call, or a step between them: reading several "
                             + "files and comparing what they declare, searching the tree and "
@@ -315,9 +315,11 @@ public class ToolCatalog {
                             + "these tools are how you find the checkout: read repository files "
                             + "with tools.call(\"cat\", {\"path\": \"...\"}) or search them with "
                             + "tools.call(\"rg\", {\"args\": [\"pattern\"]}). "
-                            + "Writes, the branch switch and the build tools are not callable from "
-                            + "inside a program — call those directly, where the round accounting "
-                            + "sees them. print() hands the answer back.",
+                            + "The built-in writes, the branch switch and the build tools are not "
+                            + "callable from inside a program — call those directly, where the "
+                            + "round accounting sees them. Selected MCP tools are callable, and an "
+                            + "MCP tool may act outside the bot (open an issue, post a comment); "
+                            + "such a call is not counted as a round. print() hands the answer back.",
                     objectSchema(
                             prop("code", "string", "Python source to execute."),
                             required("code")))

@@ -176,7 +176,7 @@ public class AgentToolRouter {
         }
         if (!isCallableFromProgram(catalog.kindOf(tool), tool)) {
             return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program: "
-                    + "a program may only read repository state, so call this one directly");
+                    + "call this one directly, where the round accounting sees it");
         }
         ToolCallContext nested = new ToolCallContext(base.owner(), base.repo(), base.issueNumber(),
                 base.workspaceDir(),
@@ -191,14 +191,16 @@ public class AgentToolRouter {
     }
 
     /**
-     * Whether a program may call a tool: reads only.
+     * Whether a program may call a tool: repository reads, plus the selected MCP tools.
      *
-     * <p>Writes, the branch switch and the validation tools stay model calls, because the strategy
-     * classifies a round by the tools the model asked for ({@code CodingAgentStrategy} counts context
-     * rounds, implementation attempts and validation separately): a mutation carried out inside a
-     * program would be accounted as a read-only round, and a branch it moved would not be the branch
-     * the strategy recorded. The same predicate filters the surface the program is offered, so it is
-     * never advertised a tool it cannot use.</p>
+     * <p>The built-in writes, the branch switch and the validation tools stay model calls, because
+     * the strategy classifies a round by the tools the model asked for ({@code CodingAgentStrategy}
+     * counts context rounds, implementation attempts and validation separately): a mutation carried
+     * out inside a program would be accounted as a read-only round, and a branch it moved would not
+     * be the branch the strategy recorded. MCP is the exception that accounting cannot reach — an
+     * MCP server's tools are its own, and one is free to act outside the bot (open an issue, post a
+     * message), which no round counts. The same predicate filters the surface the program is
+     * offered, so it is never advertised a tool it cannot use.</p>
      */
     private static boolean isCallableFromProgram(ToolKind kind, String tool) {
         if (kind == ToolKind.CONTEXT) {
@@ -222,7 +224,8 @@ public class AgentToolRouter {
         List<String> args = context.args();
         if (args.isEmpty() || args.getFirst().isBlank()) {
             return new ToolResult(false, -1, "",
-                    "execute-code needs the Python program as its first argument");
+                    "execute-code needs the Python program in its \"code\" property, "
+                            + "e.g. {\"code\": \"print(1)\"}");
         }
         String program = args.getFirst();
         List<ToolDescriptor> surface = availableTools(mode).stream()

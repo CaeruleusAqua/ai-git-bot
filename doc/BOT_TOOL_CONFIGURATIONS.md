@@ -216,10 +216,17 @@ application-level code:
    (`open("/absolute/path")`, `$HOME`). Either way it reaches the network
    (`subprocess`, `os.system`, `curl`; the import guard blocks the names it knows,
    and a program that wants out does not use them).
-   Enabling it is therefore an operator's decision, made per bot — and what a
-   program may *call* is the read-only tool surface only, never a write, the
-   branch switch or a build. Network isolation, on top of the uid separation, is
-   what would make a different default defensible.
+   Enabling it is therefore an operator's decision, made per bot. What a program
+   may *call* is the tools the run offers it: repository reads plus the bot's
+   selected MCP tools, never a built-in write, the branch switch or a build. An
+   MCP tool is free to act outside the bot (open an issue, post a comment), and
+   such a call is not counted as a round — MCP is a mutable surface the read-only
+   round accounting cannot see. `execute-code` is offered on every agentic
+   PR-workflow run (readme-sync, i18n-coverage, unit-test-author, e2e) together
+   with the read-only catalogue tools, while the coding, writer and agentic-review
+   runs offer it only once the bot selects it in its tool configuration; the
+   deployment still decides whether a sandbox exists at all. Network isolation, on
+   top of the uid separation, is what would make a different default defensible.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

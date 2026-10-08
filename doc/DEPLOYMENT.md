@@ -343,6 +343,14 @@ A pool that is missing or unusable — no sudo, a slot sudo will not switch to �
 makes `execute-code` fail closed rather than running the program as `appuser`; set
 `AGENT_CODE_EXECUTION_SANDBOX_SLOTS=` to opt out explicitly instead.
 
+A deployment that hardens its container with `security_opt: no-new-privileges`
+stops `execute-code` from working at all: the entire switch is `sudo`, which is a
+`setuid` root binary, and `no-new-privileges` makes the kernel refuse to grant it
+that privilege, so the invocation fails. The failure is fail-closed — the run
+reports a sandbox failure and no program runs — so either drop that flag or leave
+`execute-code` unselected on such a deployment. The shipped `docker-compose.yml`
+does not set it.
+
 A run outside the image — a local `mvn spring-boot:run`, say — provisions the same
 thing with the image's own script:
 

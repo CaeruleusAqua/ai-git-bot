@@ -1,8 +1,9 @@
 """Applied before a user program: resource limits, the import guard, sys.path confinement.
 
 Layer 1 of the sandbox, and defence-in-depth only: it confines neither the filesystem nor the
-network. The boundary is the container the program shares with the JVM (sandbox-approach.md /
-the execute-code plan, ADR-1). Where the deployment names a sandbox pool — the shipped image
+network. The boundary is the container the program shares with the JVM
+(``doc/development-archive/sandbox-approach.md`` / ``sandbox-approach.md`` ADR-1). Where the
+deployment names a sandbox pool — the shipped image
 does — the interpreter was switched into an identity of its own before this module loaded, so the
 program reads neither the service user's files (``open("/absolute/path")``, ``$HOME``) nor the
 JVM's start-time environment (``/proc/<jvm-pid>/environ``, which the kernel grants to same-uid

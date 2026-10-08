@@ -69,24 +69,25 @@ class TestAuthorAgentTest {
                                "title", "Cart")))
                 .withTextTurn("Wrote 2 tests.");
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, plan,null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, plan,null);
 
         assertThat(result.filesWritten()).isEqualTo(2);
         assertThat(result.budgetExhausted()).isFalse();
         assertThat(result.finalAssistantText()).contains("Wrote 2 tests.");
         verify(toolExecutor, times(2)).execute(eq("pr-test-write"), anyMap(), any());
 
-        // The author must advertise *only* pr-test-write to the model.
-        assertThat(ai.invocations().get(0).tools())
+        // The author advertises its write tool plus the read-only catalogue tools the run offers
+        // (the WRITER-role names need a router, so with none wired only execute-code joins it).
+        assertThat(ai.invocations().getFirst().tools())
                 .extracting(ToolDescriptor::name)
-                .containsExactly("pr-test-write");
+                .containsExactly("pr-test-write", "execute-code");
     }
 
     @Test
     void shortCircuitsOnEmptyPlan() {
         StubAiClient ai = new StubAiClient(true);
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, new TestPlan("playwright", List.of(), 1),null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, new TestPlan("playwright", List.of(), 1),null);
 
         assertThat(result.filesWritten()).isZero();
         assertThat(result.budgetExhausted()).isFalse();
@@ -108,7 +109,7 @@ class TestAuthorAgentTest {
                         Map.of("path", "../escape.spec.ts", "content", "x")))
                 .withTextTurn("Done");
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, plan,null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, plan,null);
 
         assertThat(result.filesWritten()).isZero();
     }
@@ -128,12 +129,17 @@ class TestAuthorAgentTest {
         when(toolExecutor.execute(eq("pr-test-write"), anyMap(), any()))
                 .thenReturn("OK: wrote 50 bytes to tests/login.spec.ts (PrTestCase id=1)");
 
-        String narratedJson = "```json\n{\n  \"name\": \"pr-test-write\",\n"
-                + "  \"parameters\": { \"path\": \"tests/login.spec.ts\","
-                + " \"content\": \"// login\" }\n}\n```";
+        String narratedJson = """
+                ```json
+                {
+                  "name": "pr-test-write",
+                  "parameters": { "path": "tests/login.spec.ts",\
+                 "content": "// login" }
+                }
+                ```""";
         StubAiClient ai = new StubAiClient(true).withTextTurn(narratedJson);
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, plan,null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, plan,null);
 
         assertThat(result.filesWritten()).isOne();
         assertThat(result.budgetExhausted()).isFalse();
@@ -180,7 +186,7 @@ class TestAuthorAgentTest {
                 """;
         StubAiClient ai = new StubAiClient(true).withTextTurn(narratedXml);
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, plan, null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, plan, null);
 
         assertThat(result.filesWritten()).isEqualTo(2);
         assertThat(ai.invocations()).hasSize(1);
@@ -246,7 +252,7 @@ class TestAuthorAgentTest {
                 .withTextTurn(envelope)
                 .withTextTurn("DONE");
 
-        TestAuthorAgent.Result result = agent.write(ai, ctx, plan, null);
+        TestAuthorAgent.Result result = agent.write(ai, null, ctx, plan, null);
 
         assertThat(result.filesWritten()).isEqualTo(2);
         assertThat(result.budgetExhausted()).isFalse();
@@ -257,7 +263,7 @@ class TestAuthorAgentTest {
 
         // Positional args must have been zipped back to named params using the
         // pr-test-write schema (path, content, title — required first).
-        Map<String, Object> first = captor.getAllValues().get(0);
+        Map<String, Object> first = captor.getAllValues().getFirst();
         assertThat(first).containsEntry("path",  "tests/login.spec.ts");
         assertThat(first).containsEntry("title", "Login");
         assertThat((String) first.get("content")).contains("@playwright/test");

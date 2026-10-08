@@ -6,6 +6,7 @@ import org.remus.giteabot.agent.shared.SystemPromptAssembler;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.e2e.E2eTestFramework;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolContext;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolExecutor;
@@ -33,6 +34,17 @@ public class TestAuthorAgent {
     public static final int BASELINE_ROUNDS = 4;
     public static final int DEFAULT_MAX_TOKENS = 6_144;
 
+    /** The tools this workflow's own executor handles — and only these. */
+    public static final Set<String> WORKFLOW_TOOLS = Set.of("pr-test-write");
+
+    /**
+     * Everything the run offers: the workflow's own tools plus the read-only catalogue tools and
+     * {@code execute-code} (see {@link WorkflowToolSurface}). The runner dispatches the workflow's
+     * own names to this executor and every other name to the catalogue router.
+     */
+    private static final Set<String> ALLOWED_TOOLS =
+            WorkflowToolSurface.withReadOnlyCatalogueTools(WORKFLOW_TOOLS);
+
     private final ToolCatalog toolCatalog;
     private final PrWorkflowToolExecutor toolExecutor;
     private final SystemPromptAssembler promptAssembler;
@@ -45,6 +57,7 @@ public class TestAuthorAgent {
     }
 
     public Result write(AiClient aiClient,
+                        WorkflowToolSurface surface,
                         PrWorkflowToolContext toolContext,
                         TestPlan plan,
                         SystemPrompt systemPrompt) {
@@ -54,9 +67,10 @@ public class TestAuthorAgent {
         if (plan == null || plan.isEmpty()) {
             return new Result(0, "No journeys in the plan", false);
         }
-        Set<String> allowed = Set.of("pr-test-write");
-        List<ToolDescriptor> descriptors = toolCatalog.nativeDescriptors(
-                ToolCatalog.Role.PR_WORKFLOW, null, allowed);
+        List<ToolDescriptor> descriptors = surface != null
+                ? surface.advertised()
+                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
+        Set<String> allowed = surface != null ? surface.callable() : ALLOWED_TOOLS;
 
         // Build the system prompt the same way the issue / writer agents do:
         // role description (from E2ePromptLibrary or the operator-edited
@@ -68,12 +82,12 @@ public class TestAuthorAgent {
                 aiClient.supportsNativeTools(), !descriptors.isEmpty());
         String systemPromptText = promptAssembler.assemble(
                 E2ePromptLibrary.authorSystemPromptOrDefault(systemPrompt, toolContext.framework()),
-                toolCatalog, allowed, null, mode,
+                toolCatalog, allowed, surface == null ? null : surface.mcpCatalog(), mode,
                 SystemPromptAssembler.PromptKind.E2E_TEST_AUTHOR);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, plan.journeys().size() + 2);
         E2eAgentRunner runner = new E2eAgentRunner(
-                aiClient, toolExecutor, toolContext, descriptors,
+                aiClient, toolExecutor, toolContext, surface, descriptors,
                 systemPromptText,
                 maxRounds, DEFAULT_MAX_TOKENS, 120_000, "test-author");
 

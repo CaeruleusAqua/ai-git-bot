@@ -9,6 +9,8 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowCancelledException;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -56,6 +58,8 @@ public class I18nCoverageService {
     private final SystemPrompt systemPrompt;
     private final WorkspaceService workspaceService;
     private final I18nCoverageAgent agent;
+    /** Builds the run's tool surface (own tools + the bot's selected read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     /** Inputs resolved from the workflow params by {@link I18nCoverageWorkflow}. */
     public record Request(PrWorkflowContext context,
@@ -151,10 +155,12 @@ public class I18nCoverageService {
                     new I18nCoverageToolContext(workspace, request.includePatterns());
             String diff = repositoryClient.getPullRequestDiff(owner, repo, prNumber);
             String kickoff = buildKickoffMessage(workspace, request, prTitle, prBody, diff, report);
+            WorkflowToolSurface surface = surfaceFactory.create(request.context().bot(), repositoryClient,
+                    I18nCoverageAgent.WORKFLOW_TOOLS, owner, repo, prNumber, workspace);
 
             context.requireActive("before running i18n-coverage agent");
             I18nCoverageAgent.Result authored = agent.generate(
-                    aiClient, toolContext, kickoff, systemPrompt,
+                    aiClient, surface, toolContext, kickoff, systemPrompt,
                     request.includePatterns(), request.baselineLocale(), request.maxToolRounds());
 
             if (!toolContext.touchedAnything()) {

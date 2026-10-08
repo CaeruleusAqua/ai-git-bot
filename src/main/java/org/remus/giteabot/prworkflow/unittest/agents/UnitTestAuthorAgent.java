@@ -6,6 +6,7 @@ import org.remus.giteabot.agent.shared.SystemPromptAssembler;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.e2e.agents.NarratedToolCallParser;
 import org.remus.giteabot.prworkflow.unittest.tools.UnitTestToolContext;
 import org.remus.giteabot.prworkflow.unittest.tools.UnitTestToolExecutor;
@@ -32,7 +33,16 @@ public class UnitTestAuthorAgent {
     public static final int BASELINE_ROUNDS = 6;
     public static final int DEFAULT_MAX_TOKENS = 8_192;
 
-    private static final Set<String> ALLOWED_TOOLS = Set.of("unit-test-write");
+    /** The tools this workflow's own executor handles — and only these. */
+    public static final Set<String> WORKFLOW_TOOLS = Set.of("unit-test-write");
+
+    /**
+     * Everything the run offers: the workflow's own tools plus the read-only catalogue tools and
+     * {@code execute-code} (see {@link WorkflowToolSurface}). The runner dispatches the workflow's
+     * own names to this executor and every other name to the catalogue router.
+     */
+    private static final Set<String> ALLOWED_TOOLS =
+            WorkflowToolSurface.withReadOnlyCatalogueTools(WORKFLOW_TOOLS);
 
     private final ToolCatalog toolCatalog;
     private final UnitTestToolExecutor toolExecutor;
@@ -59,12 +69,15 @@ public class UnitTestAuthorAgent {
      * Runs the author agent.
      *
      * @param aiClient     the resolved AI client for the bot
+     * @param surface      the run's tool surface (own tools + read-only catalogue tools); a
+     *                     {@code null} surface falls back to the workflow's own tools alone
      * @param toolContext  suite + checkout + framework binding for the writer tool
      * @param userMessage  the kickoff message (PR metadata + diff + changed files)
      * @param systemPrompt operator-edited prompts (may be {@code null} → defaults)
      * @param maxTestCases hard upper bound on the number of files to generate
      */
     public Result write(AiClient aiClient,
+                        WorkflowToolSurface surface,
                         UnitTestToolContext toolContext,
                         String userMessage,
                         SystemPrompt systemPrompt,
@@ -72,19 +85,21 @@ public class UnitTestAuthorAgent {
         if (aiClient == null) {
             return new Result(0, "AI client unavailable", true);
         }
-        List<ToolDescriptor> descriptors = toolCatalog.nativeDescriptors(
-                ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
+        List<ToolDescriptor> descriptors = surface != null
+                ? surface.advertised()
+                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
+        Set<String> callable = surface != null ? surface.callable() : ALLOWED_TOOLS;
 
         ToolingMode mode = ToolingMode.resolve(ToolingMode.NATIVE,
                 aiClient.supportsNativeTools(), !descriptors.isEmpty());
         String systemPromptText = promptAssembler.assemble(
                 UnitTestPromptLibrary.authorSystemPromptOrDefault(systemPrompt, toolContext.framework()),
-                toolCatalog, ALLOWED_TOOLS, null, mode,
+                toolCatalog, callable, surface == null ? null : surface.mcpCatalog(), mode,
                 SystemPromptAssembler.PromptKind.UNIT_TEST_AUTHOR_AGENT);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, Math.min(maxTestCases, 12) + 2);
         UnitTestAgentRunner runner = new UnitTestAgentRunner(
-                aiClient, toolExecutor, toolContext, descriptors,
+                aiClient, toolExecutor, toolContext, surface, descriptors,
                 systemPromptText, maxRounds, DEFAULT_MAX_TOKENS, "unit-test-author");
 
         UnitTestAgentRunner.Result raw = runner.run(userMessage);

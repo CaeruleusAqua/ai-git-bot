@@ -66,6 +66,9 @@ final class SandboxSlots {
     /** How long one slot-clearing command may take. A kill that has not run in ten seconds will not. */
     private static final long STOP_TIMEOUT_SECONDS = 10;
 
+    /** How long clearing a finished run's workspace may take. A tree that size deletes in a moment. */
+    private static final long DELETE_TIMEOUT_SECONDS = 10;
+
     private final String slotsFile;
     private final String sudo;
     private final Duration wait;
@@ -127,6 +130,47 @@ final class SandboxSlots {
         if (!result.finished() || result.exitCode() != 0) {
             log.warn("execute-code: could not stop sandbox slot {}: {}", slot.name(),
                     result.output().trim());
+        }
+    }
+
+    /**
+     * Removes everything inside a finished execution's workspace, as the slot it ran as.
+     *
+     * <p>The program's own temp files and any directories it created belong to the slot, and the
+     * JVM — which owns the workspace but only holds the slot's group — cannot traverse a directory
+     * the program made 0700, let alone delete inside it, so a plain {@code Files.walk} leaves the
+     * tree behind. Deleting the contents as the slot sidesteps the permission question entirely;
+     * the now-empty directory the JVM created is then removed by the caller. Best effort, like
+     * {@link #stop}: a failure is logged and the caller's own sweep reports whatever remains.</p>
+     *
+     * <p>{@code find … -delete} rather than a shell {@code rm -rf}: the workspace path is
+     * JVM-generated, but a shell would still be a second interpreter on the privileged path, and
+     * the slot may run nothing else.</p>
+     */
+    void delete(Slot slot, Path workspace) {
+        if (workspace == null) {
+            return;
+        }
+        List<String> argv = new ArrayList<>(List.of(sudo, "-n", "-u", slot.name(), "--",
+                "find", workspace.toString(), "-mindepth", "1", "-delete"));
+        ProcessBuilder processBuilder = new ProcessBuilder(argv);
+        processBuilder.redirectErrorStream(true);
+        ProcessSupport.scrubEnvironment(processBuilder);
+        ProcessSupport.CommandResult result;
+        try {
+            result = ProcessSupport.run(processBuilder, DELETE_TIMEOUT_SECONDS, TimeUnit.SECONDS,
+                    LOAD_OUTPUT_BYTES);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        } catch (IOException e) {
+            log.warn("execute-code: could not clear workspace {} as sandbox slot {}: {}",
+                    workspace, slot.name(), e.getMessage());
+            return;
+        }
+        if (!result.finished() || result.exitCode() != 0) {
+            log.warn("execute-code: could not clear workspace {} as sandbox slot {}: {}",
+                    workspace, slot.name(), result.output().trim());
         }
     }
 

@@ -20,6 +20,13 @@ import java.util.List;
  * whole argument object as a single string, and for {@code execute-code} that string is valid
  * Python — a dict literal. The program ran, printed nothing and exited 0, so the empty result
  * looked like a program that had chosen to say nothing.</p>
+ *
+ * <p>A hole is a {@code ""} in the vector, and an executor that reads a position must treat a blank
+ * as "not sent". Audited: {@code cat} is the only positional executor with a skipped <em>middle</em>
+ * optional property ({@code path, startLine, endLine}) and it does; every other positional schema
+ * either has all-required properties or its optionals last, and a trailing hole is dropped (nothing
+ * follows it that it could shift). A new tool that reads position {@code n} of a schema carrying an
+ * optional property before {@code n} must handle the blank the same way.</p>
  */
 @Slf4j
 public final class ToolArguments {
@@ -83,13 +90,15 @@ public final class ToolArguments {
                 }
             }
         }
-        // Safety net: the object carried fields but none matched a declared property, so this is a
-        // tool or a schema the catalog does not know. Pass the raw JSON so the call still carries
-        // data, and say so, because the alternative is an executor that reads an argument nobody
-        // sent.
-        if (args.isEmpty() && !root.isEmpty()) {
-            log.warn("Tool '{}' called with fields {} that its schema does not declare — passing "
-                            + "raw JSON. Check the tool's schema in ToolCatalog.",
+        // Safety net, for tools the catalog declares no schema for (validation tools, unknown
+        // names): without a schema there is no property to map, so the raw object is all there is
+        // to pass. A tool whose schema IS known must not reach here — no declared property matched,
+        // so the call does not carry what its executor reads, and passing the raw object would hand
+        // it a value nobody sent. For execute-code that object is a valid Python dict literal: it
+        // evaluates, prints nothing and exits 0, so the empty result looked deliberate.
+        if (args.isEmpty() && !root.isEmpty() && schema == null) {
+            log.warn("Tool '{}' called with fields {} but the catalog declares no schema for it — "
+                            + "passing raw JSON. Check the tool's schema in ToolCatalog.",
                     toolName, new ArrayList<>(root.propertyNames()));
             args.add(root.toString());
         }
