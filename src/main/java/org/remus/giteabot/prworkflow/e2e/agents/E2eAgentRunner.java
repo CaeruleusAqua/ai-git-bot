@@ -12,6 +12,7 @@ import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolContext;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolExecutor;
 import org.springframework.web.client.HttpClientErrorException;
@@ -47,6 +48,11 @@ public final class E2eAgentRunner {
     private final AiClient aiClient;
     private final PrWorkflowToolExecutor toolExecutor;
     private final PrWorkflowToolContext toolContext;
+    /**
+     * The run's tool surface: the workflow's own tools plus the read-only catalogue tools. A
+     * {@code null} surface (tests that build the runner directly) means own-tools-only, as before.
+     */
+    private final WorkflowToolSurface surface;
     private final List<ToolDescriptor> toolDescriptors;
     private final String systemPrompt;
     private final int maxRounds;
@@ -69,6 +75,7 @@ public final class E2eAgentRunner {
     public E2eAgentRunner(AiClient aiClient,
                           PrWorkflowToolExecutor toolExecutor,
                           PrWorkflowToolContext toolContext,
+                          WorkflowToolSurface surface,
                           List<ToolDescriptor> toolDescriptors,
                           String systemPrompt,
                           int maxRounds,
@@ -78,6 +85,7 @@ public final class E2eAgentRunner {
         this.aiClient = aiClient;
         this.toolExecutor = toolExecutor;
         this.toolContext = toolContext;
+        this.surface = surface;
         this.toolDescriptors = toolDescriptors == null ? List.of() : List.copyOf(toolDescriptors);
         this.systemPrompt = systemPrompt;
         this.maxRounds = maxRounds;
@@ -219,7 +227,9 @@ public final class E2eAgentRunner {
                 StringBuilder feedback = new StringBuilder("## Tool Execution Results\n\n");
                 for (ImplementationPlan.ToolRequest req : requests) {
                     Map<String, Object> args = positionalToNamedArgs(req.getTool(), req.getArgs());
-                    String result = toolExecutor.execute(req.getTool(), args, toolContext);
+                    String result = surface != null && !surface.handles(req.getTool())
+                            ? surface.executeRouted(req.getTool(), req.getArgs())
+                            : toolExecutor.execute(req.getTool(), args, toolContext);
                     invocations.add(new ToolInvocation(req.getTool(), args, result));
                     feedback.append("### `").append(req.getId() == null ? "?" : req.getId())
                             .append("` (").append(req.getTool()).append(")\n")
@@ -244,7 +254,9 @@ public final class E2eAgentRunner {
             // Dispatch every tool call to the executor and feed results back.
             for (ToolCall call : turn.toolCalls()) {
                 Map<String, Object> args = extractArgs(call.args());
-                String result = toolExecutor.execute(call.name(), args, toolContext);
+                String result = surface != null && !surface.handles(call.name())
+                        ? surface.executeRouted(call.name(), call.args())
+                        : toolExecutor.execute(call.name(), args, toolContext);
                 invocations.add(new ToolInvocation(call.name(), args, result));
                 history.add(AiMessage.builder()
                         .role("tool")

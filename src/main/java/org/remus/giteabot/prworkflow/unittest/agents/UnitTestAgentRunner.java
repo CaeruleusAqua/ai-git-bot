@@ -10,6 +10,7 @@ import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.unittest.tools.UnitTestToolContext;
 import org.remus.giteabot.prworkflow.unittest.tools.UnitTestToolExecutor;
 import tools.jackson.databind.JsonNode;
@@ -38,6 +39,11 @@ public final class UnitTestAgentRunner {
     private final AiClient aiClient;
     private final UnitTestToolExecutor toolExecutor;
     private final UnitTestToolContext toolContext;
+    /**
+     * The run's tool surface: the workflow's own tools plus the read-only catalogue tools. A
+     * {@code null} surface (tests that build the runner directly) means own-tools-only, as before.
+     */
+    private final WorkflowToolSurface surface;
     private final List<ToolDescriptor> toolDescriptors;
     private final String systemPrompt;
     private final int maxRounds;
@@ -49,6 +55,7 @@ public final class UnitTestAgentRunner {
     public UnitTestAgentRunner(AiClient aiClient,
                                UnitTestToolExecutor toolExecutor,
                                UnitTestToolContext toolContext,
+                               WorkflowToolSurface surface,
                                List<ToolDescriptor> toolDescriptors,
                                String systemPrompt,
                                int maxRounds,
@@ -57,6 +64,7 @@ public final class UnitTestAgentRunner {
         this.aiClient = aiClient;
         this.toolExecutor = toolExecutor;
         this.toolContext = toolContext;
+        this.surface = surface;
         this.toolDescriptors = toolDescriptors == null ? List.of() : List.copyOf(toolDescriptors);
         this.systemPrompt = systemPrompt;
         this.maxRounds = maxRounds;
@@ -137,7 +145,9 @@ public final class UnitTestAgentRunner {
                 StringBuilder feedback = new StringBuilder("## Tool Execution Results\n\n");
                 for (ImplementationPlan.ToolRequest req : requests) {
                     Map<String, Object> mapped = positionalToNamedArgs(req.getTool(), req.getArgs());
-                    String result = toolExecutor.execute(req.getTool(), mapped, toolContext);
+                    String result = surface != null && !surface.handles(req.getTool())
+                            ? surface.executeRouted(req.getTool(), req.getArgs())
+                            : toolExecutor.execute(req.getTool(), mapped, toolContext);
                     invocations.add(new ToolInvocation(req.getTool(), mapped, result));
                     feedback.append("### ").append(req.getTool()).append("\n")
                             .append(result == null ? "(no output)" : result).append("\n\n");
@@ -157,7 +167,9 @@ public final class UnitTestAgentRunner {
 
             for (ToolCall call : turn.toolCalls()) {
                 Map<String, Object> mapped = extractArgs(call.args());
-                String result = toolExecutor.execute(call.name(), mapped, toolContext);
+                String result = surface != null && !surface.handles(call.name())
+                        ? surface.executeRouted(call.name(), call.args())
+                        : toolExecutor.execute(call.name(), mapped, toolContext);
                 invocations.add(new ToolInvocation(call.name(), mapped, result));
                 history.add(AiMessage.builder()
                         .role("tool")

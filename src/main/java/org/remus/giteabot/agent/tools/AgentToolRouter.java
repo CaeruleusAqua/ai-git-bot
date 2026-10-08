@@ -1,14 +1,20 @@
 package org.remus.giteabot.agent.tools;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.agent.codeexecution.CodeExecutionScope;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionOutcome;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
+import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.McpConfiguration;
+import tools.jackson.databind.JsonNode;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,6 +51,11 @@ public class AgentToolRouter {
     private final RepositoryApiClient repositoryClient;
     /** Whitelist of built-in tool names; {@code null} disables enforcement (test paths only). */
     private final Set<String> allowedBuiltinTools;
+    /**
+     * The sandbox an {@code execute-code} call runs its program in. {@code null} means this
+     * deployment has none wired (test paths), and the tool says so instead of failing obscurely.
+     */
+    private final PythonExecutionService pythonExecution;
 
 
     public AgentToolRouter(ToolExecutionService toolExecutionService,
@@ -53,7 +64,8 @@ public class AgentToolRouter {
                            McpConfiguration mcpConfiguration,
                            McpToolCatalog mcpToolCatalog,
                            RepositoryApiClient repositoryClient,
-                           Set<String> allowedBuiltinTools) {
+                           Set<String> allowedBuiltinTools,
+                           PythonExecutionService pythonExecution) {
         this.toolExecutionService = toolExecutionService;
         this.catalog = catalog;
         this.mcpOrchestrationService = mcpOrchestrationService;
@@ -61,6 +73,7 @@ public class AgentToolRouter {
         this.mcpToolCatalog = mcpToolCatalog != null ? mcpToolCatalog : McpToolCatalog.empty();
         this.repositoryClient = repositoryClient;
         this.allowedBuiltinTools = allowedBuiltinTools;
+        this.pythonExecution = pythonExecution;
     }
 
     public boolean isMcpTool(String toolName) {
@@ -72,6 +85,18 @@ public class AgentToolRouter {
      * of the corresponding agent service for the given mode.
      */
     public ToolResult execute(Mode mode, ToolCallContext context) {
+        return execute(mode, context, null);
+    }
+
+    /**
+     * The one dispatch path. Both a direct model call and a program's nested call come through here,
+     * so the whitelist gates them alike — only the log line tells them apart.
+     *
+     * @param origin {@code null} when the model called the tool itself, otherwise the control tool the
+     *               call came from. Without it a program's reads are logged identically to the model's
+     *               own and a run cannot be reconstructed afterwards.
+     */
+    private ToolResult execute(Mode mode, ToolCallContext context, String origin) {
         String tool = context.tool();
         if (tool.isBlank()) {
             return new ToolResult(false, -1, "", "Empty tool name");
@@ -84,7 +109,16 @@ public class AgentToolRouter {
         if (denied != null) {
             return denied;
         }
+        if (origin == null) {
+            log.debug("Executing tool: {} {}", tool, String.join(" ", context.args()));
+        } else {
+            log.debug("Executing nested tool (from {}): {} {}", origin, tool,
+                    String.join(" ", context.args()));
+        }
         try {
+            if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
+                return executeAgentControl(mode, context);
+            }
             return switch (mode) {
                 case CODING -> executeCoding(context);
                 case WRITER -> executeWriter(context);
@@ -121,10 +155,111 @@ public class AgentToolRouter {
                         + "available list or ask the operator to enable it in the bot's tool configuration.");
     }
 
+    /** The tool surface this mode offers the model — exactly what a program may call. */
+    public List<ToolDescriptor> availableTools(Mode mode) {
+        return catalog.nativeDescriptors(role(mode), mcpToolCatalog, allowedBuiltinTools);
+    }
+
+    /**
+     * Runs one tool on behalf of a sandboxed program. Same dispatch as a direct call: the JSON
+     * arguments are flattened to the positional vector this surface's executors declare, and the
+     * result is the one the model itself would have been handed — a whitelist refusal included,
+     * which comes back in the executor's own words. {@code execute-code} is refused, so a program
+     * cannot nest sandboxes.
+     */
+    public ToolResult executeNested(Mode mode, ToolCallContext base, String tool, JsonNode arguments) {
+        if (tool == null || tool.isBlank()) {
+            return new ToolResult(false, -1, "", "Empty tool name");
+        }
+        if (catalog.kindOf(tool) == ToolKind.AGENT_CONTROL) {
+            return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program");
+        }
+        if (!isCallableFromProgram(catalog.kindOf(tool), tool)) {
+            return new ToolResult(false, -1, "", "Tool '" + tool + "' cannot be called from a program: "
+                    + "call this one directly, where the round accounting sees it");
+        }
+        ToolCallContext nested = new ToolCallContext(base.owner(), base.repo(), base.issueNumber(),
+                base.workspaceDir(),
+                ImplementationPlan.ToolRequest.builder()
+                        .id("execute-code-nested")
+                        .tool(tool)
+                        .args(ToolArguments.toPositional(tool, arguments,
+                                catalog.schemaOf(tool).orElse(null)))
+                        .build(),
+                base.diffSummary());
+        return execute(mode, nested, base.tool());
+    }
+
+    /**
+     * Whether a program may call a tool: repository reads, plus the selected MCP tools.
+     *
+     * <p>The built-in writes, the branch switch and the validation tools stay model calls, because
+     * the strategy classifies a round by the tools the model asked for ({@code CodingAgentStrategy}
+     * counts context rounds, implementation attempts and validation separately): a mutation carried
+     * out inside a program would be accounted as a read-only round, and a branch it moved would not
+     * be the branch the strategy recorded. MCP is the exception that accounting cannot reach — an
+     * MCP server's tools are its own, and one is free to act outside the bot (open an issue, post a
+     * message), which no round counts. The same predicate filters the surface the program is
+     * offered, so it is never advertised a tool it cannot use.</p>
+     */
+    private static boolean isCallableFromProgram(ToolKind kind, String tool) {
+        if (kind == ToolKind.CONTEXT) {
+            // CONTEXT, but it moves the checkout — the one read-only kind with a side effect.
+            return !"branch-switcher".equals(tool);
+        }
+        return kind == ToolKind.REPOSITORY || kind == ToolKind.MCP;
+    }
+
+    /**
+     * Runs the program. Logged at INFO, unlike the per-call DEBUG lines: this is the one tool that
+     * spawns a process and folds an arbitrary number of reads into a single round, so an operator has
+     * to be able to see that it happened and how it went without turning on DEBUG for the whole bot.
+     * The program text itself is never logged — it is written by the model and may embed repository
+     * content.
+     */
+    private ToolResult executeAgentControl(Mode mode, ToolCallContext context) {
+        if (pythonExecution == null) {
+            return new ToolResult(false, -1, "", "execute-code is not available in this deployment");
+        }
+        List<String> args = context.args();
+        if (args.isEmpty() || args.getFirst().isBlank()) {
+            return new ToolResult(false, -1, "",
+                    "execute-code needs the Python program in its \"code\" property, "
+                            + "e.g. {\"code\": \"print(1)\"}");
+        }
+        String program = args.getFirst();
+        List<ToolDescriptor> surface = availableTools(mode).stream()
+                .filter(tool -> isCallableFromProgram(catalog.kindOf(tool.name()), tool.name()))
+                .toList();
+        log.info("execute-code: running a {}-char program against {} available tool(s)",
+                program.length(), surface.size());
+        long started = System.nanoTime();
+        CodeExecutionScope scope = new CodeExecutionScope(surface,
+                (tool, arguments) -> executeNested(mode, context, tool, arguments));
+        PythonExecutionOutcome outcome = pythonExecution.execute(program, scope);
+        log.info("execute-code: finished in {} ms — success={}, exit={}, {} char(s) of output{}",
+                (System.nanoTime() - started) / 1_000_000, outcome.success(), outcome.exitCode(),
+                outcome.output() == null ? 0 : outcome.output().length(),
+                outcome.error() == null || outcome.error().isBlank() ? "" : ", error=" + outcome.error());
+        return new ToolResult(outcome.success(), outcome.exitCode(), outcome.output(), outcome.error());
+    }
+
+    /**
+     * The descriptor surface a mode is offered — the same role its dispatch gate uses. Review is a
+     * read-only surface ({@link ToolCatalog#reviewToolNames}), so advertising it the mutating coding
+     * surface it would refuse only makes the model ask for what it cannot have.
+     */
+    private static ToolCatalog.Role role(Mode mode) {
+        return switch (mode) {
+            case CODING -> ToolCatalog.Role.CODING;
+            case WRITER -> ToolCatalog.Role.WRITER;
+            case REVIEW -> ToolCatalog.Role.REVIEW;
+        };
+    }
+
     private ToolResult executeCoding(ToolCallContext ctx) {
         String tool = ctx.tool();
         List<String> args = ctx.args();
-        log.debug("Executing tool: {} {}", tool, String.join(" ", args));
         // Dispatch order: file > MCP > context > validation. Identical to the
         // historic in-line dispatch but driven by the central ToolCatalog
         // instead of stacking three boolean checks.
@@ -144,7 +279,6 @@ public class AgentToolRouter {
         String original = ctx.tool();
         String lower = original.strip().toLowerCase();
         List<String> args = ctx.args();
-        log.debug("Executing tool: {} {}", original, String.join(" ", args));
         switch (lower) {
             case "get-issue" -> {
                 Long issue = parseIssueNumber(args, ctx.issueNumber());

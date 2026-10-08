@@ -9,6 +9,8 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowCancelledException;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -57,6 +59,8 @@ public class ReadmeSyncService {
     private final SystemPrompt systemPrompt;
     private final WorkspaceService workspaceService;
     private final ReadmeSyncAgent agent;
+    /** Builds the run's tool surface (own tools + the bot's selected read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     /** Inputs resolved from the workflow params by {@link ReadmeSyncWorkflow}. */
     public record Request(PrWorkflowContext context,
@@ -140,11 +144,13 @@ public class ReadmeSyncService {
                             + ", lifecycle=" + request.lifecycleMode().key() + ")");
 
             ReadmeSyncToolContext toolContext = new ReadmeSyncToolContext(workspace, request.includePatterns());
+            WorkflowToolSurface surface = surfaceFactory.create(request.context().bot(), repositoryClient,
+                    ReadmeSyncAgent.WORKFLOW_TOOLS, owner, repo, prNumber, workspace);
             String kickoff = buildKickoffMessage(workspace, request, prTitle, prBody, diff);
 
             context.requireActive("before running readme-sync agent");
             ReadmeSyncAgent.Result authored = agent.write(
-                    aiClient, toolContext, kickoff, systemPrompt, request.maxToolRounds());
+                    aiClient, surface, toolContext, kickoff, systemPrompt, request.maxToolRounds());
 
             if (!toolContext.touchedAnything()) {
                 postReviewComment(owner, repo, prNumber, ReadmeSyncSummaryRenderer.renderCompletion(

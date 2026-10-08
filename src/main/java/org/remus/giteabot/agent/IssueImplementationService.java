@@ -112,7 +112,8 @@ public class IssueImplementationService {
         this.errorNotificationService = new AgentErrorNotificationService(this.repositoryClient);
         this.branchSwitcher = new BranchSwitcher(toolExecutionService);
         this.toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog, this.mcpOrchestrationService,
-                this.mcpConfiguration, this.mcpToolCatalog, this.repositoryClient, this.allowedBuiltinTools);
+                this.mcpConfiguration, this.mcpToolCatalog, this.repositoryClient,
+                this.allowedBuiltinTools, collaborators.pythonExecution());
         this.criticAgent = new CriticAgent(
                 agentConfig != null ? agentConfig.getCritic() : null,
                 agentConfig != null ? agentConfig.getBudget() : null,

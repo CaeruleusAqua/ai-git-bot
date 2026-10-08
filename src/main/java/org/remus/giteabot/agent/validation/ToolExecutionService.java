@@ -869,10 +869,12 @@ public class ToolExecutionService {
         int startLine = 1;
         int endLine = Integer.MAX_VALUE;
         try {
-            if (arguments.size() > 1) {
+            // A blank slot is a property the caller did not send: ToolArguments keeps the declared
+            // positions, so cat's {"path": "…", "endLine": 50} must not arrive as startLine=50.
+            if (arguments.size() > 1 && arguments.get(1) != null && !arguments.get(1).isBlank()) {
                 startLine = Integer.parseInt(arguments.get(1));
             }
-            if (arguments.size() > 2) {
+            if (arguments.size() > 2 && arguments.get(2) != null && !arguments.get(2).isBlank()) {
                 endLine = Integer.parseInt(arguments.get(2));
             }
         } catch (NumberFormatException e) {

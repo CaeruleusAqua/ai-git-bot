@@ -56,6 +56,7 @@ public class TestPlannerAgent {
                 aiClient,
                 toolExecutor,
                 /* toolContext = */ null,
+                /* surface = */ null,
                 /* toolDescriptors = */ List.of(),
                 E2ePromptLibrary.plannerSystemPromptOrDefault(systemPrompt, framework),
                 DEFAULT_MAX_ROUNDS,
