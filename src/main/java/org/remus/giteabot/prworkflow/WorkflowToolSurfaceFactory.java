@@ -15,14 +15,13 @@ import org.remus.giteabot.systemsettings.McpToolSelectionService;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Path;
-import java.util.LinkedHashSet;
 import java.util.Set;
 
 /**
  * Builds the {@link WorkflowToolSurface} a PR-workflow run offers, from the bot's own tool
  * configuration. Mirrors {@code AgentReviewServiceFactory}, which wires the same selection into the
- * agent-review surface: the bot's selected built-ins and its filtered MCP catalog, plus the
- * {@code execute-code} sandbox.
+ * agent-review surface: the bot's filtered MCP catalog plus the workflow's tools and the read-only
+ * catalogue tools — {@code execute-code} among them — that the bot selects.
  */
 @Component
 @RequiredArgsConstructor
@@ -36,8 +35,8 @@ public class WorkflowToolSurfaceFactory {
     private final PythonExecutionService pythonExecution;
 
     /**
-     * @param workflowTools the names the workflow's own executor handles — the read-only catalogue
-     *                      tools and {@code execute-code} are added here, so every run offers them
+     * @param workflowTools the names the workflow's own executor handles; the read-only catalogue
+     *                      tools and {@code execute-code} join only when the bot selects them
      */
     public WorkflowToolSurface create(Bot bot,
                                       RepositoryApiClient repositoryClient,
@@ -51,12 +50,11 @@ public class WorkflowToolSurfaceFactory {
         McpToolCatalog mcpCatalog = mcpToolSelectionService.filterCatalogForPrompt(mcpConfiguration,
                 mcpOrchestrationService.discoverTools(mcpConfiguration));
 
-        Set<String> callable = new LinkedHashSet<>(WorkflowToolSurface.withReadOnlyCatalogueTools(workflowTools));
-        callable.addAll(botTools);
+        Set<String> callable = WorkflowToolSurface.callableTools(workflowTools, botTools);
 
         AgentToolRouter router = new AgentToolRouter(toolExecutionService, toolCatalog,
                 mcpOrchestrationService, mcpConfiguration, mcpCatalog, repositoryClient,
-                Set.copyOf(callable), pythonExecution);
+                callable, pythonExecution);
 
         return new WorkflowToolSurface(workflowTools, toolCatalog, mcpCatalog, callable, router,
                 owner, repo, number, workspace);

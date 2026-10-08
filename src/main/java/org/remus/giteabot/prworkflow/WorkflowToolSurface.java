@@ -18,11 +18,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The tool surface one PR-workflow run offers its agent: the workflow's own tools, plus the
- * read-only catalogue tools — {@code execute-code} among them — that every workflow run makes
- * available, plus whatever the bot's own tool configuration selects.
+ * The tool surface one PR-workflow run offers its agent: the workflow's own tools, plus — of the
+ * read-only catalogue tools a workflow run adds, {@code execute-code} among them — only the ones
+ * the bot's own tool configuration selects. A workflow run therefore honours the selection exactly
+ * as the coding, writer and agent-review runs do: an operator who removed {@code rg} or never opted
+ * into {@code execute-code} does not get it back here.
  *
- * <p>Before this class a workflow's agent advertised only its own {@code ALLOWED_TOOLS} and handed
+ * <p>Before this class a workflow's agent advertised only its own workflow tools and handed
  * every returned name to its own executor, so no catalogue tool reached those runs at all — not the
  * repository reads, not {@code execute-code}. The tool carries
  * {@link ToolCatalog.Role#PR_WORKFLOW}, but nothing on that surface offered or dispatched it, so the
@@ -40,16 +42,16 @@ import java.util.Set;
 public final class WorkflowToolSurface {
 
     /**
-     * The read-only catalogue tools every workflow run offers. The WRITER-role context reads —
+     * The read-only catalogue tools a workflow run may add — the WRITER-role context reads,
      * excluding {@code branch-switcher}, which moves the checkout the workflow is about to commit
-     * to. Kept in one place so a workflow's {@code ALLOWED_TOOLS} and the advertised surface cannot
-     * drift apart.
+     * to. Kept in one place so {@link #callableTools} and the advertised surface cannot drift
+     * apart; each is still added only when the bot's own tool configuration selects it.
      */
     public static final Set<String> READ_ONLY_CATALOGUE_TOOLS = Set.of(
             "rg", "find", "cat", "tree", "git-log", "git-blame",
             "ctags-signatures", "ctags-deps", "pr-diff", "get-issue", "search-issues");
 
-    /** The one catalogue tool with a side effect — the program sandbox — offered on every run. */
+    /** The one catalogue tool with a side effect — the program sandbox — added only when selected. */
     public static final String PROGRAM_TOOL = "execute-code";
 
     private final Set<String> workflowTools;
@@ -83,11 +85,26 @@ public final class WorkflowToolSurface {
         this.workspace = workspace;
     }
 
-    /** A workflow's own tools together with the read-only catalogue tools every run offers. */
-    public static Set<String> withReadOnlyCatalogueTools(Set<String> workflowTools) {
+    /**
+     * The names a run may call: the workflow's own tools, plus the read-only catalogue tools and
+     * {@code execute-code} the bot's own tool configuration selects. Both extras are intersected
+     * with {@code botTools} rather than added unconditionally, so a run offers nothing the operator
+     * left out — an omitted {@code rg} or an unselected {@code execute-code} stays out of the
+     * advertised surface and off the router's whitelist alike. Nothing else from the bot's selection
+     * joins: {@code branch-switcher} would move the checkout the run is about to commit to, and the
+     * coding and validation tools have no writer-role dispatch.
+     */
+    public static Set<String> callableTools(Set<String> workflowTools, Set<String> botTools) {
+        Set<String> selected = botTools == null ? Set.of() : botTools;
         Set<String> out = new LinkedHashSet<>(workflowTools);
-        out.addAll(READ_ONLY_CATALOGUE_TOOLS);
-        out.add(PROGRAM_TOOL);
+        for (String tool : READ_ONLY_CATALOGUE_TOOLS) {
+            if (selected.contains(tool)) {
+                out.add(tool);
+            }
+        }
+        if (selected.contains(PROGRAM_TOOL)) {
+            out.add(PROGRAM_TOOL);
+        }
         return Set.copyOf(out);
     }
 

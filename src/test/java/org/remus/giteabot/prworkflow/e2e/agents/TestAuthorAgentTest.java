@@ -76,11 +76,11 @@ class TestAuthorAgentTest {
         assertThat(result.finalAssistantText()).contains("Wrote 2 tests.");
         verify(toolExecutor, times(2)).execute(eq("pr-test-write"), anyMap(), any());
 
-        // The author advertises its write tool plus the read-only catalogue tools the run offers
-        // (the WRITER-role names need a router, so with none wired only execute-code joins it).
+        // With no surface wired the author falls back to its own tools alone — no catalogue tool,
+        // execute-code included, joins it (the surface, not this agent, owns that selection).
         assertThat(ai.invocations().getFirst().tools())
                 .extracting(ToolDescriptor::name)
-                .containsExactly("pr-test-write", "execute-code");
+                .containsExactly("pr-test-write");
     }
 
     @Test

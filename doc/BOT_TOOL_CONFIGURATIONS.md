@@ -221,12 +221,14 @@ application-level code:
    selected MCP tools, never a built-in write, the branch switch or a build. An
    MCP tool is free to act outside the bot (open an issue, post a comment), and
    such a call is not counted as a round — MCP is a mutable surface the read-only
-   round accounting cannot see. `execute-code` is offered on every agentic
-   PR-workflow run (readme-sync, i18n-coverage, unit-test-author, e2e) together
-   with the read-only catalogue tools, while the coding, writer and agentic-review
-   runs offer it only once the bot selects it in its tool configuration; the
-   deployment still decides whether a sandbox exists at all. Network isolation, on
-   top of the uid separation, is what would make a different default defensible.
+   round accounting cannot see. `execute-code` and the read-only catalogue
+   tools reach a PR-workflow run (readme-sync, i18n-coverage, unit-test-author,
+   e2e) the same way they reach the coding, writer and agentic-review runs:
+   only once the bot selects them in its tool configuration — a workflow run
+   restores neither a `rg` an operator removed nor an `execute-code` it never
+   opted into. The deployment still decides whether a sandbox exists at all.
+   Network isolation, on top of the uid separation, is what would make a
+   different default defensible.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

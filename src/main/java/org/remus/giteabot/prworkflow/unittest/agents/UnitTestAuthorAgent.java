@@ -36,14 +36,6 @@ public class UnitTestAuthorAgent {
     /** The tools this workflow's own executor handles — and only these. */
     public static final Set<String> WORKFLOW_TOOLS = Set.of("unit-test-write");
 
-    /**
-     * Everything the run offers: the workflow's own tools plus the read-only catalogue tools and
-     * {@code execute-code} (see {@link WorkflowToolSurface}). The runner dispatches the workflow's
-     * own names to this executor and every other name to the catalogue router.
-     */
-    private static final Set<String> ALLOWED_TOOLS =
-            WorkflowToolSurface.withReadOnlyCatalogueTools(WORKFLOW_TOOLS);
-
     private final ToolCatalog toolCatalog;
     private final UnitTestToolExecutor toolExecutor;
     private final SystemPromptAssembler promptAssembler;
@@ -87,8 +79,8 @@ public class UnitTestAuthorAgent {
         }
         List<ToolDescriptor> descriptors = surface != null
                 ? surface.advertised()
-                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
-        Set<String> callable = surface != null ? surface.callable() : ALLOWED_TOOLS;
+                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, WORKFLOW_TOOLS);
+        Set<String> callable = surface != null ? surface.callable() : WORKFLOW_TOOLS;
 
         ToolingMode mode = ToolingMode.resolve(ToolingMode.NATIVE,
                 aiClient.supportsNativeTools(), !descriptors.isEmpty());

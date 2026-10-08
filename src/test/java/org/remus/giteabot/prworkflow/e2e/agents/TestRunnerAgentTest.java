@@ -46,7 +46,7 @@ class TestRunnerAgentTest {
     }
 
     @Test
-    void exposesTheRunnerToolsPlusTheProgramTool() {
+    void exposesTheWorkflowToolsAloneWhenNoSurfaceIsWired() {
         // A dummy plan triggers a single text turn; we only care about the
         // tool descriptor surface advertised to the model in this test.
         StubAiClient ai = new StubAiClient(true).withTextTurn("nothing to do");
@@ -56,11 +56,12 @@ class TestRunnerAgentTest {
         agent.execute(ai, null, ctx, plan, 0, null);
 
         assertThat(ai.invocations()).hasSize(1);
+        // No surface → the runner's own tools alone; the read-only catalogue tools and
+        // execute-code reach a run only through the surface, gated by the bot's selection.
         assertThat(ai.invocations().getFirst().tools())
                 .extracting(ToolDescriptor::name)
                 .containsExactlyInAnyOrder(
-                        "preview-url", "preview-status", "pr-test-run", "attach-artifact",
-                        "execute-code");
+                        "preview-url", "preview-status", "pr-test-run", "attach-artifact");
     }
 
     @Test
