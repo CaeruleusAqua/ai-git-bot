@@ -6,6 +6,7 @@ import org.remus.giteabot.agent.shared.SystemPromptAssembler;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.e2e.agents.NarratedToolCallParser;
 import org.remus.giteabot.systemsettings.SystemPrompt;
 import org.springframework.stereotype.Component;
@@ -32,7 +33,8 @@ public class I18nCoverageAgent {
     public static final int BASELINE_ROUNDS = 6;
     public static final int DEFAULT_MAX_TOKENS = 8_192;
 
-    private static final Set<String> ALLOWED_TOOLS = Set.of("i18n-write", "i18n-delete");
+    /** The tools this workflow's own executor handles — and only these. */
+    public static final Set<String> WORKFLOW_TOOLS = Set.of("i18n-write", "i18n-delete");
 
     private final ToolCatalog toolCatalog;
     private final I18nToolExecutor toolExecutor;
@@ -57,6 +59,8 @@ public class I18nCoverageAgent {
      * Runs the i18n-coverage agent.
      *
      * @param aiClient       the resolved AI client for the bot
+     * @param surface        the run's tool surface (own tools + read-only catalogue tools); a
+     *                       {@code null} surface falls back to the workflow's own tools alone
      * @param toolContext    checkout + include-patterns binding for the i18n tools
      * @param userMessage    the kickoff message (PR metadata + diff + coverage report)
      * @param systemPrompt   operator-edited prompts (may be {@code null} → built-in default)
@@ -65,6 +69,7 @@ public class I18nCoverageAgent {
      * @param maxToolRounds  operator-tunable cap on the number of explore/write rounds
      */
     public Result generate(AiClient aiClient,
+                           WorkflowToolSurface surface,
                            I18nCoverageToolContext toolContext,
                            String userMessage,
                            SystemPrompt systemPrompt,
@@ -74,19 +79,21 @@ public class I18nCoverageAgent {
         if (aiClient == null) {
             return new Result(0, "AI client unavailable", true);
         }
-        List<ToolDescriptor> descriptors = toolCatalog.nativeDescriptors(
-                ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
+        List<ToolDescriptor> descriptors = surface != null
+                ? surface.advertised()
+                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, WORKFLOW_TOOLS);
+        Set<String> callable = surface != null ? surface.callable() : WORKFLOW_TOOLS;
 
         ToolingMode mode = ToolingMode.resolve(ToolingMode.NATIVE,
                 aiClient.supportsNativeTools(), !descriptors.isEmpty());
         String systemPromptText = promptAssembler.assemble(
                 I18nCoveragePromptLibrary.systemPrompt(systemPrompt, includePatterns, baselineLocale),
-                toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                toolCatalog, callable, surface == null ? null : surface.mcpCatalog(), mode,
+                SystemPromptAssembler.PromptKind.I18N_COVERAGE_AGENT);
 
         int maxRounds = Math.max(BASELINE_ROUNDS, Math.min(maxToolRounds, 30) + 2);
         I18nCoverageAgentRunner runner = new I18nCoverageAgentRunner(
-                aiClient, toolExecutor, toolContext, descriptors,
+                aiClient, toolExecutor, toolContext, surface, descriptors,
                 systemPromptText, maxRounds, DEFAULT_MAX_TOKENS, "i18n-coverage");
 
         I18nCoverageAgentRunner.Result raw = runner.run(userMessage);
@@ -97,7 +104,7 @@ public class I18nCoverageAgent {
             int recovered = 0;
             for (NarratedToolCallParser.Call call : NarratedToolCallParser.parse(raw.lastAssistantText())) {
                 String name = call.name() == null ? "" : call.name().toLowerCase(Locale.ROOT);
-                if (!ALLOWED_TOOLS.contains(name)) {
+                if (!WORKFLOW_TOOLS.contains(name)) {
                     continue;
                 }
                 String result = toolExecutor.execute(name, call.args(), toolContext);

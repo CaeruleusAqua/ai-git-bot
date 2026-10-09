@@ -3,20 +3,29 @@ package org.remus.giteabot.agent.loop;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.agent.session.AgentSession;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.session.PendingMessage;
+import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
+import org.remus.giteabot.ai.ToolCall;
+import org.remus.giteabot.ai.ToolDescriptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotWritableException;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
 import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -157,6 +166,37 @@ class AgentLoopTest {
     }
 
     @Test
+    void run_publishesAgentLoopRoundDuringEachCall_andClearsItAfter() {
+        AgentLoop loop = new AgentLoop(aiClient, sessionService,
+                new AgentBudget(5, 3, 3, 8000,
+                        8_000, 120_000,
+                        200_000, 0.7));
+        java.util.List<Integer> roundsDuringCalls = new java.util.ArrayList<>();
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenAnswer(inv -> {
+                    roundsDuringCalls.add(AiAuditContext.getRound());
+                    return ChatTurn.text("ai-" + roundsDuringCalls.size());
+                });
+
+        AtomicInteger calls = new AtomicInteger();
+        AgentStrategy strategy = new AgentStrategy() {
+            @Override public String systemPrompt() { return "sys"; }
+            @Override public StepDecision step(AgentRunContext c, String r, int round) {
+                if (calls.incrementAndGet() == 1) return new StepDecision.Continue("follow-up");
+                return new StepDecision.Finish(LoopOutcome.success(c.baseBranch(), null));
+            }
+            @Override public LoopOutcome onBudgetExhausted(AgentRunContext c) { return LoopOutcome.fail(c.baseBranch()); }
+        };
+
+        loop.run(ctx, "kickoff", strategy);
+
+        // The audit recorder reads the round from the thread-local while the call is
+        // in flight; it must be gone once the loop stops calling the provider.
+        assertThat(roundsDuringCalls).containsExactly(1, 2);
+        assertThat(AiAuditContext.getRound()).isNull();
+    }
+
+    @Test
     void run_budgetExhausted_invokesStrategyHook_returnsItsOutcome() {
         AgentLoop loop = new AgentLoop(aiClient, sessionService,
                 new AgentBudget(2, 3, 3, 8000,
@@ -213,6 +253,85 @@ class AgentLoopTest {
 
         assertThatThrownBy(() -> loop.run(ctx, "go", finishingStrategy()))
                 .isSameAs(serializationFailure);
+        verify(aiClient).chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "temporary failure", "maximum context length"})
+    void run_http408_retriesOnceWithExistingHistory(String body) {
+        List<AiMessage> history = List.of(
+                AiMessage.builder().role("user").content("earlier question").build(),
+                AiMessage.builder().role("assistant").content("earlier answer").build(),
+                AiMessage.builder().role("user").content("inspect the change").build(),
+                AiMessage.builder().role("assistant")
+                        .toolCalls(List.of(new ToolCall("read_1", "cat", null))).build(),
+                AiMessage.builder().role("tool").toolCallId("read_1")
+                        .toolResult("existing file contents").build());
+        when(sessionService.toAiMessages(ctx.session())).thenReturn(history);
+        when(aiClient.supportsNativeTools()).thenReturn(true);
+        lenient().when(aiClient.isPromptTooLongError(any())).thenCallRealMethod();
+        HttpClientErrorException failure = new HttpClientErrorException(HttpStatus.REQUEST_TIMEOUT,
+                "Request Timeout", body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+        List<List<AiMessage>> attempts = new ArrayList<>();
+        when(aiClient.chatWithTools(anyList(), eq("go"), anyList(), eq("sys"), isNull(), eq(8000)))
+                .thenAnswer(invocation -> {
+                    attempts.add(List.copyOf(invocation.getArgument(0)));
+                    if (attempts.size() == 1) throw failure;
+                    return ChatTurn.text("ai-final");
+                });
+        AgentLoop loop = new AgentLoop(aiClient, sessionService,
+                // A prompt-length misclassification would compact this history.
+                new AgentBudget(1, 3, 3, 8000, 8_000, 32, 200_000, 0.7));
+
+        LoopOutcome outcome = loop.run(ctx, "go", new AgentStrategy() {
+            @Override public String systemPrompt() { return "sys"; }
+            @Override public ToolingMode preferredToolMode() { return ToolingMode.NATIVE; }
+            @Override public List<ToolDescriptor> toolDescriptors() {
+                return List.of(new ToolDescriptor("cat", "read", null));
+            }
+            @Override public StepDecision step(AgentRunContext c, String r, int round) {
+                assertThat(round).isEqualTo(1);
+                return new StepDecision.Finish(LoopOutcome.success(c.baseBranch(), r));
+            }
+            @Override public LoopOutcome onBudgetExhausted(AgentRunContext c) {
+                throw new AssertionError("retry must not consume another round");
+            }
+        });
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(outcome.payload()).isEqualTo("ai-final");
+        assertThat(attempts).containsExactly(history, history);
+        verify(sessionService).flushMessages(any(), eq(List.of(
+                new PendingMessage("user", "go"), new PendingMessage("assistant", "ai-final"))),
+                anyLong(), anyLong());
+    }
+
+    @Test
+    void run_http408FailsAgain_surfacesFailureAfterOneRetry() {
+        AgentLoop loop = new AgentLoop(aiClient, sessionService,
+                new AgentBudget(5, 3, 3, 8000, 8_000, 120_000, 200_000, 0.7));
+        HttpClientErrorException failure = new HttpClientErrorException(HttpStatus.REQUEST_TIMEOUT);
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenThrow(failure);
+
+        assertThatThrownBy(() -> loop.run(ctx, "go", finishingStrategy())).isSameAs(failure);
+
+        verify(aiClient, times(2)).chatWithTools(anyList(), eq("go"), eq(List.of()), eq("sys"), isNull(), eq(8000));
+        verify(sessionService, never()).flushMessages(any(), anyList(), anyLong(), anyLong());
+        assertThat(AiAuditContext.getRound()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {400, 401, 429})
+    void run_otherHttpErrors_doesNotRetry(int status) {
+        AgentLoop loop = new AgentLoop(aiClient, sessionService,
+                new AgentBudget(5, 3, 3, 8000, 8_000, 120_000, 200_000, 0.7));
+        HttpClientErrorException failure = new HttpClientErrorException(HttpStatus.valueOf(status));
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenThrow(failure);
+
+        assertThatThrownBy(() -> loop.run(ctx, "go", finishingStrategy())).isSameAs(failure);
+
         verify(aiClient).chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt());
     }
 

@@ -6,6 +6,7 @@ import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GiteaClientFactory;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,7 @@ public class ReadmeSyncServiceFactory {
     private final GiteaClientFactory giteaClientFactory;
     private final WorkspaceService workspaceService;
     private final ReadmeSyncAgent agent;
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     public ReadmeSyncService create(Bot bot) {
         if (bot.getSystemPrompt() == null) {
@@ -30,6 +32,6 @@ public class ReadmeSyncServiceFactory {
         AiClient aiClient = aiClientFactory.getClient(bot.getAiIntegration());
         RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
         return new ReadmeSyncService(repoClient, aiClient, bot.getSystemPrompt(),
-                workspaceService, agent);
+                workspaceService, agent, surfaceFactory);
     }
 }
