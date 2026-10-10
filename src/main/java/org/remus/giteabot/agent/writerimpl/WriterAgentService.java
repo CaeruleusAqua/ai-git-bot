@@ -2,6 +2,7 @@ package org.remus.giteabot.agent.writerimpl;
 
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.AgentErrorNotificationService;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.loop.AgentBudget;
 import org.remus.giteabot.agent.loop.AgentLoop;
 import org.remus.giteabot.agent.loop.AgentRunContext;
@@ -77,7 +78,8 @@ public class WriterAgentService {
                               McpConfiguration mcpConfiguration,
                               McpToolCatalog mcpToolCatalog,
                               java.util.Set<String> allowedBuiltinTools,
-                              int contextWindowTokens) {
+                              int contextWindowTokens,
+                              PythonExecutionService pythonExecution) {
         this.repositoryClient = repositoryClient;
         this.aiClient = aiClient;
         this.promptService = promptService;
@@ -92,7 +94,8 @@ public class WriterAgentService {
         this.errorNotificationService = new AgentErrorNotificationService(repositoryClient);
         this.branchSwitcher = new BranchSwitcher(toolExecutionService);
         this.toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog, mcpOrchestrationService,
-                mcpConfiguration, this.mcpToolCatalog, repositoryClient, allowedBuiltinTools);
+                mcpConfiguration, this.mcpToolCatalog, repositoryClient, allowedBuiltinTools,
+                pythonExecution);
         this.contextWindowTokens = contextWindowTokens;
     }
 
@@ -251,10 +254,12 @@ public class WriterAgentService {
                 maxToolRounds());
         // The historic loop ran for-each `round in 0..maxToolRounds` (inclusive), i.e. one extra
         // iteration beyond the context-round limit so the AI gets a chance to produce a
-        // terminal answer after exhausting context. Mirror that by setting the loop's hard
-        // cap to maxToolRounds + 1.
+        // terminal answer after exhausting context. Two extra iterations are needed: round
+        // maxToolRounds + 1 delivers the wrap-up instruction (its tool calls are answered
+        // with synthetic results), round maxToolRounds + 2 is the model's answer.
+        // maxContextRounds stays the repository-context budget the strategy enforces.
         AgentBudget budget = new AgentBudget(
-                maxToolRounds() + 1, maxToolRounds(), 0, agentConfig.getBudget().getMaxTokensPerCall(),
+                loopMaxRounds(maxToolRounds()), maxToolRounds(), 0, agentConfig.getBudget().getMaxTokensPerCall(),
                 agentConfig.getBudget().getMaxToolResultChars(), agentConfig.getBudget().getMaxHistoryChars(),
                 contextWindowTokens, agentConfig.getBudget().getProactiveCompactionThreshold());
         AgentLoop loop = new AgentLoop(aiClient, sessionService, budget);
@@ -371,7 +376,9 @@ public class WriterAgentService {
                 Do not request repository write tools, file mutation tools, or build/validation tools.
                 If critical information is missing, set readyToCreate=false and include clarifyingQuestions.
                 If no critical questions remain, set readyToCreate=true and include revisedIssueDraft.
-                """;
+                You have %d repository-context rounds in total (`agent.writer.max-tool-rounds`). Prefer the few
+                files that matter most and keep your final answer for the last round.
+                """.formatted(maxToolRounds());
     }
 
     private void handleWriterFailure(AgentSession session, String owner, String repo,
@@ -383,6 +390,15 @@ public class WriterAgentService {
         errorNotificationService.postInternalErrorComment(owner, repo, issueNumber,
                 "AI Technical Writer",
                 "Please try again or mention me again with any additional context.", e);
+    }
+
+    /**
+     * Rounds the loop gets for this run: {@code maxToolRounds} repository-context
+     * rounds, plus the wrap-up round that carries the instruction and the round
+     * after it that produces the answer (see {@link WriterAgentStrategy}'s policy).
+     */
+    static int loopMaxRounds(int maxToolRounds) {
+        return maxToolRounds + 2;
     }
 
     private int maxToolRounds() {

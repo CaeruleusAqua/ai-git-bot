@@ -6,6 +6,7 @@ import org.remus.giteabot.agent.shared.SystemPromptAssembler;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.e2e.E2eTestFramework;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolContext;
 import org.remus.giteabot.prworkflow.e2e.tools.PrWorkflowToolExecutor;
@@ -42,7 +43,8 @@ public class TestRunnerAgent {
     /** Extra rounds on top of {@code maxRetries} for the preview probe + final summary. */
     public static final int OVERHEAD_ROUNDS = 4;
 
-    private static final Set<String> ALLOWED_TOOLS = Set.of(
+    /** The tools this workflow's own executor handles — and only these. */
+    public static final Set<String> WORKFLOW_TOOLS = Set.of(
             "preview-url", "preview-status", "pr-test-run", "attach-artifact");
 
     private final ToolCatalog toolCatalog;
@@ -57,6 +59,7 @@ public class TestRunnerAgent {
     }
 
     public Result execute(AiClient aiClient,
+                          WorkflowToolSurface surface,
                           PrWorkflowToolContext toolContext,
                           TestPlan plan,
                           int maxRetries,
@@ -64,8 +67,10 @@ public class TestRunnerAgent {
         if (aiClient == null) {
             return new Result(0, 0, "AI client unavailable", true);
         }
-        List<ToolDescriptor> descriptors = toolCatalog.nativeDescriptors(
-                ToolCatalog.Role.PR_WORKFLOW, null, ALLOWED_TOOLS);
+        List<ToolDescriptor> descriptors = surface != null
+                ? surface.advertised()
+                : toolCatalog.nativeDescriptors(ToolCatalog.Role.PR_WORKFLOW, null, WORKFLOW_TOOLS);
+        Set<String> allowed = surface != null ? surface.callable() : WORKFLOW_TOOLS;
 
         // System prompt = role description (E2ePromptLibrary or the
         // operator-edited SystemPrompt) + tool protocol section rendered
@@ -76,12 +81,12 @@ public class TestRunnerAgent {
                 aiClient.supportsNativeTools(), !descriptors.isEmpty());
         String systemPromptText = promptAssembler.assemble(
                 E2ePromptLibrary.runnerSystemPromptOrDefault(systemPrompt, toolContext.framework()),
-                toolCatalog, ALLOWED_TOOLS, null, mode,
-                SystemPromptAssembler.PromptKind.E2E_AGENT);
+                toolCatalog, allowed, surface == null ? null : surface.mcpCatalog(), mode,
+                SystemPromptAssembler.PromptKind.E2E_TEST_RUNNER);
 
         int maxRounds = Math.max(2, maxRetries) + OVERHEAD_ROUNDS;
         E2eAgentRunner runner = new E2eAgentRunner(
-                aiClient, toolExecutor, toolContext, descriptors,
+                aiClient, toolExecutor, toolContext, surface, descriptors,
                 systemPromptText,
                 maxRounds, DEFAULT_MAX_TOKENS, 120_000, "test-runner");
 

@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.issueimpl.AiResponseParser;
 import org.remus.giteabot.agent.loop.AgentBudget;
 import org.remus.giteabot.agent.loop.AgentLoop;
@@ -121,6 +122,7 @@ public class IssueTriageService {
     private final McpToolSelectionService mcpToolSelectionService;
     private final BotToolSelectionService botToolSelectionService;
     private final AgentConfigProperties agentConfig;
+    private final PythonExecutionService pythonExecution;
 
     private final WriterPromptBuilder promptBuilder = new WriterPromptBuilder();
     private final SystemPromptAssembler systemPromptAssembler = new SystemPromptAssembler();
@@ -196,7 +198,7 @@ public class IssueTriageService {
 
         ToolingMode mode = aiClient.supportsNativeTools() ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String systemPrompt = systemPromptAssembler.assemble(configuredPrompt, toolCatalog,
-                allowedBuiltinTools, mcpToolCatalog, mode, SystemPromptAssembler.PromptKind.WRITER_AGENT);
+                allowedBuiltinTools, mcpToolCatalog, mode, SystemPromptAssembler.PromptKind.TRIAGE_AGENT);
 
         String treeContext = promptBuilder.buildTreeContext(
                 repoClient.getRepositoryTree(owner, repo, baseBranch), maxInitialTreeFiles());
@@ -205,7 +207,7 @@ public class IssueTriageService {
 
         AgentToolRouter toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog,
                 mcpOrchestrationService, bot.getMcpConfiguration(), mcpToolCatalog,
-                repoClient, allowedBuiltinTools);
+                repoClient, allowedBuiltinTools, pythonExecution);
         TriageAgentStrategy strategy = new TriageAgentStrategy(systemPrompt, toolRouter, toolCatalog,
                 mcpToolCatalog, allowedBuiltinTools, allowed, bot.getUsername(),
                 new AiResponseParser(), new BranchSwitcher(toolExecutionService), maxToolRounds());

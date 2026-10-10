@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.issueimpl.AiResponseParser;
 import org.remus.giteabot.agent.loop.AgentBudget;
 import org.remus.giteabot.agent.loop.AgentLoop;
@@ -133,7 +134,8 @@ public class AgentReviewService {
                               AgentConfigProperties agentConfig,
                               McpOrchestrationService mcpOrchestrationService,
                               Bot bot,
-                              EventHookPublisher eventHookPublisher) {
+                              EventHookPublisher eventHookPublisher,
+                              PythonExecutionService pythonExecution) {
         this.context = context;
         this.bot = bot;
         this.eventHookPublisher = eventHookPublisher;
@@ -146,7 +148,8 @@ public class AgentReviewService {
         this.branchSwitcher = new BranchSwitcher(toolExecutionService);
         this.toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog,
                 mcpOrchestrationService, context.mcpConfiguration(),
-                context.mcpToolCatalog(), this.repositoryClient, context.allowedBuiltinTools());
+                context.mcpToolCatalog(), this.repositoryClient, context.allowedBuiltinTools(),
+                pythonExecution);
     }
 
     /**
@@ -610,14 +613,14 @@ public class AgentReviewService {
                                       String systemPrompt, String userMessage, int maxToolRounds,
                                       DiffSummary diffSummary, Long runId,
                                       Consumer<AgentRunContext.ToolCallRecord> toolCallConsumer) {
+        int rounds = clamp(maxToolRounds, 1, 30);
         ReviewAgentStrategy strategy = new ReviewAgentStrategy(
                 systemPrompt, toolRouter, toolCatalog,
                 context.mcpToolCatalog(), context.allowedBuiltinTools(),
                 responseParser, branchSwitcher, this::fetchFiles,
-                agentConfig.getBudget().getMaxContextRounds(), clamp(maxToolRounds, 1, 30));
+                agentConfig.getBudget().getMaxContextRounds(), rounds);
 
         AgentConfigProperties.BudgetConfig budgetCfg = agentConfig.getBudget();
-        int rounds = clamp(maxToolRounds, 1, 30);
         int hardCap = Math.max(budgetCfg.getMaxRounds(), rounds + 2);
         AgentBudget budget = new AgentBudget(hardCap, budgetCfg.getMaxContextRounds(),
                 budgetCfg.getMaxValidationRetries(), budgetCfg.getMaxTokensPerCall(),
@@ -636,7 +639,7 @@ public class AgentReviewService {
                 ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String base = systemPromptAssembler.assemble(context.reviewAgentSystemPrompt(), toolCatalog,
                 toolCatalog.reviewToolNames(context.allowedBuiltinTools()), context.mcpToolCatalog(), mode,
-                SystemPromptAssembler.PromptKind.WRITER_AGENT);
+                SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
 
         if (!enableFormalDecision) {
             return base;

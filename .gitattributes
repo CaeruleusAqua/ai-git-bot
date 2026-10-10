@@ -1,0 +1,5 @@
+# The working tree is checked out with CRLF (core.autocrlf=true), which is fine for the sources but
+# not for these two: the Docker build context is the working tree, and a shell script carrying CRLF
+# fails with "$'\r': command not found" while a C file would just be untidy.
+docker/*.sh text eol=lf
+docker/*.c text eol=lf

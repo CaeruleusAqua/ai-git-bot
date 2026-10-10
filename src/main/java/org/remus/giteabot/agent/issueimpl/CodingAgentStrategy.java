@@ -11,17 +11,18 @@ import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
 import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
+import org.remus.giteabot.agent.tools.ToolArguments;
 import org.remus.giteabot.agent.tools.ToolCallContext;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.ChatTurn;
+import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
-import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,6 +68,34 @@ public final class CodingAgentStrategy implements AgentStrategy {
     private int fileRequestRounds = 0;
     private int toolRounds = 0;
     private int attempt = 1;
+
+    /**
+     * Prose-only rounds already spent asking the model to either call tools or
+     * answer. Bounded at 1 by construction: one nudge is enough to tell intent
+     * apart from pre-work narration, and a second one would only duplicate the
+     * prompt cost.
+     */
+    private int answerNudges = 0;
+
+    /**
+     * Complete plain-language turn recorded before the nudge, used as the fallback
+     * answer when the turn <em>after</em> the nudge is unusable. See
+     * {@link #nativeTextOnlyStep(AgentRunContext, ChatTurn)}.
+     */
+    private String answerBeforeNudge;
+
+    /**
+     * {@code true} once a round actually ran a tool that changes the workspace, i.e.
+     * the agent tried to implement something. Deliberately not derived from
+     * {@link #attempt}: that counter is also incremented by no-diff tool rounds and
+     * validation retries, so it does not mean "an implementation was tried".
+     *
+     * <p>Validation runs do <em>not</em> set this: "run the tests and tell me whether
+     * they pass" is a read-only request, and counting its {@code mvn}/test call would
+     * close the answer exit for it. A file write that leaves no diff still counts, so
+     * an attempt that produced nothing can never be reported as "no change needed".</p>
+     */
+    private boolean implementationAttempted = false;
 
     /** Functional hook so the strategy stays decoupled from the surrounding service's helpers. */
     @FunctionalInterface
@@ -152,24 +181,14 @@ public final class CodingAgentStrategy implements AgentStrategy {
                 return step(ctx, turn.assistantText(), round);
             }
             // Non-JSON text. In NATIVE mode this is how the model signals it is
-            // done narrating — do NOT feed it to the JSON parser (which would
-            // hard-fail the whole run and never open a PR). If the agent already
-            // produced workspace changes, finish successfully; otherwise nudge it
-            // to actually call tools. In LEGACY mode the model is contractually
-            // expected to return JSON, so an unparseable response is a genuine
-            // failure and keeps the legacy hard-fail behaviour.
+            // done narrating or answering — do NOT feed it to the JSON parser
+            // (which would hard-fail the whole run and never open a PR). The
+            // completion policy lives in nativeTextOnlyStep(). In LEGACY
+            // mode the model is contractually expected to return JSON, so an
+            // unparseable response is a genuine failure and keeps the legacy
+            // hard-fail behaviour.
             if (ctx.toolingMode() == ToolingMode.NATIVE) {
-                if (workspaceService.hasUncommittedChanges(ctx.workspaceDir())) {
-                    ImplementationPlan plan = ImplementationPlan.builder()
-                            .summary(turn.assistantText() == null || turn.assistantText().isBlank()
-                                    ? "Implementation produced workspace changes."
-                                    : turn.assistantText())
-                            .build();
-                    sessionService.recordPlan(ctx.session(), plan.getSummary(), turn.assistantText());
-                    return new StepDecision.Finish(LoopOutcome.success(ctx.baseBranch(), plan));
-                }
-                attempt++;
-                return new StepDecision.Continue(promptBuilder.buildMissingToolFeedback());
+                return nativeTextOnlyStep(ctx, turn);
             }
             return step(ctx, turn.assistantText(), round);
         }
@@ -199,9 +218,13 @@ public final class CodingAgentStrategy implements AgentStrategy {
         ctx.setBaseBranch(branchSwitchResult.selectedBranch());
         List<ImplementationPlan.ToolRequest> remaining = branchSwitchResult.remainingToolRequests();
 
-        // 2) Distinguish context-only rounds (cat/rg/find/...) from mutation/validation rounds.
-        boolean hasMutationOrValidation = remaining.stream().anyMatch(this::isMutationOrValidation);
-        if (!hasMutationOrValidation && fileRequestRounds < maxContextRounds && !remaining.isEmpty()) {
+        // 2) Distinguish read-only repository lookups (cat/rg/find/...) from rounds that
+        //    change the workspace or run validation.
+        boolean hasWork = remaining.stream().anyMatch(this::isMutationOrValidation);
+        if (remaining.stream().anyMatch(this::isMutation)) {
+            implementationAttempted = true;
+        }
+        if (!hasWork && fileRequestRounds < maxContextRounds && !remaining.isEmpty()) {
             fileRequestRounds++;
             log.info("AI requested native context tools (round {}/{}, {} call(s))",
                     fileRequestRounds, maxContextRounds, remaining.size());
@@ -274,78 +297,114 @@ public final class CodingAgentStrategy implements AgentStrategy {
         return new StepDecision.ContinueWithToolResults(packaged, null);
     }
 
-    /** Convert a single native {@link ToolCall} into a positional-args
-     *  {@link ImplementationPlan.ToolRequest} compatible with the existing
-     *  {@link AgentToolRouter}. */
-    private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
-        List<String> args = new ArrayList<>();
-        JsonNode root = call.args();
-        if (root != null && root.isObject()) {
-            // MCP tools accept arbitrary provider-defined schemas (any field name).
-            // Flattening only known property names would silently drop all of them
-            // and the MCP server would reject the call with a parameter-validation
-            // error. Pass the full args object as a single JSON-encoded arg so
-            // McpOrchestrationService.parseArguments can turn it back into a Map.
-            if (McpTools.looksLikeMcpTool(call.name())) {
-                args.add(root.toString());
-            } else {
-                // 1) varargs convention: a top-level "args" array.
-                JsonNode varargs = root.get("args");
-                if (varargs != null && varargs.isArray()) {
-                    varargs.forEach(node -> args.add(asString(node)));
-                } else {
-                    // 2) Typed schema (write-file/patch-file/mkdir/delete-file/cat/branch-switcher):
-                    //    flatten the known property order into positional args. We honour the
-                    //    schema ordering documented in ToolCatalog so the existing executors
-                    //    keep working unchanged.
-                    addIfPresent(root, "path", args);
-                    addIfPresent(root, "branch", args);
-                    addIfPresent(root, "content", args);
-                    addIfPresent(root, "search", args);
-                    addIfPresent(root, "replacement", args);
-                    addIfPresent(root, "startLine", args);
-                    addIfPresent(root, "endLine", args);
-                    // 3) Safety net: if the whitelist matched nothing but the args object
-                    //    actually carried fields, the model is either using a tool we don't
-                    //    recognise or a schema we haven't updated. Fall through to a JSON
-                    //    blob so the call still carries data and surface a warning so the
-                    //    schema drift gets noticed.
-                    if (args.isEmpty() && !root.isEmpty()) {
-                        log.warn("Tool '{}' called with unrecognised arg fields {} — "
-                                + "passing raw JSON. Update CodingAgentStrategy.toRequest if this tool "
-                                + "is supposed to be supported natively.",
-                                call.name(), fieldNames(root));
-                        args.add(root.toString());
-                    }
-                }
-            }
+    /**
+     * Native-mode turn without tool calls and without a JSON envelope. Such a
+     * turn is either an answer to a task that needs no repository change or
+     * pre-work narration, and the two are only told apart by giving the model
+     * one explicit chance to choose.
+     *
+     * <p>Policy (see {@code doc/development-archive/answer-only-completion-architecture.md}):</p>
+     * <ol>
+     *     <li>workspace changed — the run is done; finish on the unchanged PR path;</li>
+     *     <li>clean workspace, no nudge spent — nudge once, naming both exits
+     *         (call tools, or answer without tools) and demanding a full restatement;
+     *         the turn itself is only remembered as the fallback for step 3;</li>
+     *     <li>clean workspace, no implementation attempted yet — finish with the
+     *         <em>post-nudge</em> turn, or with the complete turn recorded before the
+     *         nudge when the post-nudge turn is empty or truncated; the caller posts
+     *         that text as an issue comment and opens no pull request;</li>
+     *     <li>otherwise — fail. This is also the branch's budget guard: it can
+     *         return {@code Continue} at most once, so a model that neither works
+     *         nor answers can no longer run the loop to its round cap.</li>
+     * </ol>
+     *
+     * <p>Prose turns never touch {@link #attempt}: a chatty model must not be able
+     * to exhaust the validation budget of a later, genuine tool round.</p>
+     */
+    private StepDecision nativeTextOnlyStep(AgentRunContext ctx, ChatTurn turn) {
+        if (workspaceService.hasUncommittedChanges(ctx.workspaceDir())) {
+            ImplementationPlan plan = ImplementationPlan.builder()
+                    .summary(turn.assistantText() == null || turn.assistantText().isBlank()
+                            ? "Implementation produced workspace changes."
+                            : turn.assistantText())
+                    .build();
+            sessionService.recordPlan(ctx.session(), plan.getSummary(), turn.assistantText());
+            return new StepDecision.Finish(LoopOutcome.success(ctx.baseBranch(), plan));
         }
+
+        if (answerNudges == 0) {
+            answerNudges++;
+            answerBeforeNudge = completeText(turn);
+            log.info("Native turn for issue #{} carried no tool calls and no workspace change; "
+                    + "asking for tools or a final answer", ctx.issueNumber());
+            return new StepDecision.Continue(promptBuilder.buildNativeNoToolCallFeedback());
+        }
+        // The nudge offers the answer exit, so its reply is the answer. When that
+        // reply is unusable the earlier complete turn is published instead of
+        // failing a run that already produced an answer.
+        String answer = completeText(turn);
+        if (answer == null) {
+            answer = answerBeforeNudge;
+        }
+        if (!implementationAttempted && answer != null) {
+            log.info("Coding agent answered issue #{} without repository changes ({} chars, stopReason={})",
+                    ctx.issueNumber(), answer.length(), turn.stopReason());
+            return new StepDecision.Finish(LoopOutcome.answered(ctx.baseBranch(), answer));
+        }
+        log.warn("Native turn for issue #{} stayed without tool calls and without a usable answer "
+                        + "(nudges={}, implementationAttempted={}, stopReason={}); failing the run",
+                ctx.issueNumber(), answerNudges, implementationAttempted, turn.stopReason());
+        return new StepDecision.Finish(LoopOutcome.fail(ctx.baseBranch()));
+    }
+
+    /**
+     * The stripped text of a plain-language turn that is a complete answer, or
+     * {@code null} when the turn is empty or truncated ({@link StopReason#MAX_TOKENS}).
+     * A half sentence or a blank reply is never published as the issue's answer.
+     */
+    private static String completeText(ChatTurn turn) {
+        String text = turn.assistantText();
+        if (turn.stopReason() != StopReason.END_TURN || text == null || text.isBlank()) {
+            return null;
+        }
+        return text.strip();
+    }
+
+    /**
+     * Convert a single native {@link ToolCall} into a positional-args
+     * {@link ImplementationPlan.ToolRequest} compatible with the existing
+     * {@link AgentToolRouter}. The JSON-to-positional mapping itself lives in
+     * {@link ToolArguments} because the code-execution bridge needs the identical one.
+     */
+    private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
         return ImplementationPlan.ToolRequest.builder()
-                .id(call.id() == null || call.id().isBlank() ? java.util.UUID.randomUUID().toString() : call.id())
+                .id(call.id() == null || call.id().isBlank()
+                        ? java.util.UUID.randomUUID().toString()
+                        : call.id())
                 .tool(call.name())
-                .args(args)
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
     }
 
-    private static List<String> fieldNames(JsonNode root) {
-        return new ArrayList<>(root.propertyNames());
-    }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
-    }
-
-    private static String asString(JsonNode node) {
-        return node.isString() ? node.asString() : node.toString();
-    }
-
-    /** Decide whether a tool request mutates the workspace or validates. */
+    /**
+     * Decide whether a tool request is work rather than a read-only repository lookup:
+     * it changes the workspace or validates a change. Keeps validation-only rounds on
+     * the tool-execution path instead of the context-fetch path.
+     */
     private boolean isMutationOrValidation(ImplementationPlan.ToolRequest req) {
-        return catalog.isFile(req.getTool())
-                || catalog.isValidation(req.getTool());
+        return catalog.isFile(req.getTool()) || catalog.isValidation(req.getTool());
+    }
+
+    /**
+     * Decide whether a tool request changes the workspace.
+     *
+     * <p>Validation runs are deliberately excluded: "run the tests and tell me whether
+     * they pass" is a read-only request, so a {@code mvn}/test call must not close the
+     * answer exit. A file write that leaves no diff still counts as an attempt.</p>
+     */
+    private boolean isMutation(ImplementationPlan.ToolRequest req) {
+        return catalog.isFile(req.getTool());
     }
 
     /** Execute {@code requests} and turn the results into
@@ -429,6 +488,9 @@ public final class CodingAgentStrategy implements AgentStrategy {
 
         // 4) Execute the requested tools.
         List<ImplementationPlan.ToolRequest> requests = plan.getEffectiveToolRequests();
+        if (requests.stream().anyMatch(this::isMutation)) {
+            implementationAttempted = true;
+        }
         List<ToolResult> results = executeAllTools(ctx.workspaceDir(), requests);
         boolean hasValidationTools = hasValidationTools(requests);
         boolean validationPassed = !hasValidationTools || allValidationToolsPassed(requests, results);

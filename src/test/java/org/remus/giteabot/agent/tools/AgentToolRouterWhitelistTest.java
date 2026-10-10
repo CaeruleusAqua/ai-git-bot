@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
@@ -40,7 +41,7 @@ class AgentToolRouterWhitelistTest {
         }
         org.mockito.Mockito.verifyNoInteractions(executor, mcp);
         assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(),
-                Set.of("cat", "branch-switcher", "write-file"))).extracting(d -> d.name()).containsExactly("cat");
+                Set.of("cat", "branch-switcher", "write-file"))).extracting(ToolDescriptor::name).containsExactly("cat");
         assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(), null)).isEmpty();
     }
 
@@ -75,7 +76,7 @@ class AgentToolRouterWhitelistTest {
                                       McpToolCatalog mcpCatalog,
                                       McpOrchestrationService mcpOrchestration) {
         return new AgentToolRouter(tes, catalog, mcpOrchestration, null,
-                mcpCatalog, mock(RepositoryApiClient.class), allowed);
+                mcpCatalog, mock(RepositoryApiClient.class), allowed, null);
     }
 
     private static ToolCallContext ctx(String tool, List<String> args) {
@@ -152,6 +153,26 @@ class AgentToolRouterWhitelistTest {
 
         assertThat(res.success()).isFalse();
         assertThat(res.error()).contains("not enabled for this bot");
+    }
+
+    /**
+     * The advertised surface and the dispatch gate have to agree: a review run that lists tools it
+     * would then refuse only makes the model ask for what it cannot have.
+     */
+    @Test
+    void availableTools_reviewSharesTheReadOnlyGate() {
+        AgentToolRouter router = newRouter(mock(ToolExecutionService.class),
+                Set.of("cat", "execute-code", "write-file", "branch-switcher", "mvn"),
+                McpToolCatalog.empty(), null);
+
+        assertThat(router.availableTools(AgentToolRouter.Mode.REVIEW))
+                .extracting(ToolDescriptor::name)
+                .contains("cat")
+                .doesNotContain("write-file", "branch-switcher", "mvn");
+
+        assertThat(router.availableTools(AgentToolRouter.Mode.CODING))
+                .extracting(ToolDescriptor::name)
+                .contains("execute-code", "write-file", "branch-switcher", "mvn");
     }
 
     // Mockito argThat helpers kept inline to avoid an extra import.

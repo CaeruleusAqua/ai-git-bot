@@ -2,6 +2,10 @@ package org.remus.giteabot.agent.tools;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EmptySource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpToolCatalog;
@@ -52,6 +56,17 @@ class ToolCatalogTest {
     }
 
     @Test
+    void executeIsAValidationTool() {
+        // `execute` is the repository-script validation tool: classification only,
+        // its argument handling lives in ToolExecutionService.
+        assertThat(catalog.validationToolNames()).contains("execute");
+        assertThat(catalog.kindOf("execute")).isEqualTo(ToolKind.VALIDATION);
+        assertThat(catalog.isValidation("execute")).isTrue();
+        assertThat(catalog.isSilent("execute")).isFalse();
+        assertThat(catalog.bucketOf("execute")).isEqualTo(ToolCatalog.DisplayBucket.VALIDATION);
+    }
+
+    @Test
     void mcpPrefixedToolIsMcpKind() {
         assertThat(catalog.kindOf("mcp:github:list_issues")).isEqualTo(ToolKind.MCP);
         assertThat(catalog.isMcp("mcp:github:list_issues")).isTrue();
@@ -93,6 +108,50 @@ class ToolCatalogTest {
 
     // ---------- Native-descriptor surface (moved here from the deleted AgentNativeToolsTest) ----------
 
+    @ParameterizedTest
+    @ValueSource(strings = {"rg", "find", "cat", "git-log", "git-blame", "tree",
+            "ctags-signatures", "ctags-deps", "pr-diff", "get-issue", "search-issues", "execute-code"})
+    void readOnlyReviewToolsAreAvailableAcrossCatalogSurfaces(String name) {
+        assertThat(catalog.describeFor(ToolCatalog.Role.REVIEW, name)).isPresent();
+        assertThat(catalog.reviewToolNames(Set.of(name))).containsExactly(name);
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(), Set.of(name)))
+                .extracting(ToolDescriptor::name).containsExactly(name);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"branch-switcher", "write-file", "patch-file", "mkdir", "delete-file",
+            "mvn", "npm", "python3", "pr-test-write", "pr-test-run", "unit-test-write", "doc-write",
+            "doc-delete", "i18n-write", "i18n-delete", "grep", "ripgrep", "does-not-exist"})
+    void nonReviewToolsStayUnavailableEvenWhenConfigured(String name) {
+        assertThat(catalog.describeFor(ToolCatalog.Role.REVIEW, name)).isEmpty();
+        assertThat(catalog.reviewToolNames(Set.of(name))).isEmpty();
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(), Set.of(name)))
+                .isEmpty();
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @EmptySource
+    void reviewWithoutBuiltinSelectionAdvertisesOnlySelectedMcpTools(Set<String> allowed) {
+        McpToolCatalog mcp = new McpToolCatalog(List.of(new McpToolDefinition(
+                "srv", "read", "Read", "Read-only lookup", Map.of("type", "object"), "srv.read")));
+
+        assertThat(catalog.reviewToolNames(allowed)).isEmpty();
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, mcp, allowed))
+                .extracting(ToolDescriptor::name).containsExactly("srv.read");
+    }
+
+    @Test
+    void reviewToolsIntersectConfiguredBuiltinsAndPreserveSelectedMcpTools() {
+        McpToolCatalog mcp = new McpToolCatalog(List.of(new McpToolDefinition(
+                "srv", "read", "Read", "Read-only lookup", Map.of("type", "object"), "srv.read")));
+        Set<String> allowed = Set.of("cat", "get-issue", "branch-switcher", "write-file", "mvn", "unknown");
+
+        assertThat(catalog.reviewToolNames(allowed)).containsExactlyInAnyOrder("cat", "get-issue");
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, mcp, allowed))
+                .extracting(ToolDescriptor::name).containsExactlyInAnyOrder("cat", "get-issue", "srv.read");
+    }
+
     @Test
     void nativeDescriptors_coding_exposesFullCodingSurface() {
         List<ToolDescriptor> tools = catalog.nativeDescriptors(ToolCatalog.Role.CODING, McpToolCatalog.empty(), null);
@@ -118,7 +177,8 @@ class ToolCatalogTest {
                 "get-issue", "search-issues");
         // No mutations, no validation on writer.
         assertThat(names).doesNotContain("write-file", "patch-file", "mkdir", "delete-file",
-                "mvn", "gradle", "npm", "dotnet", "cargo", "go", "python3", "make", "cmake");
+                "mvn", "gradle", "npm", "dotnet", "cargo", "go", "python3", "make", "cmake",
+                "execute");
     }
 
     @Test
@@ -140,6 +200,16 @@ class ToolCatalogTest {
         assertThat(mvn.jsonSchema().get("properties").get("args").get("type").asString()).isEqualTo("array");
         assertThat(mvn.jsonSchema().get("properties").get("args").get("items").get("type").asString())
                 .isEqualTo("string");
+    }
+
+    @Test
+    void nativeDescriptors_executeCarriesPositionalArgsAndAScriptExample() {
+        ToolDescriptor execute = catalog.nativeDescriptors(ToolCatalog.Role.CODING, McpToolCatalog.empty(), null)
+                .stream().filter(d -> d.name().equals("execute")).findFirst().orElseThrow();
+        assertThat(execute.jsonSchema().get("properties").get("args").get("type").asString()).isEqualTo("array");
+        assertThat(execute.description())
+                .contains("validation script")
+                .contains("scripts/validate.sh");
     }
 
     @Test
@@ -207,5 +277,35 @@ class ToolCatalogTest {
         assertThat(catalog.contextToolNames(null)).isEqualTo(catalog.contextToolNames());
         assertThat(catalog.validationToolNames(null)).isEqualTo(catalog.validationToolNames());
         assertThat(catalog.writerRepositoryToolNames(null)).isEqualTo(catalog.writerRepositoryToolNames());
+    }
+
+    @Test
+    void usageHintsRideOnTheToolDefinitions() {
+        assertThat(catalog.usageHint("cat")).isPresent();
+        assertThat(catalog.usageHint("CTAGS-SIGNATURES")).as("normalized").isPresent();
+        assertThat(catalog.usageHint("pr-test-write")).isPresent();
+        assertThat(catalog.usageHint("execute")).as("validation tool").isPresent();
+        // A tool that needs no strategy line contributes none.
+        assertThat(catalog.usageHint("write-file")).isEmpty();
+        assertThat(catalog.usageHint("mvn")).isEmpty();
+        assertThat(catalog.usageHint("does-not-exist")).isEmpty();
+    }
+
+    @Test
+    void builtinToolNamesGroupsTheCatalogByRole() {
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.CODING))
+                .contains("write-file", "cat", "execute-code", "mvn")
+                // classification-only aliases are never advertised
+                .doesNotContain("ripgrep", "grep", "pr-test-write");
+
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.PR_WORKFLOW))
+                .contains("pr-test-write", "pr-test-run", "preview-url", "preview-status",
+                        "attach-artifact", "unit-test-write", "doc-write", "doc-delete",
+                        "i18n-write", "i18n-delete")
+                .doesNotContain("cat", "write-file", "mvn", "get-issue");
+
+        assertThat(catalog.builtinToolNames(ToolCatalog.Role.WRITER))
+                .contains("cat", "branch-switcher", "get-issue", "search-issues", "execute-code")
+                .doesNotContain("write-file", "mvn", "pr-test-write");
     }
 }

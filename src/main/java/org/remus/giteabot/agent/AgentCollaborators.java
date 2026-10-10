@@ -1,5 +1,6 @@
 package org.remus.giteabot.agent;
 
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
@@ -18,6 +19,7 @@ public record AgentCollaborators(
         AgentSessionService sessionService,
         ToolExecutionService toolExecutionService,
         ToolCatalog toolCatalog,
-        WorkspaceService workspaceService
+        WorkspaceService workspaceService,
+        PythonExecutionService pythonExecution
 ) {
 }

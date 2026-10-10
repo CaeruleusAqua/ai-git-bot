@@ -1,6 +1,8 @@
 package org.remus.giteabot.ai;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.util.List;
+import tools.jackson.databind.JsonNode;
 
 /**
  * Result of a single round-trip to the AI provider, with or without native
@@ -16,13 +18,28 @@ public record ChatTurn(String assistantText,
                        long inputTokens,
                        long outputTokens,
                        boolean inputTokensReported,
-                       boolean outputTokensReported) {
+                       boolean outputTokensReported,
+                       @JsonIgnore List<JsonNode> reasoningDetails) {
 
     /** Legacy adapters cannot distinguish missing usage from zero; retain their positive-count semantics. */
     public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
                     long inputTokens, long outputTokens) {
         this(assistantText, toolCalls, stopReason, Math.max(0, inputTokens), Math.max(0, outputTokens),
-                inputTokens > 0, outputTokens > 0);
+                inputTokens > 0, outputTokens > 0, null);
+    }
+
+    /** Compatibility constructor retaining opaque reasoning metadata and legacy positive-count semantics. */
+    public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
+                    long inputTokens, long outputTokens, List<JsonNode> reasoningDetails) {
+        this(assistantText, toolCalls, stopReason, Math.max(0, inputTokens), Math.max(0, outputTokens),
+                inputTokens > 0, outputTokens > 0, reasoningDetails);
+    }
+
+    /** Compatibility constructor for reported usage without opaque reasoning metadata. */
+    public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
+                    long inputTokens, long outputTokens, boolean inputTokensReported, boolean outputTokensReported) {
+        this(assistantText, toolCalls, stopReason, inputTokens, outputTokens,
+                inputTokensReported, outputTokensReported, null);
     }
 
     /** Preserves independently present provider counters, including explicit zero. Invalid counters are unavailable. */
@@ -48,6 +65,9 @@ public record ChatTurn(String assistantText,
             outputTokens = 0;
             outputTokensReported = false;
         }
+        if (reasoningDetails != null) {
+            reasoningDetails = List.copyOf(reasoningDetails);
+        }
         if (toolCalls == null) {
             toolCalls = List.of();
         }
@@ -72,5 +92,19 @@ public record ChatTurn(String assistantText,
     /** Total tokens (input + output) for this turn. */
     public long totalTokens() {
         return inputTokens + outputTokens;
+    }
+
+    /** Preserves the complete assistant turn for the next in-memory provider request. */
+    public AiMessage toAssistantMessage() {
+        return AiMessage.builder().role("assistant").content(assistantText)
+                .toolCalls(toolCalls.isEmpty() ? null : toolCalls)
+                .reasoningDetails(reasoningDetails).build();
+    }
+
+    /** Diagnostics deliberately exclude opaque provider reasoning. */
+    @Override
+    public String toString() {
+        return "ChatTurn[stopReason=%s, inputTokens=%d, outputTokens=%d, toolCalls=%d]"
+                .formatted(stopReason, inputTokens, outputTokens, toolCalls.size());
     }
 }
