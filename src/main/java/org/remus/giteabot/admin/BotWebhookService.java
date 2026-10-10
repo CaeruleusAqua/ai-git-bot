@@ -871,7 +871,8 @@ public class BotWebhookService {
         if (body == null || botAlias == null || !body.contains(botAlias)) {
             return false;
         }
-        String normalized = body.toLowerCase();
+        // Ignore the alias itself, so a bot named e.g. "Review Bot" does not count as asking for a review
+        String normalized = body.replace(botAlias, " ").toLowerCase();
         return normalized.contains("review")
                 && (normalized.contains("again") || normalized.contains("re-review") || normalized.contains("repeat"));
     }
