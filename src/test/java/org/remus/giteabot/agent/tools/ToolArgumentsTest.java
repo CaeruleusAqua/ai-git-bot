@@ -58,7 +58,16 @@ class ToolArgumentsTest {
             ObjectNode args = JSON.createObjectNode();
             for (Map.Entry<String, JsonNode> property : properties.properties()) {
                 declared.add(property.getKey());
-                args.put(property.getKey(), property.getKey());
+                // Array-typed properties carry an array, not a string: filling them with a string
+                // is what hid the "args takes over the whole mapping" bug — the varargs shortcut
+                // only fires on a real array. One element per property keeps the vector
+                // comparable to the declared names.
+                JsonNode type = property.getValue().get("type");
+                if (type != null && "array".equals(type.asString())) {
+                    args.putArray(property.getKey()).add(property.getKey());
+                } else {
+                    args.put(property.getKey(), property.getKey());
+                }
             }
             List<String> mapped = ToolArguments.toPositional(tool, args, schema);
             if (!declared.equals(mapped)) {
@@ -95,6 +104,17 @@ class ToolArgumentsTest {
 
         assertThat(ToolArguments.toPositional("rg", args, schema("rg")))
                 .containsExactly("--glob", "*.md");
+    }
+
+    @Test
+    void anArgsArrayDoesNotTakeOverASchemaThatDeclaresMoreThanIt() {
+        // pr-test-run declares framework + args. The varargs shortcut used to fire on the bare
+        // "args" array and drop framework — the same silent-drop this mapping exists to prevent.
+        ObjectNode args = JSON.createObjectNode().put("framework", "playwright");
+        args.putArray("args").add("--grep").add("dark-mode");
+
+        assertThat(ToolArguments.toPositional("pr-test-run", args, schema("pr-test-run")))
+                .containsExactly("playwright", "--grep", "dark-mode");
     }
 
     @Test

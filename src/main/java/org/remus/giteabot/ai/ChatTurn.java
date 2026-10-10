@@ -24,8 +24,7 @@ public record ChatTurn(String assistantText,
     /** Legacy adapters cannot distinguish missing usage from zero; retain their positive-count semantics. */
     public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
                     long inputTokens, long outputTokens) {
-        this(assistantText, toolCalls, stopReason, Math.max(0, inputTokens), Math.max(0, outputTokens),
-                inputTokens > 0, outputTokens > 0, null);
+        this(assistantText, toolCalls, stopReason, inputTokens, outputTokens, null);
     }
 
     /** Compatibility constructor retaining opaque reasoning metadata and legacy positive-count semantics. */

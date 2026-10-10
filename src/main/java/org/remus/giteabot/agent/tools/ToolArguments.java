@@ -55,11 +55,15 @@ public final class ToolArguments {
             args.add(root.toString());
             return args;
         }
-        // Varargs convention: a top-level "args" array, one element per token. This is also the
-        // shape the validation tools are called with — they are declared by configuration, so the
-        // catalog holds no schema whose order could be read.
+        // Varargs convention: a top-level "args" array, one element per token. Taken only for a
+        // tool whose schema is a bare argument vector — either the catalog declares no schema
+        // (validation tools, sourced from configuration) or it declares exactly the single array
+        // property "args". A tool that mixes "args" with other declared properties
+        // (pr-test-run: framework + args) must go through the schema mapping below: taking the
+        // array here would flatten it and silently drop every sibling property — the same
+        // silent-drop this class exists to prevent.
         JsonNode varargs = root.get("args");
-        if (varargs != null && varargs.isArray()) {
+        if (varargs != null && varargs.isArray() && isVarargsSchema(schema)) {
             varargs.forEach(node -> args.add(asString(node)));
             return args;
         }
@@ -103,6 +107,26 @@ public final class ToolArguments {
             args.add(root.toString());
         }
         return args;
+    }
+
+    /** Whether {@code schema} declares a bare argument vector: no schema at all (validation
+     * tools, unknown names) or exactly the single array property {@code args} the catalog gives
+     * its varargs tools. Any other property next to {@code args} means the call is mapped
+     * property-by-property instead. */
+    private static boolean isVarargsSchema(JsonNode schema) {
+        if (schema == null) {
+            return true;
+        }
+        JsonNode properties = schema.get("properties");
+        if (properties == null || !properties.isObject() || properties.size() != 1) {
+            return false;
+        }
+        JsonNode args = properties.get("args");
+        if (args == null) {
+            return false;
+        }
+        JsonNode type = args.get("type");
+        return type != null && "array".equals(type.asString());
     }
 
     /** Whether the caller sent a value for a declared property; a JSON null counts as absent. */
