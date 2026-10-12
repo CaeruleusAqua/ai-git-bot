@@ -70,6 +70,19 @@ public class OpenAiResponse {
 
         @JsonProperty("total_tokens")
         private int totalTokens;
+
+        @JsonProperty("prompt_tokens_details")
+        private PromptTokensDetails promptTokensDetails;
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PromptTokensDetails {
+        @JsonProperty("cached_tokens")
+        private Long cachedTokens;
+
+        @JsonProperty("cache_write_tokens")
+        private Long cacheWriteTokens;
     }
 
     /**

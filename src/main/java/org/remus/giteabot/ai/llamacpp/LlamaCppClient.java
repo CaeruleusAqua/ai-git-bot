@@ -108,7 +108,9 @@ public class LlamaCppClient extends AbstractAiClient {
         long inputTokens = usageTokens(response, true);
         long outputTokens = usageTokens(response, false);
         if (response.getUsage() != null) {
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            LlamaCppCompletionResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(inputTokens, outputTokens, 0L,
+                    details != null ? details.getCachedTokens() : null, request, response);
         } else {
             log.debug("llama.cpp chat response did not include usage counters");
         }
@@ -306,7 +308,9 @@ public class LlamaCppClient extends AbstractAiClient {
                     context,
                     usageTokens(response, true),
                     usageTokens(response, false));
-            reportUsage(usageTokens(response, true), usageTokens(response, false), 0L, 0L, request, response);
+            LlamaCppCompletionResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(usageTokens(response, true), usageTokens(response, false), 0L,
+                    details != null ? details.getCachedTokens() : null, request, response);
         } else {
             log.debug("llama.cpp {} response did not include usage counters", context);
         }

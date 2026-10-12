@@ -29,6 +29,9 @@ public class OllamaResponse {
     @JsonProperty("prompt_eval_count")
     private Integer promptEvalCount;
 
+    @JsonProperty("prompt_eval_cached_count")
+    private Integer promptEvalCachedCount;
+
     @JsonProperty("eval_count")
     private Integer evalCount;
 

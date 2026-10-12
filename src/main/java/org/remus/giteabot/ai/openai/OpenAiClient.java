@@ -213,7 +213,10 @@ public class OpenAiClient extends AbstractAiClient {
             outputTokens = response.getUsage().getCompletionTokens();
             log.info("OpenAI chat-with-tools: {} prompt tokens, {} completion tokens, {} tool_call(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(inputTokens, outputTokens,
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
         return new ChatTurn(text, calls, reason, inputTokens, outputTokens);
     }
@@ -291,8 +294,10 @@ public class OpenAiClient extends AbstractAiClient {
                     context,
                     response.getUsage().getPromptTokens(),
                     response.getUsage().getCompletionTokens());
-            reportUsage(response.getUsage().getPromptTokens(),
-                    response.getUsage().getCompletionTokens(), 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(response.getUsage().getPromptTokens(), response.getUsage().getCompletionTokens(),
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
 
         return content;
