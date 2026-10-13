@@ -9,22 +9,74 @@ import tools.jackson.databind.JsonNode;
  * tools. {@code assistantText} may be empty for tool-only or incomplete turns.
  *
  * <p>{@code inputTokens} and {@code outputTokens} are populated when the
- * provider returns usage data; they default to 0 when unknown.</p>
+ * provider returns usage data; they default to 0 when unknown. The corresponding
+ * reported flags distinguish explicit zero from unavailable counters.</p>
+ *
+ * <p>The five-argument and reasoning-only compatibility constructors treat only
+ * positive counters as reported; those legacy adapters cannot report a real zero.
+ * Migrated adapters should use {@code withReportedUsage} or explicit reported flags.
+ * A false flag is authoritative: its counter is normalized to zero, regardless
+ * of the supplied value. Negative counters are always unavailable.</p>
  */
 public record ChatTurn(String assistantText,
                        List<ToolCall> toolCalls,
                        StopReason stopReason,
                        long inputTokens,
                        long outputTokens,
+                       boolean inputTokensReported,
+                       boolean outputTokensReported,
                        @JsonIgnore List<JsonNode> reasoningDetails) {
 
-    /** Compatibility constructor for providers without opaque reasoning metadata. */
+    /** Legacy adapters cannot distinguish missing usage from zero; retain their positive-count semantics. */
     public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
                     long inputTokens, long outputTokens) {
         this(assistantText, toolCalls, stopReason, inputTokens, outputTokens, null);
     }
 
+    /** Compatibility constructor retaining opaque reasoning metadata and legacy positive-count semantics. */
+    public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
+                    long inputTokens, long outputTokens, List<JsonNode> reasoningDetails) {
+        this(assistantText, toolCalls, stopReason, inputTokens, outputTokens,
+                inputTokens > 0, outputTokens > 0, reasoningDetails);
+    }
+
+    /** Compatibility constructor for reported usage without opaque reasoning metadata. */
+    public ChatTurn(String assistantText, List<ToolCall> toolCalls, StopReason stopReason,
+                    long inputTokens, long outputTokens, boolean inputTokensReported, boolean outputTokensReported) {
+        this(assistantText, toolCalls, stopReason, inputTokens, outputTokens,
+                inputTokensReported, outputTokensReported, null);
+    }
+
+    /** Preserves independently present provider counters, including explicit zero. Invalid counters are unavailable. */
+    public static ChatTurn withReportedUsage(String text, List<ToolCall> calls, StopReason reason,
+                                             Long input, Long output) {
+        return withReportedUsage(text, calls, reason, input, output, null);
+    }
+
+    /** Preserves independently reported counters, including zero, together with opaque in-memory reasoning metadata. */
+    public static ChatTurn withReportedUsage(String text, List<ToolCall> calls, StopReason reason,
+                                             Long input, Long output, List<JsonNode> reasoningDetails) {
+        boolean hasInput = input != null && input >= 0;
+        boolean hasOutput = output != null && output >= 0;
+        return new ChatTurn(text, calls, reason, hasInput ? input : 0, hasOutput ? output : 0,
+                hasInput, hasOutput, reasoningDetails);
+    }
+
+    /** Whether both counters are available; presence alone does not establish billing completeness. */
+    public boolean hasReportedUsage() {
+        return inputTokensReported && outputTokensReported;
+    }
+
+    /** Normalizes unavailable counters and invalid negative values to zero with a false reported flag. */
     public ChatTurn {
+        if (!inputTokensReported || inputTokens < 0) {
+            inputTokens = 0;
+            inputTokensReported = false;
+        }
+        if (!outputTokensReported || outputTokens < 0) {
+            outputTokens = 0;
+            outputTokensReported = false;
+        }
         if (reasoningDetails != null) {
             reasoningDetails = List.copyOf(reasoningDetails);
         }
@@ -49,7 +101,7 @@ public record ChatTurn(String assistantText,
         return !toolCalls.isEmpty();
     }
 
-    /** Total tokens (input + output) for this turn. */
+    /** Sum of reported input/output tokens; only a lower bound when either counter is unavailable, not an estimate. */
     public long totalTokens() {
         return inputTokens + outputTokens;
     }
