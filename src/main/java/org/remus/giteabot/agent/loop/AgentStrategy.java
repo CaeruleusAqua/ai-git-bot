@@ -35,6 +35,15 @@ public interface AgentStrategy {
     String systemPrompt();
 
     /**
+     * Optional user reminder appended to conversation history before a model call.
+     * The remaining count includes that upcoming call. Once added, the reminder
+     * is retained through compaction and retries for this run; {@code null} adds nothing.
+     */
+    default String roundBudgetReminder(int remainingRounds) {
+        return null;
+    }
+
+    /**
      * Decide what to do given the AI's latest assistant turn (text path).
      *
      * <p>May execute tools, post comments, mutate {@code ctx} (e.g. update
