@@ -137,6 +137,15 @@ public interface RepositoryApiClient {
         throw new UnsupportedOperationException("Updating PR comments is not supported");
     }
 
+    /** Validates the positive integral ID returned by a comment creation API. */
+    static long requireCommentId(Map<?, ?> response, String provider) {
+        Object id = response == null ? null : response.get("id");
+        if ((id instanceof Integer || id instanceof Long) && ((Number) id).longValue() > 0) {
+            return ((Number) id).longValue();
+        }
+        throw new IllegalStateException(provider + " did not return a valid PR comment ID");
+    }
+
     /**
      * Attaches an artifact (test screenshot, trace, log file, …) to a pull
      * request as a Markdown-rendered comment.

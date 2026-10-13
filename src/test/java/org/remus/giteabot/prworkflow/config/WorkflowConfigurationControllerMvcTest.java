@@ -44,7 +44,7 @@ class WorkflowConfigurationControllerMvcTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void agenticReviewProgressDefaultsToUncheckedAndDescribesGiteaSupport() throws Exception {
+    void agenticReviewProgressDefaultsToUncheckedAndDescribesLifecycle() throws Exception {
         MockMvc mvc = MockMvcBuilders.webAppContextSetup(wac).apply(springSecurity()).build();
         Long cfgId = tx.execute(s -> {
             WorkflowConfiguration cfg = new WorkflowConfiguration();
@@ -61,7 +61,7 @@ class WorkflowConfigurationControllerMvcTest {
                 "<input[^>]*id=\"param-agentic-review-enableProgressComments\"[^>]*>").matcher(html);
         assertTrue(input.find(), "The agentic-review option must render a progress checkbox");
         org.junit.jupiter.api.Assertions.assertFalse(input.group().contains("checked"));
-        assertTrue(html.contains("当前仅支持 Gitea"));
+        assertTrue(html.contains("审查或追问期间持续更新同一条进度评论"));
     }
 
     @Test

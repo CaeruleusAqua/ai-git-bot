@@ -21,7 +21,7 @@ context-aware feedback and are willing to spend more time and tokens per review.
 - Focuses on the files that matter first, so it handles large PRs without
   drowning in noise.
 - Posts a single Markdown review comment with its findings.
-- Optionally updates one Gitea progress comment with the latest activity,
+- Optionally updates one progress comment with the latest activity,
   round and completed inspection tool-call counts, start time, and elapsed time.
 - Optionally submits a formal review decision (approve / request changes) — see
   below.
@@ -38,7 +38,7 @@ PR Review**.
 | Setting | Type | Default | What it controls |
 |---|---|---|---|
 | `maxToolRounds` | integer | `12` | How much exploring the bot may do (1–30). Higher means deeper analysis at higher cost. |
-| `enableProgressComments` | boolean | `false` | Create and update one progress comment per review run. Currently supported only by Gitea. Activity updates are at least 15 seconds apart; the final update is immediate. |
+| `enableProgressComments` | boolean | `false` | Create and update one progress comment per review or clarification. Supported by GitHub, Gitea, GitLab, and Bitbucket Cloud. Activity updates are at least 15 seconds apart; the final update is immediate. |
 | `enableFormalReviewDecision` | boolean | `false` | Let the bot approve or request changes, not just comment. |
 | `formalReviewDecisionPrompt` | text | *(built-in default)* | Criteria the model uses to classify findings by severity. Only used when the decision is enabled. |
 | `blockerThreshold` | integer | *(empty)* | Maximum allowed `BLOCKER` findings for a formal `APPROVE`. Empty means ignored. |

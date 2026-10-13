@@ -10,7 +10,6 @@ import org.remus.giteabot.prworkflow.WorkflowParamField;
 import org.remus.giteabot.prworkflow.WorkflowParamsSchema;
 import org.remus.giteabot.prworkflow.WorkflowResult;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
-import org.remus.giteabot.repository.RepositoryType;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -75,7 +74,7 @@ public class AgentReviewWorkflow implements PrWorkflow {
                         "Show review progress",
                         WorkflowParamField.ParamType.BOOLEAN, false,
                         "false",
-                        "Creates one progress comment and updates it during review. Currently only Gitea is supported."),
+                        "Creates one progress comment and updates it during review or clarification."),
                 new WorkflowParamField(AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION,
                         "Enable formal review decision",
                         WorkflowParamField.ParamType.BOOLEAN, false,
@@ -115,7 +114,7 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         Map<String, Object> params = resolveParams(bot);
         int maxToolRounds = intParam(params, AgentReviewParam.MAX_TOOL_ROUNDS, DEFAULT_MAX_TOOL_ROUNDS);
-        boolean enableProgressComments = progressCommentsEnabled(bot, params);
+        boolean enableProgressComments = boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false);
         boolean enableFormalDecision = boolParam(params, AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION, false);
         String decisionPrompt = strParam(params, AgentReviewParam.FORMAL_REVIEW_DECISION_PROMPT,
                 DEFAULT_FORMAL_REVIEW_DECISION_PROMPT);
@@ -148,7 +147,7 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         AgentReviewService.ReviewResult answered = serviceFactory.create(bot)
                 .answerClarification(context.payload(), userQuestion, maxToolRounds,
-                        progressCommentsEnabled(bot, params));
+                        boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false));
 
         WorkflowResult result = switch (answered) {
             case POSTED -> WorkflowResult.success("Clarification posted");
@@ -162,12 +161,6 @@ public class AgentReviewWorkflow implements PrWorkflow {
     private Map<String, Object> resolveParams(Bot bot) {
         if (bot.getWorkflowConfiguration() == null) return Map.of();
         return selectionService.resolveParams(bot.getWorkflowConfiguration().getId(), KEY);
-    }
-
-    private boolean progressCommentsEnabled(Bot bot, Map<String, Object> params) {
-        return boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false)
-                && bot.getGitIntegration() != null
-                && bot.getGitIntegration().getProviderType() == RepositoryType.GITEA;
     }
 
     private int intParam(Map<String, Object> params, AgentReviewParam name, int fallback) {

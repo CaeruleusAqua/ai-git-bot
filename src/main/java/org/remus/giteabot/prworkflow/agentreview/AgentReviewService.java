@@ -172,7 +172,7 @@ public class AgentReviewService {
      *                              classification
      * @param severityThresholds    optional per-severity thresholds used to
      *                              compute the final review action
-     * @param enableProgressComments whether to create and update a Gitea progress comment
+     * @param enableProgressComments whether to create and update a pull-request progress comment
      * @return whether a review was posted, no diff was available, or the review failed
      */
     public ReviewResult reviewPullRequest(WebhookPayload payload, int maxToolRounds,

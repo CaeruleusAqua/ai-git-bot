@@ -132,12 +132,29 @@ public class GitLabApiClient implements RepositoryApiClient {
     @Override
     public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting merge request note on MR !{} in {}/{}", pullNumber, owner, repo);
+        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
+    }
+
+    @Override
+    public long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+        Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
+        return RepositoryApiClient.requireCommentId(response, "GitLab");
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
         String projectPath = encodeProjectPath(owner, repo);
-        gitlabRestClient.post()
+        gitlabRestClient.put()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/notes/{note_id}",
+                        projectPath, pullNumber, commentId)
+                .body(Map.of("body", body)).retrieve().toBodilessEntity();
+    }
+
+    private RestClient.ResponseSpec commentCreationRequest(String owner, String repo, Long pullNumber, String body) {
+        String projectPath = encodeProjectPath(owner, repo);
+        return gitlabRestClient.post()
                 .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/notes", projectPath, pullNumber)
-                .body(Map.of("body", body))
-                .retrieve()
-                .toBodilessEntity();
+                .body(Map.of("body", body)).retrieve();
     }
 
     /**

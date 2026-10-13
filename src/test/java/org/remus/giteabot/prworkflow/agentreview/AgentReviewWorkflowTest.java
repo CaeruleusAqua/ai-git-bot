@@ -63,12 +63,12 @@ class AgentReviewWorkflowTest {
                 .filter(field -> field.name().equals("enableProgressComments")).findFirst().orElseThrow();
         assertEquals(WorkflowParamField.ParamType.BOOLEAN, progress.type());
         assertEquals("false", progress.defaultValue());
-        org.assertj.core.api.Assertions.assertThat(progress.description()).contains("only Gitea");
+        org.assertj.core.api.Assertions.assertThat(progress.description()).contains("review or clarification");
     }
 
     @ParameterizedTest
     @EnumSource(RepositoryType.class)
-    void progressIsEnabledOnlyWhenSelectedForGitea(RepositoryType provider) {
+    void progressIsEnabledForEveryProviderWhenSelected(RepositoryType provider) {
         Bot bot = new Bot();
         var cfg = new org.remus.giteabot.prworkflow.config.WorkflowConfiguration();
         cfg.setId(7L);
@@ -92,8 +92,8 @@ class AgentReviewWorkflowTest {
         assertEquals(WorkflowResultStatus.SUCCESS, workflow().run(clarification).status());
 
         verify(service).reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(), any(),
-                eq(1L), isNull(), eq(provider == RepositoryType.GITEA));
-        verify(service).answerClarification(any(), anyString(), anyInt(), eq(provider == RepositoryType.GITEA));
+                eq(1L), isNull(), eq(true));
+        verify(service).answerClarification(any(), anyString(), anyInt(), eq(true));
     }
 
     @Test

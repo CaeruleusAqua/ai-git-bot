@@ -316,12 +316,9 @@ public class GiteaApiClient implements RepositoryApiClient {
                 .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, pullNumber)
                 .body(new CommentRequest(body))
                 .retrieve().body(Map.class);
-        Object id = response == null ? null : response.get("id");
-        if ((id instanceof Integer || id instanceof Long) && ((Number) id).longValue() > 0) {
-            log.info("Comment posted successfully");
-            return ((Number) id).longValue();
-        }
-        throw new IllegalStateException("Gitea did not return a valid PR comment ID");
+        long id = RepositoryApiClient.requireCommentId(response, "Gitea");
+        log.info("Comment posted successfully");
+        return id;
     }
 
     @Override
