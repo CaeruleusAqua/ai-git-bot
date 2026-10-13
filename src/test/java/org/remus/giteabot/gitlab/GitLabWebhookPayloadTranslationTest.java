@@ -146,6 +146,9 @@ class GitLabWebhookPayloadTranslationTest {
         mr.put("iid", 1);
         mr.put("title", "Test MR");
         mr.put("description", "Some changes");
+        mr.put("source_branch", "feature/progress-review");
+        mr.put("target_branch", "main");
+        mr.put("last_commit", Map.of("id", "abc123"));
 
         Map<String, Object> project = new HashMap<>();
         project.put("id", 1);
@@ -172,6 +175,11 @@ class GitLabWebhookPayloadTranslationTest {
 
         assertNotNull(result.getPullRequest());
         assertEquals(1L, result.getPullRequest().getNumber());
+        assertNotNull(result.getPullRequest().getHead());
+        assertEquals("feature/progress-review", result.getPullRequest().getHead().getRef());
+        assertEquals("abc123", result.getPullRequest().getHead().getSha());
+        assertNotNull(result.getPullRequest().getBase());
+        assertEquals("main", result.getPullRequest().getBase().getRef());
     }
 
     @Test
