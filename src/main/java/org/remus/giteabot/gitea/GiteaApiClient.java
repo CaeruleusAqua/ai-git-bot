@@ -306,13 +306,30 @@ public class GiteaApiClient implements RepositoryApiClient {
 
     @Override
     public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+        createPullRequestComment(owner, repo, pullNumber, body);
+    }
+
+    @Override
+    public long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        giteaRestClient.post()
+        Map<?, ?> response = giteaRestClient.post()
                 .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, pullNumber)
                 .body(new CommentRequest(body))
-                .retrieve()
-                .toBodilessEntity();
-        log.info("Comment posted successfully");
+                .retrieve().body(Map.class);
+        Object id = response == null ? null : response.get("id");
+        if ((id instanceof Integer || id instanceof Long) && ((Number) id).longValue() > 0) {
+            log.info("Comment posted successfully");
+            return ((Number) id).longValue();
+        }
+        throw new IllegalStateException("Gitea did not return a valid PR comment ID");
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        giteaRestClient.patch()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/comments/{id}", owner, repo, commentId)
+                .body(new CommentRequest(body))
+                .retrieve().toBodilessEntity();
     }
 
     /**

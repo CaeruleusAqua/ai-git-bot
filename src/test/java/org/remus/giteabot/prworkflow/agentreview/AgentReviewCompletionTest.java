@@ -33,6 +33,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -42,6 +43,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -97,10 +99,67 @@ class AgentReviewCompletionTest {
                 .thenReturn(exploration(1), new ChatTurn("", List.of(), reason, 78_886, 16_384));
 
         AgentReviewService.ReviewResult reviewed = service.reviewPullRequest(payload, 1, false, null,
-                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
         assertThat(reviewed).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         assertNothingPublished();
+    }
+
+    @Test
+    void updatesOneProgressCommentAndPublishesTheFinalReviewSeparately() {
+        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                .thenReturn(42L);
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenReturn(exploration(1), ChatTurn.text("Review complete.\n{\"blocker\":2,\"medium\":0,\"low\":0}"));
+
+        assertThat(service.reviewPullRequest(payload, 1, true, null,
+                new AgentReviewService.SeverityThresholds(0, null, null), 1L, null, true))
+                .isEqualTo(AgentReviewService.ReviewResult.POSTED);
+
+        verify(repositoryClient).createPullRequestComment(eq("owner"), eq("repo"), eq(1L),
+                argThat(body -> body.contains("Preparing repository")));
+        verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                argThat(body -> body.contains("Review completed")
+                        && body.contains("Rounds: 2") && body.contains("Inspection tool calls completed: 1")));
+        verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L),
+                argThat(body -> body.contains("Review complete.")), eq(PostReviewAction.REQUEST_CHANGES));
+    }
+
+    @Test
+    void failedReviewClosesItsProgressCommentWithoutPublishingAPartialReview() {
+        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                .thenReturn(42L);
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenReturn(new ChatTurn("Partial finding", List.of(), StopReason.MAX_TOKENS, 10, 5));
+
+        assertThat(service.reviewPullRequest(payload, 1, false, null,
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
+                .isEqualTo(AgentReviewService.ReviewResult.FAILED);
+
+        verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                argThat(body -> body.contains("Review failed")));
+        verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
+    }
+
+    @Test
+    void finalProgressFailureClearlyReportsThatTheReviewWasAlreadyPosted() {
+        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                .thenReturn(42L);
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("Review complete."));
+        doAnswer(invocation -> {
+            if (invocation.<String>getArgument(4).contains("Review completed")) {
+                throw new IllegalStateException("Gitea unavailable");
+            }
+            return null;
+        }).when(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+
+        assertThatThrownBy(() -> service.reviewPullRequest(payload, 1, false, null,
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("The review was posted, but its final progress update failed")
+                .hasCauseInstanceOf(IllegalStateException.class);
+        verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
     }
 
     @Test
@@ -109,7 +168,7 @@ class AgentReviewCompletionTest {
                 .thenReturn(exploration(1), exploration(2), exploration(3));
 
         AgentReviewService.ReviewResult reviewed = service.reviewPullRequest(payload, 1, false, null,
-                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
         assertThat(reviewed).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         assertNothingPublished();
@@ -136,7 +195,7 @@ class AgentReviewCompletionTest {
         AgentReviewService.ReviewResult result = clarification
                 ? service.answerClarification(payload, "Why was this changed?", 1)
                 : service.reviewPullRequest(payload, 1, false, null,
-                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
         assertThat(result).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         assertNothingPublished();
@@ -151,7 +210,7 @@ class AgentReviewCompletionTest {
         List<AgentRunContext.ToolCallRecord> toolCalls = new ArrayList<>();
 
         AgentReviewService.ReviewResult reviewed = service.reviewPullRequest(payload, 1, true, "Review criteria",
-                new AgentReviewService.SeverityThresholds(0, 0, 0), 1L, toolCalls::add);
+                new AgentReviewService.SeverityThresholds(0, 0, 0), 1L, toolCalls::add, false);
 
         assertThat(reviewed).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         assertThat(toolCalls).isEmpty();
@@ -175,13 +234,15 @@ class AgentReviewCompletionTest {
                 .thenReturn(exploration(1), ChatTurn.text("No correctness issues found."));
 
         AgentReviewService.ReviewResult reviewed = service.reviewPullRequest(payload, 1, false, null,
-                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
         assertThat(reviewed).isEqualTo(AgentReviewService.ReviewResult.POSTED);
         verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L),
                 argThat(body -> body.contains("No correctness issues found.") && !body.contains("Let me check")),
                 eq(PostReviewAction.NONE));
         verify(workspaceService).cleanupWorkspace(WORKSPACE);
+        verify(repositoryClient, never()).createPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+        verify(repositoryClient, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
     }
 
     @ParameterizedTest
@@ -192,7 +253,7 @@ class AgentReviewCompletionTest {
         AgentReviewService.ReviewResult result = clarification
                 ? service.answerClarification(payload, "Why was this changed?", 1)
                 : service.reviewPullRequest(payload, 1, false, null,
-                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
         assertThat(result).isEqualTo(AgentReviewService.ReviewResult.NO_DIFF);
         verifyNoInteractions(aiClient, workspaceService, eventHooks);

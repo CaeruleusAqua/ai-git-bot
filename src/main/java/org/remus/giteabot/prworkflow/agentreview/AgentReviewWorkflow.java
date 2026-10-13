@@ -10,6 +10,7 @@ import org.remus.giteabot.prworkflow.WorkflowParamField;
 import org.remus.giteabot.prworkflow.WorkflowParamsSchema;
 import org.remus.giteabot.prworkflow.WorkflowResult;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
+import org.remus.giteabot.repository.RepositoryType;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -70,6 +71,11 @@ public class AgentReviewWorkflow implements PrWorkflow {
                         WorkflowParamField.ParamType.INTEGER, false,
                         String.valueOf(DEFAULT_MAX_TOOL_ROUNDS),
                         "Upper bound on how many explore/answer rounds the agent may take."),
+                new WorkflowParamField(AgentReviewParam.ENABLE_PROGRESS_COMMENTS,
+                        "Show review progress",
+                        WorkflowParamField.ParamType.BOOLEAN, false,
+                        "false",
+                        "Creates one progress comment and updates it during review. Currently only Gitea is supported."),
                 new WorkflowParamField(AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION,
                         "Enable formal review decision",
                         WorkflowParamField.ParamType.BOOLEAN, false,
@@ -109,6 +115,9 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         Map<String, Object> params = resolveParams(bot);
         int maxToolRounds = intParam(params, AgentReviewParam.MAX_TOOL_ROUNDS, DEFAULT_MAX_TOOL_ROUNDS);
+        boolean enableProgressComments = boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false)
+                && bot.getGitIntegration() != null
+                && bot.getGitIntegration().getProviderType() == RepositoryType.GITEA;
         boolean enableFormalDecision = boolParam(params, AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION, false);
         String decisionPrompt = strParam(params, AgentReviewParam.FORMAL_REVIEW_DECISION_PROMPT,
                 DEFAULT_FORMAL_REVIEW_DECISION_PROMPT);
@@ -121,7 +130,7 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         AgentReviewService.ReviewResult reviewed = serviceFactory.create(bot)
                 .reviewPullRequest(payload, maxToolRounds, enableFormalDecision, decisionPrompt, thresholds,
-                        context.runId(), context.auditToolCallConsumer());
+                        context.runId(), context.auditToolCallConsumer(), enableProgressComments);
 
         WorkflowResult result = switch (reviewed) {
             case POSTED -> WorkflowResult.success("Agentic review posted");

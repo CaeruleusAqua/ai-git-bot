@@ -4,15 +4,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
+import org.remus.giteabot.admin.GitIntegration;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowResult;
 import org.remus.giteabot.prworkflow.WorkflowResultStatus;
+import org.remus.giteabot.prworkflow.WorkflowParamField;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
+import org.remus.giteabot.repository.RepositoryType;
 
 import java.util.Map;
 
@@ -53,8 +57,36 @@ class AgentReviewWorkflowTest {
         AgentReviewWorkflow wf = workflow();
         assertEquals("agentic-review", wf.key());
         assertEquals(PrWorkflowCategory.REVIEW, wf.category());
-        assertEquals(6, wf.paramsSchema().fields().size());
+        assertEquals(7, wf.paramsSchema().fields().size());
         assertFalse(wf.paramsSchema().isEmpty());
+        var progress = wf.paramsSchema().fields().stream()
+                .filter(field -> field.name().equals("enableProgressComments")).findFirst().orElseThrow();
+        assertEquals(WorkflowParamField.ParamType.BOOLEAN, progress.type());
+        assertEquals("false", progress.defaultValue());
+        org.assertj.core.api.Assertions.assertThat(progress.description()).contains("only Gitea");
+    }
+
+    @ParameterizedTest
+    @EnumSource(RepositoryType.class)
+    void progressIsEnabledOnlyWhenSelectedForGitea(RepositoryType provider) {
+        Bot bot = new Bot();
+        var cfg = new org.remus.giteabot.prworkflow.config.WorkflowConfiguration();
+        cfg.setId(7L);
+        bot.setWorkflowConfiguration(cfg);
+        GitIntegration git = new GitIntegration();
+        git.setProviderType(provider);
+        bot.setGitIntegration(git);
+        when(selectionService.resolveParams(7L, "agentic-review"))
+                .thenReturn(Map.of("enableProgressComments", true));
+        AgentReviewService service = mock(AgentReviewService.class);
+        when(serviceFactory.create(bot)).thenReturn(service);
+        when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(), any(),
+                anyLong(), any(), anyBoolean())).thenReturn(AgentReviewService.ReviewResult.POSTED);
+
+        assertEquals(WorkflowResultStatus.SUCCESS, workflow().run(context(bot)).status());
+
+        verify(service).reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(), any(),
+                eq(1L), isNull(), eq(provider == RepositoryType.GITEA));
     }
 
     @Test
@@ -62,7 +94,7 @@ class AgentReviewWorkflowTest {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
         when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(),
-                any(AgentReviewService.SeverityThresholds.class), anyLong(), any()))
+                any(AgentReviewService.SeverityThresholds.class), anyLong(), any(), anyBoolean()))
                 .thenReturn(AgentReviewService.ReviewResult.POSTED);
 
         Bot bot = new Bot();
@@ -72,7 +104,7 @@ class AgentReviewWorkflowTest {
         assertEquals(WorkflowResultStatus.SUCCESS, result.status());
         verify(service).reviewPullRequest(any(), eq(12), eq(false),
                 eq(AgentReviewWorkflow.DEFAULT_FORMAL_REVIEW_DECISION_PROMPT),
-                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull());
+                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull(), eq(false));
     }
 
     @Test
@@ -87,7 +119,7 @@ class AgentReviewWorkflowTest {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
         lenient().when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(),
-                        any(AgentReviewService.SeverityThresholds.class), anyLong(), any()))
+                        any(AgentReviewService.SeverityThresholds.class), anyLong(), any(), anyBoolean()))
                 .thenReturn(AgentReviewService.ReviewResult.NO_DIFF);
 
         WorkflowResult result = workflow().run(context(bot));
@@ -95,7 +127,7 @@ class AgentReviewWorkflowTest {
         assertEquals(WorkflowResultStatus.SKIPPED, result.status());
         verify(service).reviewPullRequest(any(), eq(5), eq(false),
                 eq(AgentReviewWorkflow.DEFAULT_FORMAL_REVIEW_DECISION_PROMPT),
-                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull());
+                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull(), eq(false));
     }
 
     @Test
@@ -103,7 +135,7 @@ class AgentReviewWorkflowTest {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
         when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(),
-                any(AgentReviewService.SeverityThresholds.class), anyLong(), any()))
+                any(AgentReviewService.SeverityThresholds.class), anyLong(), any(), anyBoolean()))
                 .thenReturn(AgentReviewService.ReviewResult.FAILED);
 
         WorkflowResult result = workflow().run(context(new Bot()));
@@ -144,7 +176,7 @@ class AgentReviewWorkflowTest {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
         when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(),
-                any(AgentReviewService.SeverityThresholds.class), anyLong(), any()))
+                any(AgentReviewService.SeverityThresholds.class), anyLong(), any(), anyBoolean()))
                 .thenReturn(AgentReviewService.ReviewResult.POSTED);
 
         WorkflowResult result = workflow().run(context(bot));
@@ -152,7 +184,7 @@ class AgentReviewWorkflowTest {
         assertEquals(WorkflowResultStatus.SUCCESS, result.status());
         verify(service).reviewPullRequest(any(), eq(8), eq(true),
                 eq("Custom criteria here"),
-                eq(new AgentReviewService.SeverityThresholds(0, 2, 5)), eq(1L), isNull());
+                eq(new AgentReviewService.SeverityThresholds(0, 2, 5)), eq(1L), isNull(), eq(false));
     }
 
     @Test
@@ -168,12 +200,12 @@ class AgentReviewWorkflowTest {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
         when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(),
-                any(AgentReviewService.SeverityThresholds.class), anyLong(), any()))
+                any(AgentReviewService.SeverityThresholds.class), anyLong(), any(), anyBoolean()))
                 .thenReturn(AgentReviewService.ReviewResult.POSTED);
 
         workflow().run(context(bot));
 
         verify(service).reviewPullRequest(any(), anyInt(), eq(false), anyString(),
-                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull());
+                eq(new AgentReviewService.SeverityThresholds(null, null, null)), eq(1L), isNull(), eq(false));
     }
 }

@@ -127,6 +127,16 @@ public interface RepositoryApiClient {
      */
     void postPullRequestComment(String owner, String repo, Long pullNumber, String body);
 
+    /** Creates a top-level PR comment and returns the provider's comment ID. */
+    default long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+        throw new UnsupportedOperationException("Creating editable PR comments is not supported");
+    }
+
+    /** Updates a top-level PR comment owned by the authenticated account. */
+    default void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        throw new UnsupportedOperationException("Updating PR comments is not supported");
+    }
+
     /**
      * Attaches an artifact (test screenshot, trace, log file, …) to a pull
      * request as a Markdown-rendered comment.

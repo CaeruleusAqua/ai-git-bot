@@ -21,12 +21,14 @@ context-aware feedback and are willing to spend more time and tokens per review.
 - Focuses on the files that matter first, so it handles large PRs without
   drowning in noise.
 - Posts a single Markdown review comment with its findings.
+- Optionally updates one Gitea progress comment with the latest activity,
+  round and completed inspection tool-call counts, start time, and elapsed time.
 - Optionally submits a formal review decision (approve / request changes) — see
   below.
 
 The bot is **read-only**: this workflow never commits, pushes, creates branches,
-or changes your code. Its only outputs are the review comment and, when you
-enable it, the formal review decision.
+or changes your code. Its outputs are the review comment and, when enabled, the
+progress comment and formal review decision.
 
 ## Settings
 
@@ -36,11 +38,15 @@ PR Review**.
 | Setting | Type | Default | What it controls |
 |---|---|---|---|
 | `maxToolRounds` | integer | `12` | How much exploring the bot may do (1–30). Higher means deeper analysis at higher cost. |
+| `enableProgressComments` | boolean | `false` | Create and update one progress comment per review run. Currently supported only by Gitea. Activity updates are at least 15 seconds apart; the final update is immediate. |
 | `enableFormalReviewDecision` | boolean | `false` | Let the bot approve or request changes, not just comment. |
 | `formalReviewDecisionPrompt` | text | *(built-in default)* | Criteria the model uses to classify findings by severity. Only used when the decision is enabled. |
 | `blockerThreshold` | integer | *(empty)* | Maximum allowed `BLOCKER` findings for a formal `APPROVE`. Empty means ignored. |
 | `mediumThreshold` | integer | *(empty)* | Maximum allowed `MEDIUM` findings for a formal `APPROVE`. Empty means ignored. |
 | `lowThreshold` | integer | *(empty)* | Maximum allowed `LOW` findings for a formal `APPROVE`. Empty means ignored. |
+
+Progress comments show timestamps in UTC without fractional seconds. Review
+decisions and findings remain in the separate final review.
 
 ### Formal review decision
 
