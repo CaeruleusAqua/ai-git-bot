@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -60,7 +60,46 @@ class ReviewProgressTest {
     }
 
     @Test
-    void failedCommentWriteIsExposed() {
+    void failedCreationDisablesProgressWithoutStoppingTheRun() {
+        RepositoryApiClient client = mock(RepositoryApiClient.class);
+        when(client.createPullRequestComment(anyString(), anyString(), anyLong(), anyString()))
+                .thenThrow(new IllegalStateException("Comment creation denied"));
+        ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, Clock.systemUTC());
+
+        assertThatCode(() -> {
+            progress.start();
+            progress.accept(new ProgressUpdate(1, "Waiting for model", 0));
+            progress.finish(true);
+        }).doesNotThrowAnyException();
+
+        verify(client, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
+    }
+
+    @Test
+    void failedActivityUpdateIsThrottledAndLaterUpdatesContinue() {
+        RepositoryApiClient client = mock(RepositoryApiClient.class);
+        when(client.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
+        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-13T00:00:00Z"));
+        Clock clock = mock(Clock.class);
+        when(clock.instant()).thenAnswer(invocation -> now.get());
+        ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, clock);
+        progress.start();
+        doThrow(new IllegalStateException("Comment update denied")).doNothing().when(client)
+                .updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+
+        assertThatCode(() -> progress.accept(new ProgressUpdate(1, "Waiting for model", 0)))
+                .doesNotThrowAnyException();
+        now.set(now.get().plusSeconds(14));
+        progress.accept(new ProgressUpdate(1, "Repository inspection completed", 1));
+        verify(client).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+        now.set(now.get().plusSeconds(1));
+        progress.accept(new ProgressUpdate(2, "Waiting for model", 0));
+        progress.finish(true);
+        verify(client, times(3)).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+    }
+
+    @Test
+    void failedTerminalUpdateDoesNotThrow() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
         when(client.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
         ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, Clock.systemUTC());
@@ -68,8 +107,9 @@ class ReviewProgressTest {
         doThrow(new IllegalStateException("Comment update denied")).when(client)
                 .updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
 
-        assertThatThrownBy(() -> progress.accept(new ProgressUpdate(1, "Waiting for model", 0)))
-                .isInstanceOf(IllegalStateException.class).hasMessage("Comment update denied");
+        assertThatCode(() -> progress.finish(false)).doesNotThrowAnyException();
+        verify(client).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                argThat(body -> body.contains("Review failed")));
     }
 
     @Test

@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -44,6 +43,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -141,25 +141,49 @@ class AgentReviewCompletionTest {
         verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"create", "activity", "final"})
+    void progressFailuresDoNotChangeSuccessfulReviewOutcome(String failedWrite) {
+        if (failedWrite.equals("create")) {
+            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                    .thenThrow(new IllegalStateException("Comment creation denied"));
+        } else {
+            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                    .thenReturn(42L);
+            doAnswer(invocation -> {
+                boolean terminal = invocation.<String>getArgument(4).contains("Review completed");
+                if (terminal == failedWrite.equals("final")) {
+                    throw new IllegalStateException("Comment update denied");
+                }
+                return null;
+            }).when(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+        }
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("Review complete."));
+
+        assertThat(service.reviewPullRequest(payload, 1, false, null,
+                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
+                .isEqualTo(AgentReviewService.ReviewResult.POSTED);
+        verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
+        verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+    }
+
     @Test
-    void finalProgressFailureClearlyReportsThatTheReviewWasAlreadyPosted() {
+    void finalProgressFailureDoesNotHideTheOriginalReviewFailure() {
         when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
                 .thenReturn(42L);
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
-                .thenReturn(ChatTurn.text("Review complete."));
-        doAnswer(invocation -> {
-            if (invocation.<String>getArgument(4).contains("Review completed")) {
-                throw new IllegalStateException("Gitea unavailable");
-            }
-            return null;
-        }).when(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L), anyString());
+                .thenThrow(new IllegalStateException("Model request failed"));
+        doThrow(new IllegalStateException("Comment update denied")).when(repositoryClient)
+                .updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                        argThat(body -> body.contains("Review failed")));
 
-        assertThatThrownBy(() -> service.reviewPullRequest(payload, 1, false, null,
+        assertThat(service.reviewPullRequest(payload, 1, false, null,
                 new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("The review was posted, but its final progress update failed")
-                .hasCauseInstanceOf(IllegalStateException.class);
-        verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
+                .isEqualTo(AgentReviewService.ReviewResult.FAILED);
+        verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
+        verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                argThat(body -> body.contains("Review failed")));
     }
 
     @Test

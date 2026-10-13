@@ -48,6 +48,11 @@ PR Review**.
 Progress comments show timestamps in UTC without fractional seconds. Review
 decisions and findings remain in the separate final review.
 
+Progress comments are optional: creation or update failures are logged and do
+not change the review outcome. If creation fails, that run continues without
+progress. Activity write attempts are at least 15 seconds apart, even after a
+failed update; terminal updates are attempted once immediately.
+
 ### Formal review decision
 
 When `enableFormalReviewDecision` is on, the model classifies its findings as

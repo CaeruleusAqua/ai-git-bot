@@ -286,13 +286,7 @@ public class AgentReviewService {
                 }
             } finally {
                 if (progress != null) {
-                    try {
-                        progress.finish(completed);
-                    } catch (RuntimeException e) {
-                        throw new IllegalStateException(completed
-                                ? "The review was posted, but its final progress update failed"
-                                : "The review failed and its progress comment could not be updated", e);
-                    }
+                    progress.finish(completed);
                 }
             }
         }

@@ -1,5 +1,6 @@
 package org.remus.giteabot.prworkflow.agentreview;
 
+import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.loop.AgentRunContext.ProgressUpdate;
 import org.remus.giteabot.repository.RepositoryApiClient;
 
@@ -11,7 +12,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 import java.util.function.Consumer;
 
-/** Owns one run's progress comment, including its update cadence and terminal state. */
+/** Owns one run's optional progress comment without changing the review outcome. */
+@Slf4j
 final class ReviewProgress implements Consumer<ProgressUpdate> {
 
     /** Activity updates are at least 15 seconds apart; the first activity and terminal state are immediate. */
@@ -42,12 +44,20 @@ final class ReviewProgress implements Consumer<ProgressUpdate> {
     }
 
     void start() {
-        commentId = repositoryClient.createPullRequestComment(owner, repo, prNumber,
-                render(clock.instant()));
+        try {
+            commentId = repositoryClient.createPullRequestComment(owner, repo, prNumber,
+                    render(clock.instant()));
+        } catch (RuntimeException e) {
+            log.warn("Could not create progress comment for PR #{} in {}/{}; continuing without progress",
+                    prNumber, owner, repo, e);
+        }
     }
 
     @Override
     public void accept(ProgressUpdate update) {
+        if (commentId == null) {
+            return;
+        }
         activity = update.activity();
         round = update.round();
         completedToolCalls += update.completedToolCalls();
@@ -55,15 +65,23 @@ final class ReviewProgress implements Consumer<ProgressUpdate> {
         if (lastActivityAt != null && Duration.between(lastActivityAt, now).compareTo(UPDATE_INTERVAL) < 0) {
             return;
         }
-        repositoryClient.updatePullRequestComment(owner, repo, prNumber, commentId, render(now));
         lastActivityAt = now;
+        updateComment(now);
     }
 
     void finish(boolean success) {
         if (commentId != null) {
             activity = success ? "Review completed" : "Review failed";
-            repositoryClient.updatePullRequestComment(owner, repo, prNumber, commentId,
-                    render(clock.instant()));
+            updateComment(clock.instant());
+        }
+    }
+
+    private void updateComment(Instant now) {
+        try {
+            repositoryClient.updatePullRequestComment(owner, repo, prNumber, commentId, render(now));
+        } catch (RuntimeException e) {
+            log.warn("Could not update progress comment {} for PR #{} in {}/{}; review result is unaffected",
+                    commentId, prNumber, owner, repo, e);
         }
     }
 
