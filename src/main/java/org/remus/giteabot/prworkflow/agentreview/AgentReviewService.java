@@ -295,8 +295,10 @@ public class AgentReviewService {
     /**
      * Answers a clarification question about a previously-reviewed PR by running
      * a conversational agent loop. Formal review decisions are not applicable here.
+     * Optional progress comments use the same lifecycle as the initial review.
      */
-    public ReviewResult answerClarification(WebhookPayload payload, String userQuestion, int maxToolRounds) {
+    public ReviewResult answerClarification(WebhookPayload payload, String userQuestion, int maxToolRounds,
+                                           boolean enableProgressComments) {
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
         Long prNumber = payload.getPullRequest().getNumber();
@@ -322,8 +324,14 @@ public class AgentReviewService {
             return ReviewResult.FAILED;
         }
 
+        ReviewProgress progress = enableProgressComments
+                ? new ReviewProgress(repositoryClient, owner, repo, prNumber, Clock.systemUTC()) : null;
+        boolean completed = false;
         Path workspaceDir = null;
         try {
+            if (progress != null) {
+                progress.start();
+            }
             WorkspaceResult wsResult = workspaceService.prepareWorkspace(
                     repositoryClient, owner, repo, headBranch, prNumber);
             if (!wsResult.success()) {
@@ -343,7 +351,7 @@ public class AgentReviewService {
 
             LoopOutcome outcome = runReviewLoop(session, owner, repo, prNumber,
                     workspaceDir, headBranch, systemPrompt, userMessage,
-                    maxToolRounds, diffSummary, null, null, null);
+                    maxToolRounds, diffSummary, null, null, progress);
 
             if (!outcome.success()) {
                 log.warn("Clarification for PR #{} failed; no answer will be published", prNumber);
@@ -358,6 +366,7 @@ public class AgentReviewService {
 
             repositoryClient.postPullRequestComment(owner, repo, prNumber, formatClarification(answer));
             log.info("Clarification answered for PR #{} in {}/{}", prNumber, owner, repo);
+            completed = true;
             return ReviewResult.POSTED;
         } catch (Exception e) {
             log.error("Clarification failed for PR #{} in {}/{}: {}", prNumber, owner, repo, e.getMessage(), e);
@@ -367,8 +376,14 @@ public class AgentReviewService {
                             + "Please try again later.", e);
             return ReviewResult.FAILED;
         } finally {
-            if (workspaceDir != null) {
-                workspaceService.cleanupWorkspace(workspaceDir);
+            try {
+                if (workspaceDir != null) {
+                    workspaceService.cleanupWorkspace(workspaceDir);
+                }
+            } finally {
+                if (progress != null) {
+                    progress.finish(completed);
+                }
             }
         }
     }

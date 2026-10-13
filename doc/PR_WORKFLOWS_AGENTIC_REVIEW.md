@@ -48,10 +48,12 @@ PR Review**.
 Progress comments show timestamps in UTC without fractional seconds. Review
 decisions and findings remain in the separate final review.
 
+The same setting applies to agentic clarification requests. Each request has
+its own progress comment and publishes the final answer separately.
 Progress comments are optional: creation or update failures are logged and do
-not change the review outcome. If creation fails, that run continues without
-progress. Activity write attempts are at least 15 seconds apart, even after a
-failed update; terminal updates are attempted once immediately.
+not change the review or clarification outcome. If creation fails, that run
+continues without progress. Activity write attempts are at least 15 seconds
+apart, even after a failed update; terminal updates are attempted once immediately.
 
 ### Formal review decision
 

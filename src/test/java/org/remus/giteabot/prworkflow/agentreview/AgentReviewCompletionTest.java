@@ -5,10 +5,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
+import org.remus.giteabot.admin.GitIntegration;
 import org.remus.giteabot.agent.loop.AgentRunContext;
 import org.remus.giteabot.agent.session.AgentSessionRepository;
 import org.remus.giteabot.agent.session.AgentSessionService;
@@ -26,10 +28,16 @@ import org.remus.giteabot.eventhook.EventHookPublisher;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.RepositoryType;
+import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowResultStatus;
+import org.remus.giteabot.prworkflow.config.WorkflowConfiguration;
+import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -142,8 +150,9 @@ class AgentReviewCompletionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"create", "activity", "final"})
-    void progressFailuresDoNotChangeSuccessfulReviewOutcome(String failedWrite) {
+    @CsvSource({"create,false", "activity,false", "final,false",
+            "create,true", "activity,true", "final,true"})
+    void progressFailuresDoNotChangeSuccessfulOutcome(String failedWrite, boolean clarification) {
         if (failedWrite.equals("create")) {
             when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
                     .thenThrow(new IllegalStateException("Comment creation denied"));
@@ -161,15 +170,24 @@ class AgentReviewCompletionTest {
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
                 .thenReturn(ChatTurn.text("Review complete."));
 
-        assertThat(service.reviewPullRequest(payload, 1, false, null,
-                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
-                .isEqualTo(AgentReviewService.ReviewResult.POSTED);
-        verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
-        verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+        AgentReviewService.ReviewResult result = clarification
+                ? service.answerClarification(payload, "Why was this changed?", 1, true)
+                : service.reviewPullRequest(payload, 1, false, null,
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true);
+        assertThat(result).isEqualTo(AgentReviewService.ReviewResult.POSTED);
+        if (clarification) {
+            verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
+                    argThat(body -> body.contains("Review complete.")));
+            verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
+        } else {
+            verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
+            verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+        }
     }
 
-    @Test
-    void finalProgressFailureDoesNotHideTheOriginalReviewFailure() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void finalProgressFailureDoesNotHideTheOriginalFailure(boolean clarification) {
         when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
                 .thenReturn(42L);
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
@@ -178,12 +196,53 @@ class AgentReviewCompletionTest {
                 .updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
                         argThat(body -> body.contains("Review failed")));
 
-        assertThat(service.reviewPullRequest(payload, 1, false, null,
-                new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true))
-                .isEqualTo(AgentReviewService.ReviewResult.FAILED);
+        AgentReviewService.ReviewResult result = clarification
+                ? service.answerClarification(payload, "Why was this changed?", 1, true)
+                : service.reviewPullRequest(payload, 1, false, null,
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, true);
+        assertThat(result).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
         verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
                 argThat(body -> body.contains("Review failed")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void clarificationUsesTheSameOptionalProgressSetting(boolean enabled) {
+        Bot bot = new Bot();
+        GitIntegration git = new GitIntegration();
+        git.setProviderType(RepositoryType.GITEA);
+        bot.setGitIntegration(git);
+        WorkflowConfiguration configuration = new WorkflowConfiguration();
+        configuration.setId(7L);
+        bot.setWorkflowConfiguration(configuration);
+        WorkflowSelectionService selections = mock(WorkflowSelectionService.class);
+        when(selections.resolveParams(7L, "agentic-review"))
+                .thenReturn(Map.of("enableProgressComments", enabled));
+        AgentReviewServiceFactory factory = mock(AgentReviewServiceFactory.class);
+        when(factory.create(bot)).thenReturn(service);
+        if (enabled) {
+            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+                    .thenReturn(42L);
+        }
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenReturn(exploration(1), ChatTurn.text("Clarification answer."));
+        PrWorkflowContext context = new PrWorkflowContext(bot, payload, 1L,
+                (name, log) -> { }, () -> false,
+                Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION, "Why was this changed?"), null);
+
+        assertThat(new AgentReviewWorkflow(factory, selections).run(context).status())
+                .isEqualTo(WorkflowResultStatus.SUCCESS);
+        verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
+                argThat(body -> body.contains("Clarification answer.")));
+        if (enabled) {
+            verify(repositoryClient).createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString());
+            verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
+                    argThat(body -> body.contains("Review completed") && body.contains("Rounds: 2")));
+        } else {
+            verify(repositoryClient, never()).createPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+            verify(repositoryClient, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
+        }
     }
 
     @Test
@@ -217,7 +276,7 @@ class AgentReviewCompletionTest {
                 .thenReturn(new ChatTurn("A partial review", List.of(), StopReason.MAX_TOKENS, 100, 32));
 
         AgentReviewService.ReviewResult result = clarification
-                ? service.answerClarification(payload, "Why was this changed?", 1)
+                ? service.answerClarification(payload, "Why was this changed?", 1, false)
                 : service.reviewPullRequest(payload, 1, false, null,
                         new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 
@@ -246,7 +305,7 @@ class AgentReviewCompletionTest {
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
                 .thenReturn(exploration(1), new ChatTurn("", List.of(), StopReason.MAX_TOKENS, 100, 32));
 
-        assertThat(service.answerClarification(payload, "Why was this changed?", 1))
+        assertThat(service.answerClarification(payload, "Why was this changed?", 1, false))
                 .isEqualTo(AgentReviewService.ReviewResult.FAILED);
 
         assertNothingPublished();
@@ -275,7 +334,7 @@ class AgentReviewCompletionTest {
         when(repositoryClient.getPullRequestDiff("owner", "repo", 1L)).thenReturn("");
 
         AgentReviewService.ReviewResult result = clarification
-                ? service.answerClarification(payload, "Why was this changed?", 1)
+                ? service.answerClarification(payload, "Why was this changed?", 1, false)
                 : service.reviewPullRequest(payload, 1, false, null,
                         new AgentReviewService.SeverityThresholds(null, null, null), 1L, null, false);
 

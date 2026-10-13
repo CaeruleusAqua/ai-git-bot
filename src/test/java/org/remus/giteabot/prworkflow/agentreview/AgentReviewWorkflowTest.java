@@ -82,11 +82,18 @@ class AgentReviewWorkflowTest {
         when(serviceFactory.create(bot)).thenReturn(service);
         when(service.reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(), any(),
                 anyLong(), any(), anyBoolean())).thenReturn(AgentReviewService.ReviewResult.POSTED);
+        when(service.answerClarification(any(), anyString(), anyInt(), anyBoolean()))
+                .thenReturn(AgentReviewService.ReviewResult.POSTED);
 
         assertEquals(WorkflowResultStatus.SUCCESS, workflow().run(context(bot)).status());
+        PrWorkflowContext clarification = new PrWorkflowContext(bot, new WebhookPayload(), 1L,
+                (name, log) -> { }, () -> false,
+                Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION, "Why was this changed?"), null);
+        assertEquals(WorkflowResultStatus.SUCCESS, workflow().run(clarification).status());
 
         verify(service).reviewPullRequest(any(), anyInt(), anyBoolean(), anyString(), any(),
                 eq(1L), isNull(), eq(provider == RepositoryType.GITEA));
+        verify(service).answerClarification(any(), anyString(), anyInt(), eq(provider == RepositoryType.GITEA));
     }
 
     @Test
@@ -149,7 +156,7 @@ class AgentReviewWorkflowTest {
                                          WorkflowResultStatus expected) {
         AgentReviewService service = mock(AgentReviewService.class);
         when(serviceFactory.create(any())).thenReturn(service);
-        when(service.answerClarification(any(), anyString(), anyInt())).thenReturn(serviceResult);
+        when(service.answerClarification(any(), anyString(), anyInt(), anyBoolean())).thenReturn(serviceResult);
         PrWorkflowContext context = new PrWorkflowContext(new Bot(), new WebhookPayload(), 1L,
                 (name, log) -> { }, () -> false,
                 Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION, "Why was this changed?"), null);
