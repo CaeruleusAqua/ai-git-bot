@@ -112,6 +112,41 @@ class ReviewRoundBudgetReminderTest {
     }
 
     @ParameterizedTest
+    @CsvSource({
+            "14,true,3,12,10", "14,false,3,12,1",
+            "60,true,10,30,28", "60,false,10,60,8",
+            "60,true,1,60,58", "60,false,60,1,58",
+            "3,true,100,100,1", "2,true,3,1,1", "4,false,2,12,1"
+    })
+    void remindsBeforeTheFirstApplicableBudgetAndOnlyOnce(int maxRounds, boolean nativeMode,
+            int maxContextRounds, int maxToolRounds, int reminderRound) {
+        var requests = new ArrayList<Request>();
+        int finishRound = Math.min(maxRounds, (nativeMode ? maxToolRounds : maxContextRounds) + 1);
+
+        LoopOutcome outcome = runReview(new Scenario(maxRounds, nativeMode, finishRound,
+                maxContextRounds, maxToolRounds), requests, false);
+
+        assertThat(outcome.success()).isTrue();
+        assertThat(requests).hasSize(finishRound);
+        assertThat(requests.subList(0, reminderRound - 1)).allSatisfy(request ->
+                assertThat(reminders(request)).isEmpty());
+        assertThat(requests.subList(reminderRound - 1, finishRound)).allSatisfy(request ->
+                assertThat(reminders(request)).hasSize(1));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void keepsStrategyBudgetExhaustionAsFailureAfterTheReminder(boolean nativeMode) {
+        var requests = new ArrayList<Request>();
+
+        LoopOutcome outcome = runReview(new Scenario(60, nativeMode, 0, 3, 12), requests, false);
+
+        assertThat(outcome.success()).isFalse();
+        assertThat(requests).hasSize(nativeMode ? 13 : 4);
+        assertThat(reminders(requests.getLast())).hasSize(1);
+    }
+
+    @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void keepsClosingReminderWhenFinalTurnRetriesAfterCompaction(boolean nativeMode) {
         var requests = new ArrayList<Request>();
@@ -164,11 +199,11 @@ class ReviewRoundBudgetReminderTest {
         String fileContent = retryFinalTurn ? "FILE-CONTENT".repeat(11000) : "FILE-CONTENT";
         var strategy = new ReviewAgentStrategy("system", router, new ToolCatalog(new AgentConfigProperties()),
                 null, Set.of("cat"), new AiResponseParser(), new BranchSwitcher(mock(ToolExecutionService.class)),
-                (owner, repo, ref, files) -> fileContent, 100);
+                (owner, repo, ref, files) -> fileContent, scenario.maxContextRounds(), scenario.maxToolRounds());
         var session = new AgentSession("owner", "repo", 76L, "Review example");
         var context = new AgentRunContext(session, "owner", "repo", 76L, Path.of("/tmp/ws"), "main");
         var loop = new AgentLoop(client, new AgentSessionService(mock(AgentSessionRepository.class)),
-                new AgentBudget(scenario.maxRounds(), 100, 2, 4000, 8000, 120000, 200000, 0.7));
+                new AgentBudget(scenario.maxRounds(), scenario.maxContextRounds(), 2, 4000, 8000, 120000, 200000, 0.7));
         return loop.run(context, "Review the change", strategy);
     }
 
@@ -178,6 +213,11 @@ class ReviewRoundBudgetReminderTest {
                 .filter(content -> content != null && content.contains(REMINDER_MARKER)).toList();
     }
 
-    private record Scenario(int maxRounds, boolean nativeMode, int finishRound) {}
+    private record Scenario(int maxRounds, boolean nativeMode, int finishRound,
+                            int maxContextRounds, int maxToolRounds) {
+        private Scenario(int maxRounds, boolean nativeMode, int finishRound) {
+            this(maxRounds, nativeMode, finishRound, 100, 100);
+        }
+    }
     private record Request(List<AiMessage> history, String message, List<ToolDescriptor> tools, String systemPrompt) {}
 }

@@ -36,10 +36,12 @@ public interface AgentStrategy {
 
     /**
      * Optional user reminder appended to conversation history before a model call.
-     * The remaining count includes that upcoming call. Once added, the reminder
-     * is retained through compaction and retries for this run; {@code null} adds nothing.
+     * The remaining loop count includes that upcoming call; strategies may also
+     * consider their own budget for the resolved tooling mode. Once added, the
+     * hook is no longer called and the reminder is restored before requests if
+     * compaction removes it. {@code null} adds nothing.
      */
-    default String roundBudgetReminder(int remainingRounds) {
+    default String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
         return null;
     }
 

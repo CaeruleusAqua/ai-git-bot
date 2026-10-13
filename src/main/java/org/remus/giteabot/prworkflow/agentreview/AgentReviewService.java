@@ -613,7 +613,7 @@ public class AgentReviewService {
                                       String systemPrompt, String userMessage, int maxToolRounds,
                                       DiffSummary diffSummary, Long runId,
                                       Consumer<AgentRunContext.ToolCallRecord> toolCallConsumer) {
-        int rounds = clamp(maxToolRounds, 1, 30);
+        int rounds = Math.max(1, maxToolRounds);
         ReviewAgentStrategy strategy = new ReviewAgentStrategy(
                 systemPrompt, toolRouter, toolCatalog,
                 context.mcpToolCatalog(), context.allowedBuiltinTools(),
@@ -621,7 +621,7 @@ public class AgentReviewService {
                 agentConfig.getBudget().getMaxContextRounds(), rounds);
 
         AgentConfigProperties.BudgetConfig budgetCfg = agentConfig.getBudget();
-        int hardCap = Math.max(budgetCfg.getMaxRounds(), rounds + 2);
+        int hardCap = Math.max(budgetCfg.getMaxRounds(), Math.addExact(rounds, 2));
         AgentBudget budget = new AgentBudget(hardCap, budgetCfg.getMaxContextRounds(),
                 budgetCfg.getMaxValidationRetries(), budgetCfg.getMaxTokensPerCall(),
                 budgetCfg.getMaxToolResultChars(), budgetCfg.getMaxHistoryChars(),
@@ -742,7 +742,4 @@ public class AgentReviewService {
         return sb.toString();
     }
 
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
-    }
 }

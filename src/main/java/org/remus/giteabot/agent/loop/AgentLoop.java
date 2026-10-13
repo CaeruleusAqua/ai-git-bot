@@ -95,10 +95,12 @@ public final class AgentLoop {
 
             AgentMetricsHolder.recordToolCallMode(modeTag(resolvedMode), providerTag);
 
-            String reminder = strategy.roundBudgetReminder(budget.maxRounds() - round + 1);
-            if (reminder != null && !reminder.isBlank()) {
-                closingReminder = AiMessage.builder().role("user").content(reminder).build();
-                pending.add(new PendingMessage("user", reminder));
+            if (closingReminder == null) {
+                String reminder = strategy.roundBudgetReminder(budget.maxRounds() - round + 1, resolvedMode);
+                if (reminder != null && !reminder.isBlank()) {
+                    closingReminder = AiMessage.builder().role("user").content(reminder).build();
+                    pending.add(new PendingMessage("user", reminder));
+                }
             }
             if (closingReminder != null && !history.contains(closingReminder)) {
                 history.add(closingReminder);

@@ -114,9 +114,11 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     }
 
     @Override
-    public String roundBudgetReminder(int remainingRounds) {
-        return remainingRounds == CLOSING_REMINDER_OFFSET + 1 ? """
-                The review has reached the point two turns before its round limit. \
+    public String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
+        int explorationRounds = mode == ToolingMode.NATIVE
+                ? maxToolRounds - toolRounds : maxContextRounds - contextRounds;
+        return Math.min(remainingRounds, explorationRounds) <= CLOSING_REMINDER_OFFSET + 1 ? """
+                The review is approaching its exploration or round limit. \
                 Conclude your review now using \
                 the evidence already gathered. Avoid further tool calls and additional exploration. \
                 Return your final response in the required output format, including any required \
