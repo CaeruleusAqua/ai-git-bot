@@ -306,16 +306,15 @@ public class GiteaApiClient implements RepositoryApiClient {
 
     @Override
     public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
-        createPullRequestComment(owner, repo, pullNumber, body);
+        log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
+        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
+        log.info("Comment posted successfully");
     }
 
     @Override
     public long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        Map<?, ?> response = giteaRestClient.post()
-                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, pullNumber)
-                .body(new CommentRequest(body))
-                .retrieve().body(Map.class);
+        Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
         long id = RepositoryApiClient.requireCommentId(response, "Gitea");
         log.info("Comment posted successfully");
         return id;
@@ -327,6 +326,12 @@ public class GiteaApiClient implements RepositoryApiClient {
                 .uri("/api/v1/repos/{owner}/{repo}/issues/comments/{id}", owner, repo, commentId)
                 .body(new CommentRequest(body))
                 .retrieve().toBodilessEntity();
+    }
+
+    private RestClient.ResponseSpec commentCreationRequest(String owner, String repo, Long number, String body) {
+        return giteaRestClient.post()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, number)
+                .body(new CommentRequest(body)).retrieve();
     }
 
     /**
@@ -414,11 +419,7 @@ public class GiteaApiClient implements RepositoryApiClient {
     @Override
     public void postIssueComment(String owner, String repo, Long issueNumber, String body) {
         log.info("Posting comment on issue #{} in {}/{}", issueNumber, owner, repo);
-        giteaRestClient.post()
-                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, issueNumber)
-                .body(new CommentRequest(body))
-                .retrieve()
-                .toBodilessEntity();
+        commentCreationRequest(owner, repo, issueNumber, body).toBodilessEntity();
         log.info("Comment posted successfully");
     }
 

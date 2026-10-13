@@ -15,15 +15,16 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 class GiteaProgressCommentTest {
 
-    @Test
-    void existingCommentCallUsesTheSameCreationImplementation() {
+    @ParameterizedTest
+    @ValueSource(strings = {"", "null", "{}", "{\"id\":42}"})
+    void existingCommentCallDoesNotRequireAResponseId(String response) {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         GiteaApiClient client = new GiteaApiClient(builder.build(),
                 RepositoryCredentials.of("https://gitea.example.com", "https://gitea.example.com", "test-token"));
         server.expect(requestTo("https://gitea.example.com/api/v1/repos/owner/repo/issues/7/comments"))
                 .andExpect(method(HttpMethod.POST)).andExpect(content().json("{\"body\":\"README Sync starting\"}"))
-                .andRespond(withSuccess("{\"id\":42}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
 
         client.postPullRequestComment("owner", "repo", 7L, "README Sync starting");
         server.verify();
