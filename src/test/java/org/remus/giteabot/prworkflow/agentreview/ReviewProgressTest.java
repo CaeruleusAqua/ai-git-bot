@@ -18,7 +18,7 @@ class ReviewProgressTest {
     @Test
     void reusesOneCommentThrottlesActivityAndAlwaysWritesTerminalState() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
-        when(client.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
+        when(client.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
         AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-13T00:00:00.123456Z"));
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenAnswer(invocation -> now.get());
@@ -35,7 +35,7 @@ class ReviewProgressTest {
         progress.finish(true);
 
         var bodies = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(client).createPullRequestComment(eq("owner"), eq("repo"), eq(1L), eq("""
+        verify(client).postPullRequestComment(eq("owner"), eq("repo"), eq(1L), eq("""
                 ## 🤖 Agentic Review Progress
 
                 Tracking the review progress for **PR #1**.
@@ -62,7 +62,7 @@ class ReviewProgressTest {
     @Test
     void failedCreationDisablesProgressWithoutStoppingTheRun() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
-        when(client.createPullRequestComment(anyString(), anyString(), anyLong(), anyString()))
+        when(client.postPullRequestComment(anyString(), anyString(), anyLong(), anyString()))
                 .thenThrow(new IllegalStateException("Comment creation denied"));
         ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, Clock.systemUTC());
 
@@ -76,9 +76,26 @@ class ReviewProgressTest {
     }
 
     @Test
+    void missingCommentIdDisablesUpdatesWithoutStoppingTheRun() {
+        RepositoryApiClient client = mock(RepositoryApiClient.class);
+        when(client.postPullRequestComment(anyString(), anyString(), anyLong(), anyString()))
+                .thenReturn(null);
+        ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, Clock.systemUTC());
+
+        assertThatCode(() -> {
+            progress.start();
+            progress.accept(new ProgressUpdate(1, "Waiting for model", 0));
+            progress.finish(true);
+        }).doesNotThrowAnyException();
+
+        verify(client).postPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString());
+        verify(client, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
+    }
+
+    @Test
     void failedActivityUpdateIsThrottledAndLaterUpdatesContinue() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
-        when(client.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
+        when(client.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
         AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-10-13T00:00:00Z"));
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenAnswer(invocation -> now.get());
@@ -101,7 +118,7 @@ class ReviewProgressTest {
     @Test
     void failedTerminalUpdateDoesNotThrow() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
-        when(client.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
+        when(client.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString())).thenReturn(42L);
         ReviewProgress progress = new ReviewProgress(client, "owner", "repo", 1L, Clock.systemUTC());
         progress.start();
         doThrow(new IllegalStateException("Comment update denied")).when(client)
@@ -115,7 +132,7 @@ class ReviewProgressTest {
     @Test
     void formatsLongElapsedTimeWithoutAssumingTheServersTimezone() {
         RepositoryApiClient client = mock(RepositoryApiClient.class);
-        when(client.createPullRequestComment(anyString(), anyString(), anyLong(), anyString())).thenReturn(42L);
+        when(client.postPullRequestComment(anyString(), anyString(), anyLong(), anyString())).thenReturn(42L);
         Clock clock = mock(Clock.class);
         when(clock.instant()).thenReturn(Instant.parse("2026-10-13T00:00:00Z"),
                 Instant.parse("2026-10-13T00:00:00Z"), Instant.parse("2026-10-13T01:01:15Z"));

@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
@@ -115,7 +116,7 @@ class AgentReviewCompletionTest {
 
     @Test
     void updatesOneProgressCommentAndPublishesTheFinalReviewSeparately() {
-        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+        when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                 .thenReturn(42L);
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
                 .thenReturn(exploration(1), ChatTurn.text("Review complete.\n{\"blocker\":2,\"medium\":0,\"low\":0}"));
@@ -124,7 +125,7 @@ class AgentReviewCompletionTest {
                 new AgentReviewService.SeverityThresholds(0, null, null), 1L, null, true))
                 .isEqualTo(AgentReviewService.ReviewResult.POSTED);
 
-        verify(repositoryClient).createPullRequestComment(eq("owner"), eq("repo"), eq(1L),
+        verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
                 argThat(body -> body.contains("Preparing repository")));
         verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
                 argThat(body -> body.contains("Review completed")
@@ -135,7 +136,7 @@ class AgentReviewCompletionTest {
 
     @Test
     void failedReviewClosesItsProgressCommentWithoutPublishingAPartialReview() {
-        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+        when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                 .thenReturn(42L);
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
                 .thenReturn(new ChatTurn("Partial finding", List.of(), StopReason.MAX_TOKENS, 10, 5));
@@ -154,10 +155,10 @@ class AgentReviewCompletionTest {
             "create,true", "activity,true", "final,true"})
     void progressFailuresDoNotChangeSuccessfulOutcome(String failedWrite, boolean clarification) {
         if (failedWrite.equals("create")) {
-            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+            when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                     .thenThrow(new IllegalStateException("Comment creation denied"));
         } else {
-            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+            when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                     .thenReturn(42L);
             doAnswer(invocation -> {
                 boolean terminal = invocation.<String>getArgument(4).contains("Review completed");
@@ -181,14 +182,14 @@ class AgentReviewCompletionTest {
             verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
         } else {
             verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L), anyString(), eq(PostReviewAction.NONE));
-            verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+            verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), contains("## 🤖 Follow-up"));
         }
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void finalProgressFailureDoesNotHideTheOriginalFailure(boolean clarification) {
-        when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+        when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                 .thenReturn(42L);
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
                 .thenThrow(new IllegalStateException("Model request failed"));
@@ -222,7 +223,7 @@ class AgentReviewCompletionTest {
         AgentReviewServiceFactory factory = mock(AgentReviewServiceFactory.class);
         when(factory.create(bot)).thenReturn(service);
         if (enabled) {
-            when(repositoryClient.createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString()))
+            when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                     .thenReturn(42L);
         }
         when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
@@ -236,11 +237,11 @@ class AgentReviewCompletionTest {
         verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
                 argThat(body -> body.contains("Clarification answer.")));
         if (enabled) {
-            verify(repositoryClient).createPullRequestComment(eq("owner"), eq("repo"), eq(1L), anyString());
+            verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress"));
             verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
                     argThat(body -> body.contains("Review completed") && body.contains("Rounds: 2")));
         } else {
-            verify(repositoryClient, never()).createPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+            verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), contains("Agentic Review Progress"));
             verify(repositoryClient, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
         }
     }
@@ -324,7 +325,7 @@ class AgentReviewCompletionTest {
                 argThat(body -> body.contains("No correctness issues found.") && !body.contains("Let me check")),
                 eq(PostReviewAction.NONE));
         verify(workspaceService).cleanupWorkspace(WORKSPACE);
-        verify(repositoryClient, never()).createPullRequestComment(anyString(), anyString(), anyLong(), anyString());
+        verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), anyString());
         verify(repositoryClient, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());
     }
 

@@ -108,16 +108,11 @@ public class GitHubApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting top-level comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
-        log.info("Comment posted successfully");
-    }
-
-    @Override
-    public long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
-        return RepositoryApiClient.requireCommentId(response, "GitHub");
+        log.info("Comment posted successfully");
+        return RepositoryApiClient.commentId(response);
     }
 
     @Override

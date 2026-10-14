@@ -45,8 +45,12 @@ final class ReviewProgress implements Consumer<ProgressUpdate> {
 
     void start() {
         try {
-            commentId = repositoryClient.createPullRequestComment(owner, repo, prNumber,
+            commentId = repositoryClient.postPullRequestComment(owner, repo, prNumber,
                     render(clock.instant()));
+            if (commentId == null) {
+                log.warn("Progress comment for PR #{} in {}/{} has no usable ID; continuing without progress",
+                        prNumber, owner, repo);
+            }
         } catch (RuntimeException e) {
             log.warn("Could not create progress comment for PR #{} in {}/{}; continuing without progress",
                     prNumber, owner, repo, e);

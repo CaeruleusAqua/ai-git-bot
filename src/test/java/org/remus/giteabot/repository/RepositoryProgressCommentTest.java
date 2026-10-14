@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClient;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
@@ -38,7 +39,7 @@ class RepositoryProgressCommentTest {
         fixture.server().expect(requestTo(fixture.updateUrl())).andExpect(method(fixture.updateMethod()))
                 .andExpect(content().json(fixture.body("Review completed"))).andRespond(withSuccess());
 
-        long id = fixture.client().createPullRequestComment("owner", "repo", 7L, "Starting review");
+        Long id = fixture.client().postPullRequestComment("owner", "repo", 7L, "Starting review");
         assertEquals(2147483648L, id);
         fixture.client().updatePullRequestComment("owner", "repo", 7L, id, "Review completed");
 
@@ -53,20 +54,19 @@ class RepositoryProgressCommentTest {
                 .andExpect(content().json(fixture.body("Existing comment")))
                 .andRespond(withStatus(HttpStatus.CREATED));
 
-        fixture.client().postPullRequestComment("owner", "repo", 7L, "Existing comment");
+        assertNull(fixture.client().postPullRequestComment("owner", "repo", 7L, "Existing comment"));
 
         fixture.server().verify();
     }
 
     @ParameterizedTest
     @MethodSource("invalidResponses")
-    void refusesAnInvalidCreationId(RepositoryType provider, String response) {
+    void returnsNoIdWhenTheResponseHasNoUsableId(RepositoryType provider, String response) {
         Fixture fixture = fixture(provider);
         fixture.server().expect(requestTo(fixture.createUrl())).andExpect(method(HttpMethod.POST))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
 
-        assertThrows(IllegalStateException.class,
-                () -> fixture.client().createPullRequestComment("owner", "repo", 7L, "Starting review"));
+        assertNull(fixture.client().postPullRequestComment("owner", "repo", 7L, "Starting review"));
 
         fixture.server().verify();
     }
@@ -79,7 +79,7 @@ class RepositoryProgressCommentTest {
                 .andRespond(withStatus(HttpStatus.FORBIDDEN));
 
         assertThrows(HttpClientErrorException.class,
-                () -> fixture.client().createPullRequestComment("owner", "repo", 7L, "Starting review"));
+                () -> fixture.client().postPullRequestComment("owner", "repo", 7L, "Starting review"));
 
         fixture.server().verify();
     }

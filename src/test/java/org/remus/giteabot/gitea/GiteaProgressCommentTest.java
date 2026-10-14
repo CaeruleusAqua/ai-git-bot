@@ -43,15 +43,16 @@ class GiteaProgressCommentTest {
                 .andExpect(method(HttpMethod.PATCH)).andExpect(content().json("{\"body\":\"Review completed\"}"))
                 .andRespond(withSuccess());
 
-        long id = client.createPullRequestComment("owner", "repo", 7L, "Starting review");
+        Long id = client.postPullRequestComment("owner", "repo", 7L, "Starting review");
         assertEquals(2147483648L, id);
         client.updatePullRequestComment("owner", "repo", 7L, id, "Review completed");
         server.verify();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"", "null", "{}", "{\"id\":0}", "{\"id\":-1}", "{\"id\":\"42\"}", "{\"id\":42.5}"})
-    void refusesToUpdateAnUnidentifiedComment(String response) {
+    @ValueSource(strings = {"", "null", "{}", "{\"id\":0}", "{\"id\":-1}", "{\"id\":\"42\"}",
+            "{\"id\":42.5}", "{\"id\":9223372036854775808}"})
+    void returnsNoIdWhenTheResponseHasNoUsableId(String response) {
         RestClient.Builder builder = RestClient.builder().baseUrl("https://gitea.example.com");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         GiteaApiClient client = new GiteaApiClient(builder.build(),
@@ -59,8 +60,7 @@ class GiteaProgressCommentTest {
         server.expect(requestTo("https://gitea.example.com/api/v1/repos/owner/repo/issues/7/comments"))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
 
-        assertThrows(IllegalStateException.class,
-                () -> client.createPullRequestComment("owner", "repo", 7L, "Starting review"));
+        assertNull(client.postPullRequestComment("owner", "repo", 7L, "Starting review"));
         server.verify();
     }
 }

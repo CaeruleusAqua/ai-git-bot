@@ -96,16 +96,11 @@ public class BitbucketApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
-        log.info("Comment posted successfully");
-    }
-
-    @Override
-    public long createPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
-        return RepositoryApiClient.requireCommentId(response, "Bitbucket");
+        log.info("Comment posted successfully");
+        return RepositoryApiClient.commentId(response);
     }
 
     @Override
