@@ -15,6 +15,12 @@ public interface AiAuditRecorder {
      * with the raw request/response payloads sent to and received from the
      * provider.
      *
+     * <p>This legacy audit format has no counter-availability fields: unknown
+     * usage is stored as 0, which cannot be distinguished from a reported zero.
+     * A stored zero is therefore not proof that the interaction used no tokens.
+     * {@link ChatTurn}'s reported flags remain the separate in-memory contract;
+     * persisting those flags would require a schema and recorder migration.</p>
+     *
      * @param inputTokens              total prompt/input tokens processed, including any
      *                                 cached prefix (0 when unknown)
      * @param outputTokens             number of completion/output tokens (0 when unknown)

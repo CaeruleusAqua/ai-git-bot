@@ -76,6 +76,7 @@ public final class AgentLoop {
         List<PendingMessage> pending = new ArrayList<>();
         pending.add(new PendingMessage("user", initialUserMessage));
         String currentMessage = initialUserMessage;
+        AiMessage closingReminder = null;
 
         ToolingMode resolvedMode = resolveMode(strategy);
         ctx.setToolingMode(resolvedMode);
@@ -98,10 +99,20 @@ public final class AgentLoop {
 
             AgentMetricsHolder.recordToolCallMode(modeTag(resolvedMode), providerTag);
 
+            if (closingReminder == null) {
+                String reminder = strategy.roundBudgetReminder(budget.maxRounds() - round + 1, resolvedMode);
+                if (reminder != null && !reminder.isBlank()) {
+                    closingReminder = AiMessage.builder().role("user").content(reminder).build();
+                    pending.add(new PendingMessage("user", reminder));
+                }
+            }
+            if (closingReminder != null && !history.contains(closingReminder)) {
+                history.add(closingReminder);
+            }
             long started = System.nanoTime();
             ChatTurn turn;
             try {
-                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round);
+                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round, closingReminder);
             } finally {
                 AgentMetricsHolder.recordLatency(modeTag(resolvedMode), providerTag,
                         Duration.ofNanos(System.nanoTime() - started));
@@ -187,8 +198,8 @@ public final class AgentLoop {
             if (ctx.auditToolCallConsumer() != null
                     && decision instanceof StepDecision.ContinueWithToolResults(
                             List<StepDecision.ToolCallResult> results, String follow)) {
-                Long inTokens = turn.inputTokens() > 0 ? turn.inputTokens() : null;
-                Long outTokens = turn.outputTokens() > 0 ? turn.outputTokens() : null;
+                Long inTokens = turn.inputTokensReported() ? turn.inputTokens() : null;
+                Long outTokens = turn.outputTokensReported() ? turn.outputTokens() : null;
                 var toolCalls = turn.toolCalls();
                 for (int i = 0; i < Math.min(results.size(), toolCalls.size()); i++) {
                     var tc = toolCalls.get(i);
@@ -358,7 +369,8 @@ public final class AgentLoop {
      * @throws RuntimeException if the failure is not retryable or the retry fails
      */
     private ChatTurn callAiWithRetry(List<AiMessage> history, String currentMessage,
-                                     List<ToolDescriptor> tools, String systemPrompt, int round) {
+                                     List<ToolDescriptor> tools, String systemPrompt, int round,
+                                     AiMessage closingReminder) {
         int maxAttempts = 2;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -381,6 +393,9 @@ public final class AgentLoop {
                             attempt, maxAttempts, e.getMessage());
                     // Aggressive compaction: keep only the last 2 compaction units
                     compactor.compactAggressively(history);
+                    if (closingReminder != null && !history.contains(closingReminder)) {
+                        history.add(closingReminder);
+                    }
                 } else {
                     log.warn("AgentLoop: AI call failed with a transient network error on attempt {}/{}. "
                             + "Retrying without changing history. Error: {}",
