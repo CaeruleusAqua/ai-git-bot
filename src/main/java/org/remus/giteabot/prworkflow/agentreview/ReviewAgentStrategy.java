@@ -53,6 +53,9 @@ import java.util.UUID;
 @Slf4j
 public final class ReviewAgentStrategy implements AgentStrategy {
 
+    /** Number of rounds before the limit at which the completion reminder is sent. */
+    private static final int CLOSING_REMINDER_OFFSET = 2;
+
     /** Fetches repository file contents for the legacy {@code requestFiles} protocol. */
     @FunctionalInterface
     public interface FileFetcher {
@@ -108,6 +111,20 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     @Override
     public String systemPrompt() {
         return systemPrompt;
+    }
+
+    @Override
+    public String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
+        int explorationRounds = mode == ToolingMode.NATIVE
+                ? maxToolRounds - toolRounds : maxContextRounds - contextRounds;
+        return Math.min(remainingRounds, explorationRounds) <= CLOSING_REMINDER_OFFSET + 1 ? """
+                The review is approaching its exploration or round limit. \
+                Conclude your review now using \
+                the evidence already gathered. Avoid further tool calls and additional exploration. \
+                Return your final response in the required output format, including any required \
+                severity classification. Clearly state unverified areas or limitations; do not \
+                claim they were checked.
+                """ : null;
     }
 
     @Override
