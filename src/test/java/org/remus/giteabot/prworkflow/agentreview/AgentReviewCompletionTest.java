@@ -130,7 +130,7 @@ class AgentReviewCompletionTest {
         verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
                 argThat(body -> body.contains("Preparing repository")));
         verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                argThat(body -> body.contains("Review completed")
+                argThat(body -> body.contains("- Latest activity: Completed")
                         && body.contains("Rounds: 2") && body.contains("Inspection tool calls completed: 1")));
         verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L),
                 argThat(body -> body.contains("Review complete.")), eq(PostReviewAction.REQUEST_CHANGES));
@@ -148,7 +148,7 @@ class AgentReviewCompletionTest {
                 .isEqualTo(AgentReviewService.ReviewResult.FAILED);
 
         verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                argThat(body -> body.contains("Review failed")));
+                argThat(body -> body.contains("- Latest activity: Failed")));
         verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
     }
 
@@ -163,7 +163,7 @@ class AgentReviewCompletionTest {
             when(repositoryClient.postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress")))
                     .thenReturn(42L);
             doAnswer(invocation -> {
-                boolean terminal = invocation.<String>getArgument(4).contains("Review completed");
+                boolean terminal = invocation.<String>getArgument(4).contains("- Latest activity: Completed");
                 if (terminal == failedWrite.equals("final")) {
                     throw new IllegalStateException("Comment update denied");
                 }
@@ -197,7 +197,7 @@ class AgentReviewCompletionTest {
                 .thenThrow(new IllegalStateException("Model request failed"));
         doThrow(new IllegalStateException("Comment update denied")).when(repositoryClient)
                 .updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                        argThat(body -> body.contains("Review failed")));
+                        argThat(body -> body.contains("- Latest activity: Failed")));
 
         AgentReviewService.ReviewResult result = clarification
                 ? service.answerClarification(payload, "Why was this changed?", 1, true)
@@ -206,7 +206,7 @@ class AgentReviewCompletionTest {
         assertThat(result).isEqualTo(AgentReviewService.ReviewResult.FAILED);
         verify(repositoryClient, never()).postReview(anyString(), anyString(), anyLong(), anyString(), any());
         verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                argThat(body -> body.contains("Review failed")));
+                argThat(body -> body.contains("- Latest activity: Failed")));
     }
 
     @ParameterizedTest
@@ -241,7 +241,7 @@ class AgentReviewCompletionTest {
         if (enabled) {
             verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L), contains("Agentic Review Progress"));
             verify(repositoryClient).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                    argThat(body -> body.contains("Review completed") && body.contains("Rounds: 2")));
+                    argThat(body -> body.contains("- Latest activity: Completed") && body.contains("Rounds: 2")));
         } else {
             verify(repositoryClient, never()).postPullRequestComment(anyString(), anyString(), anyLong(), contains("Agentic Review Progress"));
             verify(repositoryClient, never()).updatePullRequestComment(anyString(), anyString(), anyLong(), anyLong(), anyString());

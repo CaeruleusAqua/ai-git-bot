@@ -75,7 +75,7 @@ final class ReviewProgress implements Consumer<ProgressUpdate> {
 
     void finish(boolean success) {
         if (commentId != null) {
-            activity = success ? "Review completed" : "Review failed";
+            activity = success ? "Completed" : "Failed";
             updateComment(clock.instant());
         }
     }

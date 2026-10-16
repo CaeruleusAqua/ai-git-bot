@@ -53,7 +53,7 @@ class ReviewProgressTest {
 
                         Tracking the review progress for **PR #1**.
 
-                        - Latest activity: Review completed
+                        - Latest activity: Completed
                         - Rounds: 2 · Inspection tool calls completed: 3
                         - Started: 2026-10-13 00:00:00 UTC
                         - Elapsed: 16s · Last update: 2026-10-13 00:00:16 UTC"""));
@@ -126,7 +126,7 @@ class ReviewProgressTest {
 
         assertThatCode(() -> progress.finish(false)).doesNotThrowAnyException();
         verify(client).updatePullRequestComment(eq("owner"), eq("repo"), eq(1L), eq(42L),
-                argThat(body -> body.contains("Review failed")));
+                argThat(body -> body.contains("- Latest activity: Failed")));
     }
 
     @Test
