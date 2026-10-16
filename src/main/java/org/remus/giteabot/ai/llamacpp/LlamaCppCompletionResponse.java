@@ -36,6 +36,16 @@ public class LlamaCppCompletionResponse {
 
         @JsonProperty("completion_tokens")
         private Integer completionTokens;
+
+        @JsonProperty("prompt_tokens_details")
+        private PromptTokensDetails promptTokensDetails;
+    }
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class PromptTokensDetails {
+        @JsonProperty("cached_tokens")
+        private Long cachedTokens;
     }
 
     @Data
