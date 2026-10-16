@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.util.BotMention;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 
@@ -98,7 +99,7 @@ public class BitbucketWebhookHandler {
     private ResponseEntity<String> handlePullRequestComment(Bot bot, WebhookPayload payload,
                                                              String botAlias) {
         String body = payload.getComment() != null ? payload.getComment().getBody() : null;
-        if (body == null || !body.contains(botAlias)) {
+        if (!BotMention.isMentioned(body, botAlias)) {
             return ResponseEntity.ok("ignored");
         }
 

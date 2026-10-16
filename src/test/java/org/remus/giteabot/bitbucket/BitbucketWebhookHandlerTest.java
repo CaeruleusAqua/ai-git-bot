@@ -141,6 +141,27 @@ class BitbucketWebhookHandlerTest {
         verify(botWebhookService, never()).reviewPullRequest(any(), any());
     }
 
+    @Test
+    void commentMentioningLongerBotName_isIgnored() {
+        ResponseEntity<String> response = handler.handleWebhook(bot, "pullrequest:comment_created",
+                commentPayload("@ai_bot-test please explain this", null));
+
+        assertEquals("ignored", response.getBody());
+        verify(botWebhookService, never()).handleBotCommand(any(), any());
+        verify(botWebhookService, never()).handleInlineComment(any(), any());
+        verify(botWebhookService, never()).reviewPullRequest(any(), any());
+    }
+
+    @Test
+    void inlineCommentMentioningLongerBotName_isIgnored() {
+        ResponseEntity<String> response = handler.handleWebhook(bot, "pullrequest:comment_created",
+                commentPayload("@ai_bot-test please explain this",
+                        Map.of("path", "src/Foo.java", "to", 3)));
+
+        assertEquals("ignored", response.getBody());
+        verify(botWebhookService, never()).handleInlineComment(any(), any());
+    }
+
     private Map<String, Object> pullRequestPayload(List<Map<String, Object>> reviewers, Map<String, Object> changes) {
         Map<String, Object> raw = new HashMap<>();
         raw.put("pullrequest", pullRequest(reviewers));
