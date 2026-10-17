@@ -43,12 +43,7 @@ public class BitbucketApiClient implements RepositoryApiClient {
      */
     public BitbucketApiClient(RestClient restClient, RepositoryCredentials credentials) {
         this.restClient = restClient;
-        // The REST client already uses the account email or Bearer token; Git API tokens require a different username.
-        this.credentials = !credentials.usesSsh() && credentials.token() != null
-                && credentials.token().startsWith("ATATT")
-                ? new RepositoryCredentials(credentials.baseUrl(), credentials.cloneUrl(), "x-token-auth",
-                        credentials.token(), credentials.transport(), credentials.sshPrivateKey(), credentials.sshKnownHosts())
-                : credentials;
+        this.credentials = credentials;
     }
 
     @Override

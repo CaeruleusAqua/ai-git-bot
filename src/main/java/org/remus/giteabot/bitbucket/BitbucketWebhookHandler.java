@@ -194,15 +194,10 @@ public class BitbucketWebhookHandler {
             repository.setId((long) uuid.hashCode());
         }
 
-        // full_name contains the current workspace/repository slugs; owner may still identify a legacy team.
+        // The repository name can be a display label; full_name contains its API slug.
         String fullName = (String) repo.get("full_name");
         if (fullName != null && fullName.contains("/")) {
-            int separator = fullName.indexOf('/');
-            repository.setName(fullName.substring(separator + 1));
-            WebhookPayload.Owner owner = new WebhookPayload.Owner();
-            owner.setLogin(fullName.substring(0, separator));
-            repository.setOwner(owner);
-            return repository;
+            repository.setName(fullName.substring(fullName.indexOf('/') + 1));
         }
 
         Map<String, Object> ownerMap = (Map<String, Object>) repo.get("owner");
@@ -212,6 +207,10 @@ public class BitbucketWebhookHandler {
             String username = (String) ownerMap.get("username");
             String displayName = (String) ownerMap.get("display_name");
             owner.setLogin(nickname != null ? nickname : (username != null ? username : displayName));
+            repository.setOwner(owner);
+        } else if (fullName != null && fullName.contains("/")) {
+            WebhookPayload.Owner owner = new WebhookPayload.Owner();
+            owner.setLogin(fullName.substring(0, fullName.indexOf('/')));
             repository.setOwner(owner);
         }
 

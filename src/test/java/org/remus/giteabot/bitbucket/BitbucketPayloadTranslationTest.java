@@ -120,12 +120,12 @@ class BitbucketPayloadTranslationTest {
     }
 
     @Test
-    void translateRepository_usesWorkspaceCoordinateInsteadOfLegacyOwner() {
+    void translateRepository_usesRepositorySlugInsteadOfDisplayName() {
         Map<String, Object> raw = new HashMap<>(createPullRequestPayload());
         raw.put("repository", Map.of(
                 "name", "Review fixture",
                 "full_name", "workspace/review-fixture",
-                "owner", Map.of("username", "legacy-team", "display_name", "Workspace Owner"),
+                "owner", Map.of("username", "workspace", "display_name", "Workspace Owner"),
                 "workspace", Map.of("slug", "workspace")));
 
         WebhookPayload payload = handler.translatePayload("pullrequest:created", raw);
