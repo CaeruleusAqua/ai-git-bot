@@ -16,6 +16,7 @@ REVIEW_MIGRATIONS = (
     "V61__agent_review_control.sql",
     "V62__required_workflow_completion_event_keys.sql",
     "V63__review_mcp_read_only_approval.sql",
+    "V64__agent_review_admission_snapshot.sql",
 )
 
 
@@ -123,6 +124,14 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
                     "V62__required_workflow_completion_event_keys.sql",
                 ),
             ),
+            (
+                "V64__agent_review_admission_snapshot.sql",
+                (
+                    "V61__agent_review_control.sql",
+                    "V62__required_workflow_completion_event_keys.sql",
+                    "V63__review_mcp_read_only_approval.sql",
+                ),
+            ),
         ):
             with self.subTest(migration=migration):
                 self.add_migrations((migration,))
@@ -144,6 +153,21 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
                 result = self.run_check()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertNotIn("dormant", result.stdout)
+
+    def test_v64_requires_v63_then_accepts_complete_prefix(self):
+        self.add_migrations(PREREQUISITES + REVIEW_MIGRATIONS)
+        predecessor = "V63__review_mcp_read_only_approval.sql"
+        for dialect in ("h2", "postgresql"):
+            (self.root / MIGRATIONS / dialect / predecessor).unlink()
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        for dialect in ("h2", "postgresql"):
+            self.assertIn(f"{MIGRATIONS.as_posix()}/{dialect}/{predecessor}", result.stderr)
+
+        self.add_migrations((predecessor,))
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("dormant", result.stdout)
 
     def test_unassigned_filenames_do_not_activate_guard(self):
         self.add_migrations(("V61__unrelated.sql", "V63__unrelated.sql", "V99__unrelated.sql"))

@@ -14,6 +14,7 @@ REVIEW_MIGRATIONS = (
     "V61__agent_review_control.sql",
     "V62__required_workflow_completion_event_keys.sql",
     "V63__review_mcp_read_only_approval.sql",
+    "V64__agent_review_admission_snapshot.sql",
 )
 
 
