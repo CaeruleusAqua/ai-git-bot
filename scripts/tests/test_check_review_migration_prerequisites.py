@@ -17,6 +17,7 @@ REVIEW_MIGRATIONS = (
     "V62__required_workflow_completion_event_keys.sql",
     "V63__review_mcp_read_only_approval.sql",
     "V64__agent_review_admission_snapshot.sql",
+    "V65__review_publication_lanes.sql",
 )
 
 
@@ -132,6 +133,15 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
                     "V63__review_mcp_read_only_approval.sql",
                 ),
             ),
+            (
+                "V65__review_publication_lanes.sql",
+                (
+                    "V61__agent_review_control.sql",
+                    "V62__required_workflow_completion_event_keys.sql",
+                    "V63__review_mcp_read_only_approval.sql",
+                    "V64__agent_review_admission_snapshot.sql",
+                ),
+            ),
         ):
             with self.subTest(migration=migration):
                 self.add_migrations((migration,))
@@ -155,7 +165,7 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
                 self.assertNotIn("dormant", result.stdout)
 
     def test_v64_requires_v63_then_accepts_complete_prefix(self):
-        self.add_migrations(PREREQUISITES + REVIEW_MIGRATIONS)
+        self.add_migrations(PREREQUISITES + REVIEW_MIGRATIONS[:4])
         predecessor = "V63__review_mcp_read_only_approval.sql"
         for dialect in ("h2", "postgresql"):
             (self.root / MIGRATIONS / dialect / predecessor).unlink()
