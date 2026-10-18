@@ -15,6 +15,7 @@ PREREQUISITES = (
 REVIEW_MIGRATIONS = (
     "V61__agent_review_control.sql",
     "V62__required_workflow_completion_event_keys.sql",
+    "V63__review_mcp_read_only_approval.sql",
 )
 
 
@@ -107,6 +108,48 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("dormant", result.stdout)
         self.assertIn("does not prove SQL or application compatibility", result.stdout)
+
+    def test_later_assigned_migrations_require_all_earlier_assigned_pairs(self):
+        self.add_migrations(PREREQUISITES)
+        for migration, predecessors in (
+            (
+                "V62__required_workflow_completion_event_keys.sql",
+                ("V61__agent_review_control.sql",),
+            ),
+            (
+                "V63__review_mcp_read_only_approval.sql",
+                (
+                    "V61__agent_review_control.sql",
+                    "V62__required_workflow_completion_event_keys.sql",
+                ),
+            ),
+        ):
+            with self.subTest(migration=migration):
+                self.add_migrations((migration,))
+                result = self.run_check()
+                for dialect in ("h2", "postgresql"):
+                    (self.root / MIGRATIONS / dialect / migration).unlink()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                for dialect in ("h2", "postgresql"):
+                    for predecessor in predecessors:
+                        self.assertIn(
+                            f"{MIGRATIONS.as_posix()}/{dialect}/{predecessor}", result.stderr
+                        )
+
+    def test_each_complete_assigned_prefix_passes_without_later_migrations(self):
+        self.add_migrations(PREREQUISITES)
+        for migration in REVIEW_MIGRATIONS:
+            with self.subTest(highest=migration):
+                self.add_migrations((migration,))
+                result = self.run_check()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("dormant", result.stdout)
+
+    def test_unassigned_filenames_do_not_activate_guard(self):
+        self.add_migrations(("V61__unrelated.sql", "V63__unrelated.sql", "V99__unrelated.sql"))
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("dormant", result.stdout)
 
     def test_missing_any_chain_file_in_either_dialect_fails(self):
         self.add_migrations(PREREQUISITES + REVIEW_MIGRATIONS)

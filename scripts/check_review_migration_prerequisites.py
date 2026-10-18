@@ -13,6 +13,7 @@ PREREQUISITES = (
 REVIEW_MIGRATIONS = (
     "V61__agent_review_control.sql",
     "V62__required_workflow_completion_event_keys.sql",
+    "V63__review_mcp_read_only_approval.sql",
 )
 
 
@@ -58,10 +59,11 @@ def main():
         print("OK: no provisional review migrations; prerequisite guard dormant.")
         return 0
 
+    required_reviews = REVIEW_MIGRATIONS[:REVIEW_MIGRATIONS.index(present[-1]) + 1]
     missing = [
         (MIGRATIONS / dialect / name).as_posix()
         for dialect, names in inventory.items()
-        for name in PREREQUISITES + present
+        for name in PREREQUISITES + required_reviews
         if name not in names
     ]
     if missing:
