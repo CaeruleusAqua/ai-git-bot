@@ -121,6 +121,7 @@ public final class AgentReviewLimits {
                                              Instant runStartedAt, Instant admissionAt, Timeouts timeouts) {
         require(configured != null && integration != null && repositoryLimits != null
                 && runStartedAt != null && admissionAt != null && timeouts != null, "incomplete review configuration");
+        require(!admissionAt.isBefore(runStartedAt), "admission cannot precede run start");
         require(providerContract instanceof Qualified, "provider admission contract is unsupported");
         try {
             return new AgentReviewLimits(configured, integration, (Qualified) providerContract, repositoryLimits,

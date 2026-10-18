@@ -288,6 +288,20 @@ class AgentReviewLimitsTest {
                 null, null, NOW, null, AgentReviewLimits.Timeouts.defaults()));
     }
 
+    @Test
+    void admissionCannotPrecedeRunStartButMayEqualIt() {
+        var runStartedAt = Instant.parse("2026-10-18T12:00:02Z");
+        var integration = new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default");
+        var repository = new AgentReviewLimits.RepositoryLimits(65_536, 1_000);
+        assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
+                AgentReviewLimits.Configuration.defaults(), integration, total(200_000), repository,
+                null, null, runStartedAt, Instant.parse("2026-10-18T12:00:01Z"), AgentReviewLimits.Timeouts.defaults()));
+
+        var limits = AgentReviewLimits.resolve(AgentReviewLimits.Configuration.defaults(), integration,
+                total(200_000), repository, null, null, runStartedAt, runStartedAt, AgentReviewLimits.Timeouts.defaults());
+        assertEquals(Instant.parse("2026-10-18T13:00:02Z"), limits.getRunDeadlineAt());
+    }
+
     private static InputProof envelope(long tokens) {
         return new InputProof(BINDING, Counting.PHASE_UPPER_BOUND, "all-terminal-inputs-v1", tokens, EVIDENCE);
     }
