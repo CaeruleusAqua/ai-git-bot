@@ -82,6 +82,25 @@ class ReviewMigrationPrerequisitesTest(unittest.TestCase):
                         f"{MIGRATIONS.as_posix()}/{counterpart}/{migration}", result.stderr
                     )
 
+    def test_nested_review_migrations_cannot_bypass_prerequisites(self):
+        for dialect in ("h2", "postgresql"):
+            directory = self.root / MIGRATIONS / dialect / "review"
+            directory.mkdir()
+            for migration in REVIEW_MIGRATIONS:
+                with self.subTest(dialect=dialect, migration=migration):
+                    path = directory / migration
+                    path.touch()
+                    result = self.run_check()
+                    path.unlink()
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn("dormant", result.stdout)
+                    for required_dialect in ("h2", "postgresql"):
+                        for prerequisite in PREREQUISITES:
+                            self.assertIn(
+                                f"{MIGRATIONS.as_posix()}/{required_dialect}/{prerequisite}",
+                                result.stderr,
+                            )
+
     def test_complete_provisional_chain_passes_without_claiming_compatibility(self):
         self.add_migrations(PREREQUISITES + REVIEW_MIGRATIONS)
         result = self.run_check()

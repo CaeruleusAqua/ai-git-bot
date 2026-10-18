@@ -30,6 +30,7 @@ def main():
         "this does not prove SQL or application compatibility."
     )
     try:
+        # Enumerate roots first: rglob alone silently skips missing directories.
         inventory = {
             dialect: {
                 path.name
@@ -38,6 +39,12 @@ def main():
             }
             for dialect in ("h2", "postgresql")
         }
+        for dialect, names in inventory.items():
+            names.update(
+                path.name
+                for path in (args.root / MIGRATIONS / dialect).rglob("*")
+                if path.is_file()
+            )
     except OSError as error:
         print(f"ERROR: cannot inspect migration directories: {error}", file=sys.stderr)
         return 1
