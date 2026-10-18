@@ -107,8 +107,8 @@ public class McpConfigurationService {
         try {
             return OBJECT_MAPPER.readTree(stored).equals(OBJECT_MAPPER.readTree(incoming));
         } catch (Exception e) {
-            // Parser exceptions can quote credential-bearing JSON.
-            throw new IllegalArgumentException("Cannot compare invalid MCP configuration JSON");
+            // Unreadable previous content is a change; parser errors can quote credentials.
+            return false;
         }
     }
 

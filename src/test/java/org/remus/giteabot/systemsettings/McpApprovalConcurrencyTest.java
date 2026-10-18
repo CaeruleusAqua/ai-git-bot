@@ -2,17 +2,22 @@ package org.remus.giteabot.systemsettings;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import jakarta.persistence.EntityManager;
+import org.remus.giteabot.admin.EncryptionService;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.mcp.McpToolDefinition;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -45,6 +50,7 @@ class McpApprovalConcurrencyTest {
     @Autowired private McpToolSelectionService selections;
     @Autowired private PlatformTransactionManager transactions;
     @Autowired private EntityManager entityManager;
+    @Autowired private JdbcTemplate jdbc;
     @MockitoBean private McpOrchestrationService mcpOrchestrationService;
 
     private Long id;
@@ -180,6 +186,35 @@ class McpApprovalConcurrencyTest {
         configurations.save(edit);
         assertThrows(IllegalArgumentException.class, () -> selections.readReviewReadOnlyApprovals(observed, CATALOG));
         assertFalse(selectedRepository.findByMcpConfigurationId(id).getFirst().isReviewReadOnlyApproved());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"corrupt", "old-key"})
+    @ExtendWith(OutputCaptureExtension.class)
+    void validReplacementRepairsUnreadableStoredJsonAndRevokesApproval(String kind, CapturedOutput output) {
+        McpConfiguration before = configurations.findById(id).orElseThrow();
+        String replacement = JSON.replace("}", ",\"authorization_token\":\"repair-secret-sentinel\"}");
+        String unreadable = "corrupt".equals(kind) ? "{unreadable-json-fixture"
+                : "ENC:" + new EncryptionService("former-test-encryption-key").encrypt(replacement);
+        jdbc.update("UPDATE mcp_configurations SET json_content = ? WHERE id = ?", unreadable, id);
+
+        McpConfiguration edit = new McpConfiguration();
+        edit.setId(id);
+        edit.setName(before.getName());
+        edit.setJsonContent(replacement);
+        configurations.save(edit);
+
+        McpConfiguration repaired = configurations.findById(id).orElseThrow();
+        assertEquals(replacement, configurations.getDecryptedJsonContent(repaired));
+        assertNotEquals(replacement, repaired.getJsonContent());
+        assertNotEquals(before.getReviewApprovalRevision(), repaired.getReviewApprovalRevision());
+        McpSelectedTool selected = selectedRepository.findByMcpConfigurationId(id).getFirst();
+        assertFalse(selected.isReviewReadOnlyApproved());
+        assertNull(selected.getReviewApprovalSchemaHash());
+        assertNull(selected.getReviewApprovalConfigurationHash());
+        assertTrue(selections.readReviewReadOnlyApprovals(repaired, CATALOG).isEmpty());
+        assertFalse(output.getAll().contains(unreadable));
+        assertFalse(output.getAll().contains("repair-secret-sentinel"));
     }
 
     private AtomicReference<Thread> pauseDiscovery(CountDownLatch discovering, CountDownLatch resume) {
