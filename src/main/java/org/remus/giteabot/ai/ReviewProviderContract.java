@@ -9,6 +9,9 @@ public sealed interface ReviewProviderContract
 
     int VERSION = 1;
 
+    /** Maximum Java characters (UTF-16 code units) in each textual binding identity or revision. */
+    int MAX_BINDING_FIELD_CHARS = 1_024;
+
     /** Format version of the immutable contract. Unknown versions cannot qualify. */
     int version();
 
@@ -29,11 +32,11 @@ public sealed interface ReviewProviderContract
                    String policyRevision, String keyRevision) {
         public Binding {
             require(integrationId > 0, "integration identity is required");
-            requireText(provider, "provider");
-            requireText(model, "concrete model");
-            requireText(deployment, "deployment");
-            requireText(policyRevision, "policy revision");
-            requireText(keyRevision, "key revision");
+            requireBindingField(provider, "provider");
+            requireBindingField(model, "concrete model");
+            requireBindingField(deployment, "deployment");
+            requireBindingField(policyRevision, "policy revision");
+            requireBindingField(keyRevision, "key revision");
         }
     }
 
@@ -178,6 +181,11 @@ public sealed interface ReviewProviderContract
         } catch (ArithmeticException e) {
             throw new InvalidConfigurationException("token sum overflow");
         }
+    }
+
+    private static void requireBindingField(String value, String name) {
+        requireText(value, name);
+        require(value.length() <= MAX_BINDING_FIELD_CHARS, name + " exceeds the binding field limit");
     }
 
     private static void requireText(String value, String name) {

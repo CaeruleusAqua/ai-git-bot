@@ -4,8 +4,11 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.remus.giteabot.ai.ReviewProviderContract.*;
@@ -118,6 +121,23 @@ class ReviewProviderContractTest {
 
         assertEquals(Set.of("provider-default", "low"), contract.reasoningEfforts());
         assertThrows(UnsupportedOperationException.class, () -> contract.reasoningEfforts().clear());
+    }
+
+    @Test
+    void bindingTextFieldsRejectBlankAndOversizeIdentifiersAndAcceptTheFixedMaximum() {
+        var constructors = List.<Function<String, Binding>>of(
+                value -> new Binding(7, value, "concrete-model-v1", "deployment-v1", "policy-v1", "key-revision-1"),
+                value -> new Binding(7, "fixture", value, "deployment-v1", "policy-v1", "key-revision-1"),
+                value -> new Binding(7, "fixture", "concrete-model-v1", value, "policy-v1", "key-revision-1"),
+                value -> new Binding(7, "fixture", "concrete-model-v1", "deployment-v1", value, "key-revision-1"),
+                value -> new Binding(7, "fixture", "concrete-model-v1", "deployment-v1", "policy-v1", value));
+        for (var constructor : constructors) {
+            for (String blank : new String[]{null, "", " \t\n"}) {
+                assertThrows(InvalidConfigurationException.class, () -> constructor.apply(blank));
+            }
+            assertDoesNotThrow(() -> constructor.apply("x".repeat(1_024)));
+            assertThrows(InvalidConfigurationException.class, () -> constructor.apply("x".repeat(1_025)));
+        }
     }
 
     private static Qualified qualified(Bound bound) {

@@ -41,7 +41,8 @@ class ReviewProviderContractPropagationTest {
                 new AgentReviewLimits.Integration(new Binding(7, "fixture", "concrete-model-v1", "deployment-v1",
                         "policy-v1", "key-revision-1"), 4_096, 200_000, "provider-default"),
                 wrapped.reviewProviderContract(), new AgentReviewLimits.RepositoryLimits(65_536, 1_000),
-                null, null, Instant.parse("2026-10-18T12:00:00Z"), AgentReviewLimits.Timeouts.defaults()));
+                null, null, Instant.parse("2026-10-18T12:00:00Z"), Instant.parse("2026-10-18T12:00:00Z"),
+                AgentReviewLimits.Timeouts.defaults()));
     }
 
     @Test

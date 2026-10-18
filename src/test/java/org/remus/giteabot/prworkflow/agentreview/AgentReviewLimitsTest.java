@@ -81,7 +81,7 @@ class AgentReviewLimitsTest {
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
                 AgentReviewLimits.Configuration.defaults(),
                 new AgentReviewLimits.Integration(BINDING, 2_048, 200_000, "provider-default"), contract,
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
     }
 
     @Test
@@ -113,15 +113,15 @@ class AgentReviewLimitsTest {
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
                 AgentReviewLimits.Configuration.defaults(),
                 new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "high"), total(200_000),
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
                 AgentReviewLimits.Configuration.defaults(),
                 new AgentReviewLimits.Integration(BINDING, 4_097, 200_000, "provider-default"), total(200_000),
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
                 AgentReviewLimits.Configuration.defaults(),
                 new AgentReviewLimits.Integration(BINDING, 4_096, 200_001, "provider-default"), total(200_000),
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
     }
 
     @Test
@@ -138,7 +138,7 @@ class AgentReviewLimitsTest {
             assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
                     AgentReviewLimits.Configuration.defaults(),
                     new AgentReviewLimits.Integration(binding, 4_096, 200_000, "provider-default"), total(200_000),
-                    new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                    new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         }
     }
 
@@ -148,13 +148,13 @@ class AgentReviewLimitsTest {
         var config = AgentReviewLimits.Configuration.defaults();
         var repository = new AgentReviewLimits.RepositoryLimits(65_536, 1_000);
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(config, integration,
-                total(200_000), repository, null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                total(200_000), repository, null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         var limits = AgentReviewLimits.resolve(config, integration, total(200_000), repository,
-                envelope(1_000), envelope(100_000), NOW, AgentReviewLimits.Timeouts.defaults());
+                envelope(1_000), envelope(100_000), NOW, NOW, AgentReviewLimits.Timeouts.defaults());
         assertEquals(200_000, limits.getExplorationAttemptReservation());
         assertEquals(800_000, limits.getReservedTerminalTokens());
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(config, integration,
-                total(200_000), repository, envelope(1_000), envelope(149_000), NOW, AgentReviewLimits.Timeouts.defaults()));
+                total(200_000), repository, envelope(1_000), envelope(149_000), NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
     }
 
     @Test
@@ -196,11 +196,12 @@ class AgentReviewLimitsTest {
         for (long window : new long[]{Long.MAX_VALUE, Long.MAX_VALUE / 4}) {
             assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(config,
                     new AgentReviewLimits.Integration(BINDING, 4_096, window, "provider-default"), total(window),
-                    new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                    new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         }
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(config,
                 new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default"), total(200_000),
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, Instant.MAX, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, Instant.MAX, Instant.MAX,
+                AgentReviewLimits.Timeouts.defaults()));
     }
 
     @Test
@@ -208,10 +209,10 @@ class AgentReviewLimitsTest {
         var config = AgentReviewLimits.Configuration.defaults();
         var integration = new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default");
         var limits = AgentReviewLimits.resolve(config, integration, total(200_000),
-                new AgentReviewLimits.RepositoryLimits(25_000, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults());
+                new AgentReviewLimits.RepositoryLimits(25_000, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults());
         assertEquals(24_000, limits.getConfigured().maxRenderedReviewChars());
         assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(config, integration, total(200_000),
-                new AgentReviewLimits.RepositoryLimits(24_999, 1_000), null, null, NOW, AgentReviewLimits.Timeouts.defaults()));
+                new AgentReviewLimits.RepositoryLimits(24_999, 1_000), null, null, NOW, NOW, AgentReviewLimits.Timeouts.defaults()));
         assertThrows(InvalidConfigurationException.class, () -> new AgentReviewLimits.RepositoryLimits(1_000, -1));
         assertThrows(InvalidConfigurationException.class, () -> new AgentReviewLimits.RepositoryLimits(1_000, 1_000));
     }
@@ -231,7 +232,7 @@ class AgentReviewLimitsTest {
     void smallerDeploymentTimeoutsAreFrozenWithoutExtendingTheFixedRunDeadline() {
         var limits = AgentReviewLimits.resolve(AgentReviewLimits.Configuration.defaults(),
                 new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default"), total(200_000),
-                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW,
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), null, null, NOW, NOW,
                 new AgentReviewLimits.Timeouts(Duration.ofSeconds(30), Duration.ofSeconds(60)));
         assertEquals(Duration.ofSeconds(240), limits.getReservedTerminalDuration());
         assertEquals(Instant.parse("2026-10-18T13:00:00Z"), limits.getRunDeadlineAt());
@@ -241,6 +242,50 @@ class AgentReviewLimitsTest {
                 () -> new AgentReviewLimits.Timeouts(Duration.ZERO, Duration.ofSeconds(300)));
         assertThrows(InvalidConfigurationException.class,
                 () -> new AgentReviewLimits.Timeouts(Duration.ofSeconds(120), Duration.ofSeconds(Long.MAX_VALUE)));
+    }
+
+    @Test
+    void evidenceVerifiedAfterRunStartIsValidAtAdmissionWithoutExtendingTheDeadline() {
+        var admissionAt = Instant.parse("2026-10-18T12:00:02Z");
+        var evidence = new Evidence(ProofSource.ADAPTER_GUARANTEE, "after-start-contract",
+                Instant.parse("2026-10-18T12:00:01Z"), "v1", "One generation; no hidden fallbacks");
+        var contract = new Qualified(1, BINDING, evidence, InputPreservation.COMPLETE_OR_REJECT,
+                new PreparedTokens(200_000, new GenerationLimit(4_096, true,
+                        GenerationAccounting.ALL_GENERATED_TOKENS)), Set.of("provider-default"));
+        var input = new InputProof(BINDING, Counting.PHASE_UPPER_BOUND, "after-start-envelope", 1_000, evidence);
+
+        var limits = AgentReviewLimits.resolve(AgentReviewLimits.Configuration.defaults(),
+                new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default"), contract,
+                new AgentReviewLimits.RepositoryLimits(65_536, 1_000), input, input, NOW, admissionAt,
+                AgentReviewLimits.Timeouts.defaults());
+
+        assertEquals(Instant.parse("2026-10-18T12:00:00Z"), limits.getRunStartedAt());
+        assertEquals(Instant.parse("2026-10-18T12:00:02Z"), limits.getAdmissionAt());
+        assertEquals(Instant.parse("2026-10-18T13:00:00Z"), limits.getRunDeadlineAt());
+    }
+
+    @Test
+    void evidenceFromAfterAdmissionIsRejectedForTheContractAndEitherInputPhase() {
+        var admissionAt = Instant.parse("2026-10-18T12:00:02Z");
+        var future = new Evidence(ProofSource.ADAPTER_GUARANTEE, "future-contract",
+                Instant.parse("2026-10-18T12:00:03Z"), "v1", "One generation; no hidden fallbacks");
+        var futureContract = new Qualified(1, BINDING, future, InputPreservation.COMPLETE_OR_REJECT,
+                total(200_000).bound(), Set.of("provider-default"));
+        var integration = new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default");
+        var repository = new AgentReviewLimits.RepositoryLimits(65_536, 1_000);
+        assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
+                AgentReviewLimits.Configuration.defaults(), integration, futureContract, repository,
+                null, null, NOW, admissionAt, AgentReviewLimits.Timeouts.defaults()));
+        var futureInput = new InputProof(BINDING, Counting.PHASE_UPPER_BOUND, "future-envelope", 1_000, future);
+        assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
+                AgentReviewLimits.Configuration.defaults(), integration, total(200_000), repository,
+                futureInput, envelope(1_000), NOW, admissionAt, AgentReviewLimits.Timeouts.defaults()));
+        assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
+                AgentReviewLimits.Configuration.defaults(), integration, total(200_000), repository,
+                envelope(1_000), futureInput, NOW, admissionAt, AgentReviewLimits.Timeouts.defaults()));
+        assertThrows(InvalidConfigurationException.class, () -> AgentReviewLimits.resolve(
+                AgentReviewLimits.Configuration.defaults(), integration, total(200_000), repository,
+                null, null, NOW, null, AgentReviewLimits.Timeouts.defaults()));
     }
 
     private static InputProof envelope(long tokens) {
@@ -253,7 +298,7 @@ class AgentReviewLimitsTest {
         return AgentReviewLimits.resolve(config,
                 new AgentReviewLimits.Integration(BINDING, 4_096, 200_000, "provider-default"),
                 contract, new AgentReviewLimits.RepositoryLimits(65_536, 1_000),
-                exploration, terminal, NOW, AgentReviewLimits.Timeouts.defaults());
+                exploration, terminal, NOW, NOW, AgentReviewLimits.Timeouts.defaults());
     }
 
     private static Qualified total(long window) {

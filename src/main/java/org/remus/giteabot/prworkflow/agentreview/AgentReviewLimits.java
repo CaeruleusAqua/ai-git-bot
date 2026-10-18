@@ -97,6 +97,7 @@ public final class AgentReviewLimits {
     private final InputProof explorationInput;
     private final InputProof terminalInput;
     private final Instant runStartedAt;
+    private final Instant admissionAt;
     private final Timeouts timeouts;
     private final long explorationMaxCompletionTokens;
     private final long finalizationMaxCompletionTokens;
@@ -109,20 +110,21 @@ public final class AgentReviewLimits {
     private final Duration reservedTerminalDuration;
 
     /**
-     * The single resolution seam. The supplied start instant must be the run's database start time.
+     * The single resolution seam. The supplied start instant must be the run's database start time;
+     * admissionAt must come from a trusted server clock, never client/provider proof data.
      * U-based terminal evidence must cover every finalization/repair/retry request, not one prompt.
      * Throws invalid_configuration before effects; values are rejected, never silently clamped.
      */
     public static AgentReviewLimits resolve(Configuration configured, Integration integration,
                                              ReviewProviderContract providerContract, RepositoryLimits repositoryLimits,
                                              InputProof explorationInput, InputProof terminalInput,
-                                             Instant runStartedAt, Timeouts timeouts) {
+                                             Instant runStartedAt, Instant admissionAt, Timeouts timeouts) {
         require(configured != null && integration != null && repositoryLimits != null
-                && runStartedAt != null && timeouts != null, "incomplete review configuration");
+                && runStartedAt != null && admissionAt != null && timeouts != null, "incomplete review configuration");
         require(providerContract instanceof Qualified, "provider admission contract is unsupported");
         try {
             return new AgentReviewLimits(configured, integration, (Qualified) providerContract, repositoryLimits,
-                    explorationInput, terminalInput, runStartedAt, timeouts);
+                    explorationInput, terminalInput, runStartedAt, admissionAt, timeouts);
         } catch (ArithmeticException | DateTimeException e) {
             throw new InvalidConfigurationException("review reservation or deadline overflow");
         }
@@ -130,7 +132,7 @@ public final class AgentReviewLimits {
 
     private AgentReviewLimits(Configuration configured, Integration integration, Qualified providerContract,
                               RepositoryLimits repositoryLimits, InputProof explorationInput, InputProof terminalInput,
-                              Instant runStartedAt, Timeouts timeouts) {
+                              Instant runStartedAt, Instant admissionAt, Timeouts timeouts) {
         this.configured = configured;
         this.integration = integration;
         this.providerContract = providerContract;
@@ -138,6 +140,7 @@ public final class AgentReviewLimits {
         this.explorationInput = explorationInput;
         this.terminalInput = terminalInput;
         this.runStartedAt = runStartedAt;
+        this.admissionAt = admissionAt;
         this.timeouts = timeouts;
 
         require(integration.binding().equals(providerContract.binding()), "provider proof binding changed");
@@ -165,9 +168,9 @@ public final class AgentReviewLimits {
         validateLocalFit(explorationMaxCompletionTokens, explorationInput);
         validateLocalFit(finalizationMaxCompletionTokens, terminalInput);
         explorationAttemptReservation = providerContract.attemptReservation(
-                explorationMaxCompletionTokens, explorationInput, runStartedAt);
+                explorationMaxCompletionTokens, explorationInput, admissionAt);
         terminalAttemptReservation = providerContract.attemptReservation(
-                finalizationMaxCompletionTokens, terminalInput, runStartedAt);
+                finalizationMaxCompletionTokens, terminalInput, admissionAt);
         reservedTerminalCalls = terminalCalls();
         require(configured.maxProviderCalls() >= Math.addExact(reservedTerminalCalls, 1),
                 "maxProviderCalls must also allow one exploration attempt");

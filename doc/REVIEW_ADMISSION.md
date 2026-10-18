@@ -15,7 +15,7 @@ chat, retries, request DTOs, factories, workflows and forms are unchanged.
   InputProof input, Instant at)` calculates one conservative reservation.
 - `AgentReviewLimits.resolve(Configuration, Integration, ReviewProviderContract,
   RepositoryLimits, InputProof explorationInput, InputProof terminalInput,
-  Instant runStartedAt, Timeouts)` is the single preflight/resolution entrypoint.
+  Instant runStartedAt, Instant admissionAt, Timeouts)` is the single preflight/resolution entrypoint.
   Its immutable result exposes the original inputs and effective values through
   getters. It retains no entities, mutable parameter maps, credentials or clients.
 
@@ -33,6 +33,12 @@ version; policy revisions must cover routing, fallback, transforms, generation
 count, tools and effective reasoning settings. Changed binding invalidates proof.
 Never use a credential itself as a revision or infer a concrete model from an
 unresolved router/alias name.
+
+Each textual binding field (provider, model, deployment, policy revision and key
+revision) must be nonblank and at most `MAX_BINDING_FIELD_CHARS=1_024` Java
+characters (UTF-16 code units). This fixed metadata cap is checked at construction;
+oversized identities are rejected, never truncated. Key revisions are opaque
+non-secret identifiers, not key material.
 
 `Evidence` names its reviewed source, time, source version and explicit provider
 assumptions. Future-dated evidence, unknown sources/versions, incomplete input
@@ -90,8 +96,12 @@ four complete terminal token reservations. Memory remains independently fixed at
 24,000 characters. The renderer/adapter must still reject an oversized actual
 body, including the complete marker; this module does not truncate or publish.
 
-The caller supplies the database run-start instant. The deadline is fixed at
-start + 60 minutes. `Timeouts.defaults()` freezes 120-second provider attempts
+The caller supplies the database run-start instant and a separate `admissionAt`
+from a trusted server clock, never from client/provider proof data. Contract and
+input evidence are checked against admission time: evidence verified after run
+start but no later than admission is valid; genuinely future evidence is rejected.
+The deadline remains fixed at run start + 60 minutes, never admission + 60 minutes.
+`Timeouts.defaults()` freezes 120-second provider attempts
 and 300-second tool attempts; pass existing smaller deployment timeouts explicitly.
 Retry waits are capped at 30 seconds; initial terminal time reserve is four times
 (provider timeout + 30 seconds). These values describe absolute total attempt
