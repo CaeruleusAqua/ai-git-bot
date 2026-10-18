@@ -48,18 +48,24 @@ public class EventHookPublisher {
      * Joins the caller's transaction and locks the run before any keyed insert.
      * Existing endpoint rows are immutable, including their UUID/timestamp and target set.
      * A changed payload under the same key is an error, not a second publication.
+     * Only matching PR lifecycle and keyed finding hooks are supported by the current catalog;
+     * audit-only review events and issue-assignment hooks are not interchangeable with them.
      * Delivery remains at-least-once; receivers can deduplicate {@code eventKey}.
+     * Dedupe/conflict detection lasts only while the delivery rows are retained. Completion
+     * owners must first call the generic completion gate in the same outer transaction and
+     * return on {@code applied=false} before calling this helper for domain events.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public List<EventHookDelivery> enqueueRequired(PrWorkflowEventKey key, EventHookEventType type,
                                                    Bot bot, Map<String, Object> data) {
-        Objects.requireNonNull(type, "type");
+        validateRequiredType(key, type);
         Objects.requireNonNull(bot, "bot");
         PrWorkflowRun run = runRepository.findByIdForUpdate(key.runId()).orElseThrow(
                 () -> new IllegalArgumentException("Unknown PrWorkflowRun id=" + key.runId()));
         if (!Objects.equals(run.getBotId(), bot.getId())) {
             throw new IllegalArgumentException("Required delivery does not belong to the bot");
         }
+        // shortcut: retained rows alone deduplicate here; domain owners must gate terminal replays before this helper.
         List<EventHookDelivery> existing = deliveryRepository.findByEventKeyOrderByEndpointIdAsc(key.value());
         for (EventHookDelivery delivery : existing) {
             EventHookPayload stored = objectMapper.readValue(delivery.getPayloadJson(), EventHookPayload.class);
@@ -94,6 +100,21 @@ public class EventHookPublisher {
             dispatchAfterCommit(delivery.getId());
         }
         return List.copyOf(created);
+    }
+
+    private static void validateRequiredType(PrWorkflowEventKey key, EventHookEventType type) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(type, "type");
+        boolean supported = switch (key.eventType()) {
+            case PR_WORKFLOW_RUN_STARTED -> key.findingId() == null && type == EventHookEventType.PR_WORKFLOW_STARTED;
+            case PR_WORKFLOW_RUN_COMPLETED -> key.findingId() == null
+                    && (type == EventHookEventType.PR_WORKFLOW_COMPLETED || type == EventHookEventType.PR_WORKFLOW_FAILED);
+            case FINDING_POSTED -> type == EventHookEventType.AGENT_REVIEW_FINDING_DETECTED;
+            default -> false;
+        };
+        if (!supported) {
+            throw new IllegalArgumentException("Unsupported required event pairing: " + key.eventType() + " / " + type);
+        }
     }
 
     private String requiredJson(PrWorkflowEventKey key, EventHookEventType type, Bot bot,

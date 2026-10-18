@@ -10,11 +10,14 @@ import org.remus.giteabot.admin.GitIntegration;
 import org.remus.giteabot.admin.GitIntegrationRepository;
 import org.remus.giteabot.admin.EncryptionService;
 import org.remus.giteabot.audit.AuditEventType;
+import org.remus.giteabot.audit.AuditLogGarbageCollector;
 import org.remus.giteabot.audit.PrAuditEvent;
 import org.remus.giteabot.audit.PrAuditEventService;
 import org.remus.giteabot.eventhook.EventHookDeliveryWorker;
 import org.remus.giteabot.eventhook.EventHookDelivery;
 import org.remus.giteabot.eventhook.EventHookDeliveryRepository;
+import org.remus.giteabot.eventhook.EventHookDeliveryGarbageCollector;
+import org.remus.giteabot.eventhook.DeliveryStatus;
 import org.remus.giteabot.eventhook.EventHookEndpoint;
 import org.remus.giteabot.eventhook.EventHookEndpointService;
 import org.remus.giteabot.eventhook.EventHookEventType;
@@ -62,7 +65,9 @@ import static org.mockito.Mockito.verifyNoInteractions;
         "spring.jpa.defer-datasource-initialization=false",
         "spring.sql.init.mode=never",
         "spring.flyway.enabled=true",
-        "spring.flyway.locations=classpath:db/migration/h2"
+        "spring.flyway.locations=classpath:db/migration/h2",
+        "audit.retention=PT0S",
+        "eventhook.retention.keep-last=0"
 })
 @ActiveProfiles("test")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
@@ -74,7 +79,8 @@ class PrWorkflowRequiredCompletionTest {
     @EnableJpaRepositories("org.remus.giteabot")
     @Import({PrWorkflowRunService.class, PrWorkflowCompletionService.class, PrAuditEventService.class,
             EventHookPublisher.class, EventHookEndpointService.class, EventHookProperties.class,
-            EventHookRetrySweeper.class, EncryptionService.class})
+            EventHookRetrySweeper.class, EncryptionService.class, AuditLogGarbageCollector.class,
+            EventHookDeliveryGarbageCollector.class})
     static class PersistenceConfiguration {
     }
 
@@ -85,6 +91,8 @@ class PrWorkflowRequiredCompletionTest {
     @Autowired private EventHookEndpointService endpoints;
     @Autowired private EventHookDeliveryRepository deliveries;
     @Autowired private EventHookRetrySweeper sweeper;
+    @Autowired private AuditLogGarbageCollector auditGc;
+    @Autowired private EventHookDeliveryGarbageCollector deliveryGc;
     @Autowired private TransactionTemplate tx;
     @Autowired private BotRepository bots;
     @Autowired private AiIntegrationRepository ais;
@@ -127,7 +135,10 @@ class PrWorkflowRequiredCompletionTest {
         EventHookEndpoint endpoint = endpoint();
         PrWorkflowEventKey key = completionKey();
         tx.executeWithoutResult(status -> {
-            completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING, PrWorkflowRunStatus.SUCCESS, "done", bot);
+            PrWorkflowCompletionResult result = completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                    PrWorkflowRunStatus.SUCCESS, "done", bot);
+            assertThat(result.applied()).isTrue();
+            assertThat(result.run().getRequiredCompletionHash()).hasSize(64);
             assertThat(runs.getById(run.getId()).getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
             assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 42L))
                     .singleElement().extracting(PrAuditEvent::getEventType)
@@ -144,7 +155,8 @@ class PrWorkflowRequiredCompletionTest {
         var audit = audits.findRequired(key).orElseThrow();
         clearInvocations(deliveryWorker);
 
-        completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING, PrWorkflowRunStatus.SUCCESS, "done", bot);
+        assertThat(completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "done", bot).applied()).isFalse();
 
         assertThat(runs.getById(run.getId()).getFinishedAt()).isEqualTo(finishedAt);
         assertThat(audits.findRequired(key).orElseThrow().getHash()).isEqualTo(audit.getHash());
@@ -159,7 +171,7 @@ class PrWorkflowRequiredCompletionTest {
     void requiredOutboxReplaysPerEndpointAndRejectsChangedPayloadEvenWhenEndpointWasDisabled() {
         EventHookEndpoint endpoint = endpoint();
         endpoint();
-        PrWorkflowEventKey key = new PrWorkflowEventKey(AuditEventType.REVIEW_COMPLETED, run.getId(), null);
+        PrWorkflowEventKey key = completionKey();
         List<EventHookDelivery> first = tx.execute(status -> publisher.enqueueRequired(key,
                 EventHookEventType.PR_WORKFLOW_COMPLETED, bot, Map.of("result", "confirmed")));
         clearInvocations(deliveryWorker);
@@ -183,6 +195,93 @@ class PrWorkflowRequiredCompletionTest {
     }
 
     @Test
+    void requiredOutboxRejectsIncompatibleKeyAndHookTypeWithoutPersistingAnything() {
+        EventHookEndpoint endpoint = endpoint();
+        endpoint.setEventTypes("ISSUE_ASSIGNMENT_STARTED");
+        endpoints.save(endpoint, null, null);
+
+        assertThatThrownBy(() -> tx.execute(status -> publisher.enqueueRequired(completionKey(),
+                EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, Map.of("issueNumber", 42L))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> tx.execute(status -> publisher.enqueueRequired(
+                new PrWorkflowEventKey(AuditEventType.REVIEW_COMPLETED, run.getId(), null),
+                EventHookEventType.PR_WORKFLOW_COMPLETED, bot, Map.of())))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(deliveries.findTop50ByEndpointIdOrderByIdDesc(endpoint.getId())).isEmpty();
+        assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 42L)).isEmpty();
+        assertThat(runs.getById(run.getId()).getRequiredCompletionHash()).isNull();
+        assertThat(runs.getById(run.getId()).getStatus()).isEqualTo(PrWorkflowRunStatus.RUNNING);
+        verifyNoInteractions(deliveryWorker);
+    }
+
+    @Test
+    void requiredFindingHookKeepsItsFindingKeyRatherThanUsingGenericCompletionIdentity() {
+        endpoint();
+        PrWorkflowEventKey key = new PrWorkflowEventKey(AuditEventType.FINDING_POSTED, run.getId(), "F1");
+        List<EventHookDelivery> queued = tx.execute(status -> publisher.enqueueRequired(key,
+                EventHookEventType.AGENT_REVIEW_FINDING_DETECTED, bot, Map.of("findingId", "F1")));
+
+        assertThat(queued).singleElement().extracting(EventHookDelivery::getEventKey).isEqualTo(key.value());
+        assertThat(queued.getFirst().getEventType()).isEqualTo("prworkflow.agentreview.finding.detected");
+        assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
+        verify(deliveryWorker).deliverAsync(queued.getFirst().getId());
+    }
+
+    @Test
+    void ordinaryCleanupDoesNotDestroyGenericCompletionReplayReceipt() {
+        endpoint();
+        PrWorkflowCompletionResult applied = completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "done", bot);
+        String hash = applied.run().getRequiredCompletionHash();
+        var finishedAt = applied.run().getFinishedAt();
+        tx.executeWithoutResult(status -> {
+            EventHookDelivery delivered = deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value()).getFirst();
+            delivered.setStatus(DeliveryStatus.SUCCESS);
+            deliveries.saveAndFlush(delivered);
+            auditGc.runGarbageCollection();
+            deliveryGc.runGarbageCollection();
+        });
+        assertThat(audits.findRequired(completionKey())).isEmpty();
+        assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
+        bot.setName("renamed-" + bot.getName());
+        bots.save(bot);
+        clearInvocations(deliveryWorker);
+
+        PrWorkflowCompletionResult replay = completion.complete(run.getId(), PrWorkflowRunStatus.WAITING_DEPLOY,
+                PrWorkflowRunStatus.SUCCESS, "done", bot);
+
+        assertThat(replay.applied()).isFalse();
+        assertThat(replay.run().getRequiredCompletionHash()).isEqualTo(hash).hasSize(64);
+        assertThat(replay.run().getFinishedAt()).isEqualTo(finishedAt);
+        assertThat(audits.findRequired(completionKey())).isEmpty();
+        assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
+        verifyNoInteractions(deliveryWorker);
+        assertThatThrownBy(() -> completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "changed", bot)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.FAILED, "done", bot)).isInstanceOf(IllegalStateException.class);
+        assertThat(runs.getById(run.getId()).getRequiredCompletionHash()).isEqualTo(hash);
+    }
+
+    @Test
+    void enablingFirstSubscriberAfterCompletionCannotPublishOnReplay() {
+        assertThat(completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "done", bot).applied()).isTrue();
+        assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
+        auditGc.runGarbageCollection();
+        EventHookEndpoint endpoint = endpoint();
+        clearInvocations(deliveryWorker);
+
+        assertThat(completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "done", bot).applied()).isFalse();
+
+        assertThat(audits.findRequired(completionKey())).isEmpty();
+        assertThat(deliveries.findTop50ByEndpointIdOrderByIdDesc(endpoint.getId())).isEmpty();
+        verifyNoInteractions(deliveryWorker);
+    }
+
+    @Test
     void actualRequiredInsertConstraintFailureRollsBackRunAuditAndOutboxTogether() {
         endpoint();
         PrWorkflowEventKey key = new PrWorkflowEventKey(AuditEventType.REVIEW_COMPLETED, run.getId(), null);
@@ -195,11 +294,14 @@ class PrWorkflowRequiredCompletionTest {
 
         assertThat(runs.getById(run.getId()).getStatus()).isEqualTo(PrWorkflowRunStatus.RUNNING);
         assertThat(runs.getById(run.getId()).getFinishedAt()).isNull();
+        assertThat(runs.getById(run.getId()).getRequiredCompletionHash()).isNull();
         assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 42L)).isEmpty();
         assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
         verifyNoInteractions(deliveryWorker);
-        completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING, PrWorkflowRunStatus.SUCCESS, "done", bot);
+        assertThat(completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
+                PrWorkflowRunStatus.SUCCESS, "done", bot).applied()).isTrue();
         assertThat(runs.getById(run.getId()).getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
+        assertThat(runs.getById(run.getId()).getRequiredCompletionHash()).hasSize(64);
     }
 
     @Test
@@ -246,8 +348,11 @@ class PrWorkflowRequiredCompletionTest {
                 return completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING,
                         PrWorkflowRunStatus.SUCCESS, "done", bot);
             });
-            assertThat(first.get(10, TimeUnit.SECONDS).getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
-            assertThat(second.get(10, TimeUnit.SECONDS).getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
+            PrWorkflowCompletionResult firstResult = first.get(10, TimeUnit.SECONDS);
+            PrWorkflowCompletionResult secondResult = second.get(10, TimeUnit.SECONDS);
+            assertThat(firstResult.run().getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
+            assertThat(secondResult.run().getStatus()).isEqualTo(PrWorkflowRunStatus.SUCCESS);
+            assertThat(firstResult.applied()).isNotEqualTo(secondResult.applied());
         }
         assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 42L)).hasSize(1);
         EventHookDelivery delivery = deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value()).getFirst();
@@ -279,6 +384,7 @@ class PrWorkflowRequiredCompletionTest {
                 .singleElement().extracting(EventHookDelivery::getEventType).isEqualTo("prworkflow.failed");
         PrWorkflowRun legacy = runs.start(bot.getId(), "acme", "project", 43L, "agent-review");
         runs.complete(legacy.getId(), PrWorkflowRunStatus.SUCCESS, "legacy");
+        assertThat(runs.getById(legacy.getId()).getRequiredCompletionHash()).isNull();
         assertThatThrownBy(() -> completion.complete(legacy.getId(), PrWorkflowRunStatus.RUNNING,
                 PrWorkflowRunStatus.SUCCESS, "legacy", bot)).isInstanceOf(IllegalStateException.class);
         assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 43L)).isEmpty();
@@ -287,13 +393,14 @@ class PrWorkflowRequiredCompletionTest {
     @Test
     void oversizedRequiredHookRollsBackCompletionInsteadOfSkippingTheHook() {
         endpoint();
-        PrWorkflowEventKey key = new PrWorkflowEventKey(AuditEventType.REVIEW_COMPLETED, run.getId(), null);
+        PrWorkflowEventKey key = new PrWorkflowEventKey(AuditEventType.FINDING_POSTED, run.getId(), "F1");
         assertThatThrownBy(() -> tx.executeWithoutResult(status -> {
             completion.complete(run.getId(), PrWorkflowRunStatus.RUNNING, PrWorkflowRunStatus.SUCCESS, "done", bot);
-            publisher.enqueueRequired(key, EventHookEventType.PR_WORKFLOW_COMPLETED, bot,
+            publisher.enqueueRequired(key, EventHookEventType.AGENT_REVIEW_FINDING_DETECTED, bot,
                     Map.of("oversized", "x".repeat(70_000)));
         })).isInstanceOf(IllegalArgumentException.class);
         assertThat(runs.getById(run.getId()).getStatus()).isEqualTo(PrWorkflowRunStatus.RUNNING);
+        assertThat(runs.getById(run.getId()).getRequiredCompletionHash()).isNull();
         assertThat(audits.findByBotAndRepoAndPr(bot.getId(), "acme", "project", 42L)).isEmpty();
         assertThat(deliveries.findByEventKeyOrderByEndpointIdAsc(completionKey().value())).isEmpty();
         verifyNoInteractions(deliveryWorker);
@@ -325,7 +432,7 @@ class PrWorkflowRequiredCompletionTest {
         endpoint.setName("required receiver");
         endpoint.setUrl("http://localhost/unused");
         endpoint.setBotId(bot.getId());
-        endpoint.setEventTypes("PR_WORKFLOW_COMPLETED,PR_WORKFLOW_FAILED");
+        endpoint.setEventTypes("PR_WORKFLOW_COMPLETED,PR_WORKFLOW_FAILED,AGENT_REVIEW_FINDING_DETECTED");
         return endpoints.save(endpoint, null, null);
     }
 

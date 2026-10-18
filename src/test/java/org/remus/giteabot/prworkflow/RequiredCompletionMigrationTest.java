@@ -7,7 +7,9 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 import java.sql.DriverManager;
+import java.sql.DatabaseMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,6 +38,14 @@ class RequiredCompletionMigrationTest {
                     """);
             ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/" + scriptDialect
                     + "/V62__required_workflow_completion_event_keys.sql"));
+            try (var column = connection.getMetaData().getColumns(null, null,
+                    "PR_WORKFLOW_RUNS", "REQUIRED_COMPLETION_HASH")) {
+                assertThat(column.next()).isTrue();
+                assertThat(column.getInt("DATA_TYPE")).isEqualTo(Types.VARCHAR);
+                assertThat(column.getInt("COLUMN_SIZE")).isEqualTo(64);
+                assertThat(column.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.columnNullable);
+                assertThat(column.getString("COLUMN_DEF")).isNull();
+            }
             try (var legacy = statement.executeQuery("SELECT COUNT(*) FROM event_hook_delivery WHERE event_key IS NULL")) {
                 legacy.next();
                 assertThat(legacy.getInt(1)).isEqualTo(2);

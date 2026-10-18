@@ -45,7 +45,7 @@ public class PrAuditEventService {
         }
     }
 
-    /** Loads a required event for replay validation; never creates a replacement. */
+    /** Loads a retained required event; this lookup is not a durable completion receipt. */
     @Transactional(readOnly = true)
     public Optional<PrAuditEvent> findRequired(PrWorkflowEventKey key) {
         return auditRepository.findByEventKey(key.value());
@@ -55,6 +55,9 @@ public class PrAuditEventService {
      * Joins the completion transaction and locks its run before checking/inserting the key.
      * Identical content reuses the stored event, timestamp and hash; conflicts and DB failures
      * abort the transaction. Callers must not catch a failed insert and continue that transaction.
+     * Dedupe/conflict detection lasts only while the audit row is retained. Completion owners
+     * must first call the generic completion gate in the same outer transaction and return on
+     * {@code applied=false} before calling this helper for domain events.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public PrAuditEvent recordRequired(PrWorkflowEventKey key, PrAuditEvent event) {
@@ -72,6 +75,7 @@ public class PrAuditEventService {
             throw new IllegalArgumentException("Required audit event does not belong to the run");
         }
         List<?> content = requiredContent(event);
+        // shortcut: retained rows alone deduplicate here; domain owners must gate terminal replays before this helper.
         PrAuditEvent existing = auditRepository.findByEventKey(key.value()).orElse(null);
         if (existing != null) {
             if ((event.getId() != null && !event.getId().equals(existing.getId()))
