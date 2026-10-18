@@ -10,6 +10,9 @@ public record ToolResult(
         String error,
         boolean outputTruncated
 ) {
+    /** Warning shared by native, legacy and nested tool-result rendering. */
+    public static final String TRUNCATED_OUTPUT_WARNING = "Output is truncated; this is not complete evidence.";
+
     /** Compatibility constructor for results without known output truncation. */
     public ToolResult(boolean success, int exitCode, String output, String error) {
         this(success, exitCode, output, error, false);
@@ -20,7 +23,7 @@ public record ToolResult(
     public String formatForAi() {
         StringBuilder sb = new StringBuilder();
         sb.append("Exit code: ").append(exitCode).append("\n");
-        if (outputTruncated) sb.append("Output is truncated; this is not complete evidence.\n");
+        if (outputTruncated) sb.append(TRUNCATED_OUTPUT_WARNING).append('\n');
         if (!error.isEmpty()) {
             sb.append("Error: ").append(error).append("\n");
         }

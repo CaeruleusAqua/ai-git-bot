@@ -9,6 +9,7 @@ import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -50,7 +51,8 @@ class ReadmeSyncServiceTest {
         agent = mock(ReadmeSyncAgent.class);
         AiClient aiClient = mock(AiClient.class);
         SystemPrompt systemPrompt = new SystemPrompt();
-        service = new ReadmeSyncService(repoClient, aiClient, systemPrompt, workspaceService, agent);
+        service = new ReadmeSyncService(repoClient, aiClient, systemPrompt, workspaceService, agent,
+                mock(WorkflowToolSurfaceFactory.class));
 
         when(repoClient.getPullRequestDiff(anyString(), anyString(), anyLong()))
                 .thenReturn("diff --git a/x b/x\n+change");
@@ -154,6 +156,7 @@ class ReadmeSyncServiceTest {
 
     @Test
     void offerAsPr_followUpCreationFailure_isWorkflowFailure(@TempDir Path workspace) throws Exception {
+        when(repoClient.isPullRequestOpen("acme", "my-repo", 42L)).thenReturn(true);
         Files.writeString(workspace.resolve("README.md"), "before");
         WebhookPayload payload = payloadWithoutHeadRef();
         WebhookPayload.Head head = new WebhookPayload.Head();
@@ -162,16 +165,16 @@ class ReadmeSyncServiceTest {
         when(workspaceService.prepareWorkspace(
                 repoClient, "acme", "my-repo", "feature/docs", 42L))
                 .thenReturn(WorkspaceResult.success(workspace));
-        when(agent.write(any(), any(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt()))
+        when(agent.write(any(), any(), any(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenAnswer(invocation -> {
-                    ReadmeSyncToolContext toolContext = invocation.getArgument(1);
+                    ReadmeSyncToolContext toolContext = invocation.getArgument(2);
                     Files.writeString(workspace.resolve("README.md"), "after");
                     toolContext.recordUpdated("README.md");
                     return new ReadmeSyncAgent.Result(1, "updated", false);
                 });
         when(workspaceService.listChangedFiles(workspace)).thenReturn(List.of("README.md"));
         when(workspaceService.commitAndPush(eq(workspace), anyString(), anyString(),
-                anyString(), anyString(), eq(true))).thenReturn(true);
+                anyString(), anyString(), eq(true), any(Runnable.class))).thenReturn(true);
         when(repoClient.createPullRequest(eq("acme"), eq("my-repo"), anyString(), anyString(),
                 anyString(), eq("feature/docs"))).thenReturn(null);
 

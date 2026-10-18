@@ -75,9 +75,9 @@ configuration. This means:
   seeds the built-in tool selections (file, context, repository) and then
   attaches every existing bot to it before adding the `NOT NULL` /
   foreign-key constraint.
-- New built-in context-gathering tools shipped in a later release are added
-  to Default by follow-up migrations (V29 seeded `ctags-signatures` /
-  `ctags-deps`, V37 seeded `pr-diff`). Validation tools added through
+- New built-in tools shipped in a later release are added to Default by
+  follow-up migrations (V29 seeded `ctags-signatures` / `ctags-deps` and V37
+  `pr-diff`, both CONTEXT). Validation tools added through
   `agent.validation.available-tools` and any other built-in tools are
   **not** added to Default automatically — an admin opts in by editing the
   configuration in **System settings → Tool configurations**.
@@ -88,8 +88,8 @@ The Default configuration is protected:
 
 - It **cannot be renamed**.
 - It **cannot be deleted**.
-- Its selection always includes all built-in tools known to the catalog at the
-  time of boot.
+- Its selection is everything the migrations shipped with that release seed —
+  it grows through new migrations, never at boot.
 
 A tool configuration referenced by at least one bot cannot be deleted either —
 the service rejects the request with a clear error and the UI surfaces it.
@@ -151,14 +151,34 @@ cannot bypass it:
    a `ToolResult` whose error message tells the model that the tool is
    disabled for this bot. MCP tools are exempt — they are governed by
    `McpToolSelectionService`.
+4. **Prompt tool-selection strategy.** Each agent stage's system prompt carries
+   a "when to reach for it" line for every tool that survives the whitelist
+   *and* belongs to that stage's role — the hint is read from the tool's own
+   definition (`ToolCatalog.usageHint`) and rendered by
+   `SystemPromptAssembler` into the stage's native protocol. A tool the bot
+   cannot call is never described, so the strategy cannot drift from the
+   selection.
 
 ### Validation tools
 
 Validation tools come from `agent.validation.available-tools` (see
 [Agent Documentation](AGENT.md)). They are listed in the tool-selection screen
-with kind **VALIDATION** and obey the same whitelist semantics. The Default
-configuration enables all of them; restrict them per bot to avoid the agent
-trying to run the wrong build tool.
+with kind **VALIDATION** and obey the same whitelist semantics. Like every
+built-in tool added after V12 they are **not** seeded into the Default
+configuration (see [The Default configuration](#the-default-configuration) above), so an
+admin enables the ones the bot's repositories actually need — a bot whose projects
+use Maven does not want the agent trying `gradle` or `cargo`.
+
+The list also ships **`execute`**, which runs a validation script committed
+inside the repository instead of an external binary — the escape hatch for
+documentation-only, CI/CD and infrastructure repositories without a
+conventional build command. It takes the script's repository-relative path as
+its single argument and treats exit code `0` as success; the path is resolved
+against the checkout, so nothing outside the repository can be configured. It only
+runs the script as committed — a script the current run has edited is refused, so
+the agent cannot rewrite its own checker. Existing installations have to opt in to
+`execute` by hand: it is not part of the Default configuration. See
+[Coding Agent → Custom validation scripts](CODING_AGENT.md#custom-validation-scripts-execute).
 
 ### Backwards compatibility
 
@@ -185,6 +205,30 @@ application-level code:
    fresh installations and existing Default configurations expose every
    context-gathering tool. (V30 separately backfills `pr-diff` into custom
    configurations used by bots with the agentic-review workflow.)
+4. `execute-code` is **not** seeded into the Default configuration. Its sandbox
+   confines neither the filesystem nor the network. Where the deployment names a
+   sandbox pool (the shipped image does) the program runs as one of its
+   identities, one per execution, so it reads neither the service user's files nor
+   this JVM's start-time environment (`/proc/<jvm-pid>/environ`) — and, because no
+   two runs share an identity, it cannot read a concurrent run's program, answer
+   on its bridge socket or signal its process; where no pool is named it runs as
+   the service user and reads whatever that user reads
+   (`open("/absolute/path")`, `$HOME`). Either way it reaches the network
+   (`subprocess`, `os.system`, `curl`; the import guard blocks the names it knows,
+   and a program that wants out does not use them).
+   Enabling it is therefore an operator's decision, made per bot. What a program
+   may *call* is the tools the run offers it: repository reads plus the bot's
+   selected MCP tools, never a built-in write, the branch switch or a build. An
+   MCP tool is free to act outside the bot (open an issue, post a comment), and
+   such a call is not counted as a round — MCP is a mutable surface the read-only
+   round accounting cannot see. `execute-code` and the read-only catalogue
+   tools reach a PR-workflow run (readme-sync, i18n-coverage, unit-test-author,
+   e2e) the same way they reach the coding, writer and agentic-review runs:
+   only once the bot selects them in its tool configuration — a workflow run
+   restores neither a `rg` an operator removed nor an `execute-code` it never
+   opted into. The deployment still decides whether a sandbox exists at all.
+   Network isolation, on top of the uid separation, is what would make a
+   different default defensible.
 
 After migration completes the application performs **no** further auto-seeding
 of tool configurations. Built-in or validation tools added in future releases

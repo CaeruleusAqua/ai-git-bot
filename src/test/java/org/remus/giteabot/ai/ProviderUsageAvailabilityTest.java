@@ -5,7 +5,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.Arguments;
 import org.remus.giteabot.ai.anthropic.AnthropicAiClient;
 import org.remus.giteabot.ai.google.GoogleAiClient;
-import org.remus.giteabot.ai.google.GoogleAiClient;
 import org.remus.giteabot.ai.ollama.OllamaClient;
 import org.remus.giteabot.ai.llamacpp.LlamaCppClient;
 import org.springframework.http.MediaType;
@@ -47,13 +46,14 @@ class ProviderUsageAvailabilityTest {
                 factory = http -> new OllamaClient(http, "model", 32, true);
             }
             case "llamacpp" -> {
-                path = "/completion";
-                response = "data: {\"stop\":true,\"stop_type\":\"eos\",\"content\":\"\"" + usage + "}\n\n";
+                path = "/v1/completions";
+                response = "data: {\"choices\":[{\"text\":\"\",\"finish_reason\":\"stop\"}]" + usage + "}\n\n";
                 factory = http -> new LlamaCppClient(http, "model", 32);
             }
             default -> throw new AssertionError(provider);
         }
-        server.expect(requestTo("https://provider.example" + path)).andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://provider.example" + path)).andRespond(withSuccess(response,
+                "llamacpp".equals(provider) ? MediaType.TEXT_EVENT_STREAM : MediaType.APPLICATION_JSON));
         ChatTurn turn = factory.apply(builder.build()).chatWithTools(List.of(), "Review", List.of(), "sys", null, null);
         assertThat(turn.inputTokensReported()).isEqualTo(inputReported);
         assertThat(turn.outputTokensReported()).isEqualTo(outputReported);
@@ -78,7 +78,7 @@ class ProviderUsageAvailabilityTest {
                 Arguments.of("ollama", ",\"prompt_eval_count\":0,\"eval_count\":0", true, true, 0, 0),
                 Arguments.of("ollama", ",\"eval_count\":0", false, true, 0, 0),
                 Arguments.of("llamacpp", "", false, false, 0, 0),
-                Arguments.of("llamacpp", ",\"tokens_evaluated\":0,\"tokens_predicted\":0", true, true, 0, 0),
-                Arguments.of("llamacpp", ",\"tokens_predicted\":0", false, true, 0, 0));
+                Arguments.of("llamacpp", ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}", true, true, 0, 0),
+                Arguments.of("llamacpp", ",\"usage\":{\"completion_tokens\":0}", false, true, 0, 0));
     }
 }

@@ -158,8 +158,10 @@ public class GoogleAiClient extends AbstractAiClient {
             String text = "tool".equals(message.getRole())
                     ? (message.getToolResult() != null ? message.getToolResult() : message.getContent())
                     : message.getContent();
+            // A turn that only called tools has no text; Gemini rejects an empty part,
+            // and a native session replayed in legacy mode contains exactly those turns.
             contents.add(textContent(toGoogleRole(message.getRole()),
-                    text == null ? "" : text));
+                    text == null || text.isBlank() ? message.toolCallSummary() : text));
         }
         return contents;
     }
@@ -294,9 +296,11 @@ public class GoogleAiClient extends AbstractAiClient {
             outputTokens = response.getUsageMetadata().outputTokens();
             log.info("Google AI chat-with-tools: {} prompt tokens, {} candidate tokens, {} functionCall(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            reportUsage(inputTokens, outputTokens, 0L,
+                    response.getUsageMetadata().getCachedContentTokenCount(), request, response);
         }
-        return ChatTurn.withReportedUsage(text.toString(), calls, reason, inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text.toString(), calls, reason,
+                inputTokens == null ? null : inputTokens.longValue(), outputTokens);
     }
 
     private StopReason mapStopReason(String finishReason) {
@@ -372,7 +376,8 @@ public class GoogleAiClient extends AbstractAiClient {
                     response.getUsageMetadata().getPromptTokenCount(),
                     response.getUsageMetadata().getCandidatesTokenCount());
             reportUsage(response.getUsageMetadata().getPromptTokenCount(),
-                    response.getUsageMetadata().outputTokens(), 0L, 0L, request, response);
+                    response.getUsageMetadata().outputTokens(), 0L,
+                    response.getUsageMetadata().getCachedContentTokenCount(), request, response);
         }
 
         return result;

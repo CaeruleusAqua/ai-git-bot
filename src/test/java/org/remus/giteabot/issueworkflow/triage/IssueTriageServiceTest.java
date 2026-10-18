@@ -98,7 +98,7 @@ class IssueTriageServiceTest {
         service = new IssueTriageService(aiClientFactory, giteaClientFactory, sessionService,
                 toolExecutionService, new ToolCatalog(new AgentConfigProperties()), workspaceService,
                 mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService,
-                new AgentConfigProperties());
+                new AgentConfigProperties(), null);
         lenient().when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repoClient);
         lenient().when(workspaceService.prepareWorkspace(eq(repoClient), anyString(), anyString(),

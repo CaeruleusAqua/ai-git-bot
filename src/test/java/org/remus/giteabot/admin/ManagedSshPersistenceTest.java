@@ -88,7 +88,7 @@ class ManagedSshPersistenceTest {
             case "url-long" -> input.setUrl("https://example.com/" + "u".repeat(256));
             case "action" -> input.setPostReviewAction(null);
             case "username-long" -> input.setUsername("u".repeat(256));
-            case "token-long" -> input.setToken("t".repeat(200));
+            case "token-long" -> input.setToken("t".repeat(800));
         }
         var flash = new RedirectAttributesModelMap();
         controller.save(input, input.getToken(), false, "replacement-key", null, false, flash);

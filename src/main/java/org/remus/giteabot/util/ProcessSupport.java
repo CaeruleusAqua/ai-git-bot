@@ -88,8 +88,27 @@ public final class ProcessSupport {
      */
     public static CommandResult run(ProcessBuilder processBuilder, long timeout, TimeUnit unit,
                                     int maxOutputBytes) throws IOException, InterruptedException {
+        return run(processBuilder, timeout, unit, maxOutputBytes, null);
+    }
+
+    /**
+     * As {@link #run(ProcessBuilder, long, TimeUnit, int)}, except that {@code processCleanup} stops
+     * what the command left behind.
+     *
+     * <p>A caller needs this when its child no longer shares the JVM's own user: the default cleanup
+     * is a {@code kill(2)} on the process group, which needs permission on every member and would
+     * therefore do nothing at all to such a child — the group would survive the timeout and go on
+     * holding the output pipe. The execute-code service passes, for instance, the kill its sandbox
+     * allows: stop the whole sandbox identity by uid, which it is allowed to do through sudo.</p>
+     *
+     * @param processCleanup run when the command finished, timed out or was interrupted;
+     *        {@code null} for the default process-group kill
+     */
+    public static CommandResult run(ProcessBuilder processBuilder, long timeout, TimeUnit unit,
+                                    int maxOutputBytes, Runnable processCleanup)
+            throws IOException, InterruptedException {
         if (isLinux()) {
-            return runInNewProcessGroup(processBuilder, timeout, unit, maxOutputBytes);
+            return runInNewProcessGroup(processBuilder, timeout, unit, maxOutputBytes, processCleanup);
         }
         return waitFor(processBuilder.start(), timeout, unit, maxOutputBytes);
     }
@@ -115,6 +134,17 @@ public final class ProcessSupport {
      */
     public static CommandResult runInNewProcessGroup(ProcessBuilder processBuilder, long timeout, TimeUnit unit,
                                                        int maxOutputBytes) throws IOException, InterruptedException {
+        return runInNewProcessGroup(processBuilder, timeout, unit, maxOutputBytes, null);
+    }
+
+    /**
+     * As {@link #runInNewProcessGroup(ProcessBuilder, long, TimeUnit, int)}, with
+     * {@code processCleanup} in place of the default process-group kill. See
+     * {@link #run(ProcessBuilder, long, TimeUnit, int, Runnable)} for when that matters.
+     */
+    public static CommandResult runInNewProcessGroup(ProcessBuilder processBuilder, long timeout, TimeUnit unit,
+                                                       int maxOutputBytes, Runnable processCleanup)
+            throws IOException, InterruptedException {
         if (!isLinux()) {
             throw new IOException("Process-group isolation requires Linux");
         }
@@ -126,8 +156,10 @@ public final class ProcessSupport {
         processBuilder.command(groupedCommand);
         try {
             Process process = processBuilder.start();
-            return waitFor(process, timeout, unit, maxOutputBytes,
-                    () -> terminateProcessGroup(process.pid()), false);
+            Runnable cleanup = processCleanup != null
+                    ? processCleanup
+                    : () -> terminateProcessGroup(process.pid());
+            return waitFor(process, timeout, unit, maxOutputBytes, cleanup, false);
         } catch (IOException e) {
             processBuilder.command(originalCommand);
             throw new IOException("Process-group isolation requires the setsid utility", e);
@@ -148,14 +180,13 @@ public final class ProcessSupport {
         Thread reader = startOutputReader(process, output, Math.max(0, maxOutputBytes), truncated);
         try {
             boolean finished = process.waitFor(timeout, unit);
+            processGroupCleanup.run();
             if (finished) {
                 // A successful command must not leave build daemons running outside its lifetime.
-                processGroupCleanup.run();
                 captureDescendants(process, descendants);
                 terminateDescendants(descendants);
                 terminateDescendantsForcibly(descendants);
             } else {
-                processGroupCleanup.run();
                 terminateProcessTree(process, descendants);
                 closeOutput(process);
                 process.waitFor(5, TimeUnit.SECONDS);

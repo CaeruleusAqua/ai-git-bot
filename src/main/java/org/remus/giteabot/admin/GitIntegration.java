@@ -47,7 +47,7 @@ public class GitIntegration {
     @Column
     private String username;
 
-    @Column
+    @Column(length = 1000)
     @ToString.Exclude
     private String token;
 

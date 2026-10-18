@@ -7,6 +7,8 @@ import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.prworkflow.unittest.agents.UnitTestAuthorAgent;
 import org.remus.giteabot.prworkflow.unittest.coverage.CoverageResult;
@@ -54,6 +56,8 @@ public class UnitTestService {
     private final UnitTestAuthorAgent authorAgent;
     private final UnitTestRunner runner;
     private final UnitTestSuiteRepository suiteRepository;
+    /** Builds the run's tool surface (own tools + the bot's selected read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     /** Inputs resolved from the workflow params by {@link UnitTestWorkflow}. */
     public record Request(PrWorkflowContext context,
@@ -147,10 +151,12 @@ public class UnitTestService {
 
             String kickoff = buildKickoffMessage(owner, repo, headRef, framework, prTitle, prBody, diff);
             UnitTestToolContext toolContext = new UnitTestToolContext(suite, workspace, framework);
+            WorkflowToolSurface surface = surfaceFactory.create(context.bot(), repositoryClient,
+                    UnitTestAuthorAgent.WORKFLOW_TOOLS, owner, repo, prNumber, workspace);
 
             context.requireActive("before running unit-test author agent");
             UnitTestAuthorAgent.Result authored = authorAgent.write(
-                    aiClient, toolContext, kickoff, systemPrompt, request.maxTestCases());
+                    aiClient, surface, toolContext, kickoff, systemPrompt, request.maxTestCases());
 
             if (!authored.wroteAnything()) {
                 postComment(owner, repo, prNumber,

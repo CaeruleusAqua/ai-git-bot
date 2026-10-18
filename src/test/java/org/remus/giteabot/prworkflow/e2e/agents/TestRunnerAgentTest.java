@@ -1,9 +1,11 @@
 package org.remus.giteabot.prworkflow.e2e.agents;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.remus.giteabot.agent.tools.ToolCatalog;
+import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.prworkflow.e2e.E2eTestFramework;
 import org.remus.giteabot.prworkflow.e2e.PrTestSuite;
@@ -44,18 +46,20 @@ class TestRunnerAgentTest {
     }
 
     @Test
-    void exposesOnlyTheFourRunnerTools() {
+    void exposesTheWorkflowToolsAloneWhenNoSurfaceIsWired() {
         // A dummy plan triggers a single text turn; we only care about the
         // tool descriptor surface advertised to the model in this test.
         StubAiClient ai = new StubAiClient(true).withTextTurn("nothing to do");
         TestPlan plan = new TestPlan("playwright", List.of(
                 new TestPlan.Journey("a", "A", List.of("s"), List.of("x"), "tests/a.spec.ts")), 0);
 
-        agent.execute(ai, ctx, plan, 0, null);
+        agent.execute(ai, null, ctx, plan, 0, null);
 
         assertThat(ai.invocations()).hasSize(1);
-        assertThat(ai.invocations().get(0).tools())
-                .extracting(td -> td.name())
+        // No surface → the runner's own tools alone; the read-only catalogue tools and
+        // execute-code reach a run only through the surface, gated by the bot's selection.
+        assertThat(ai.invocations().getFirst().tools())
+                .extracting(ToolDescriptor::name)
                 .containsExactlyInAnyOrder(
                         "preview-url", "preview-status", "pr-test-run", "attach-artifact");
     }
@@ -80,7 +84,7 @@ class TestRunnerAgentTest {
         TestPlan plan = new TestPlan("playwright", List.of(
                 new TestPlan.Journey("a", "A", List.of("s"), List.of("x"), "tests/a.spec.ts")), 1);
 
-        TestRunnerAgent.Result result = agent.execute(ai, ctx, plan, 1, null);
+        TestRunnerAgent.Result result = agent.execute(ai, null, ctx, plan, 1, null);
 
         assertThat(result.prTestRunInvocations()).isEqualTo(1);
         assertThat(result.attachedArtifacts()).isEqualTo(1);
@@ -90,7 +94,7 @@ class TestRunnerAgentTest {
 
     @Test
     void handlesNullAiClientGracefully() {
-        TestRunnerAgent.Result result = agent.execute(null, ctx,
+        TestRunnerAgent.Result result = agent.execute(null, null, ctx,
                 new TestPlan("playwright", List.of(), 0), 0, null);
 
         assertThat(result.budgetExhausted()).isTrue();
@@ -132,7 +136,7 @@ class TestRunnerAgentTest {
         TestPlan plan = new TestPlan("playwright", List.of(
                 new TestPlan.Journey("a", "A", List.of("s"), List.of("x"), "tests/a.spec.ts")), 0);
 
-        TestRunnerAgent.Result result = agent.execute(ai, ctx, plan, 0, null);
+        TestRunnerAgent.Result result = agent.execute(ai, null, ctx, plan, 0, null);
 
         // The recovered call counts as a real pr-test-run invocation so the
         // PlaywrightTestSuiteRunner aggregation will pick up the rows the
@@ -191,7 +195,7 @@ class TestRunnerAgentTest {
         TestPlan plan = new TestPlan("playwright", List.of(
                 new TestPlan.Journey("a", "A", List.of("s"), List.of("x"), "tests/a.spec.ts")), 0);
 
-        TestRunnerAgent.Result result = agent.execute(ai, ctx, plan, 1, null);
+        TestRunnerAgent.Result result = agent.execute(ai, null, ctx, plan, 1, null);
 
         assertThat(result.prTestRunInvocations()).isEqualTo(2);
         // The second call carries an array of strings — assert it is passed
@@ -206,7 +210,7 @@ class TestRunnerAgentTest {
                 .findFirst()
                 .orElseThrow();
         assertThat(withGrep.get("args")).isInstanceOf(List.class);
-        assertThat((List<?>) withGrep.get("args")).asList().containsExactly("--grep", "dark-mode");
+        assertThat((List<?>) withGrep.get("args")).asInstanceOf(InstanceOfAssertFactories.LIST).containsExactly("--grep", "dark-mode");
         // preview-url and attach-artifact must NOT be auto-executed for
         // fabricated responses.
         verify(toolExecutor, never()).execute(eq("preview-url"), anyMap(), any());

@@ -9,10 +9,10 @@ import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
-import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.shared.ToolFailures;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
 import org.remus.giteabot.agent.tools.ToolCallContext;
+import org.remus.giteabot.agent.tools.ToolArguments;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.ai.ChatTurn;
@@ -20,7 +20,6 @@ import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.mcp.McpToolCatalog;
-import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -53,6 +52,9 @@ import java.util.UUID;
  */
 @Slf4j
 public final class ReviewAgentStrategy implements AgentStrategy {
+
+    /** Number of rounds before the limit at which the completion reminder is sent. */
+    private static final int CLOSING_REMINDER_OFFSET = 2;
 
     /** Fetches repository file contents for the legacy {@code requestFiles} protocol. */
     @FunctionalInterface
@@ -109,6 +111,20 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     @Override
     public String systemPrompt() {
         return systemPrompt;
+    }
+
+    @Override
+    public String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
+        int explorationRounds = mode == ToolingMode.NATIVE
+                ? maxToolRounds - toolRounds : maxContextRounds - contextRounds;
+        return Math.min(remainingRounds, explorationRounds) <= CLOSING_REMINDER_OFFSET + 1 ? """
+                The review is approaching its exploration or round limit. \
+                Conclude your review now using \
+                the evidence already gathered. Avoid further tool calls and additional exploration. \
+                Return your final response in the required output format, including any required \
+                severity classification. Clearly state unverified areas or limitations; do not \
+                claim they were checked.
+                """ : null;
     }
 
     @Override
@@ -169,9 +185,8 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     public StepDecision step(AgentRunContext ctx, String aiResponse, int round) {
         ImplementationPlan plan = responseParser.parseAiResponse(aiResponse);
 
-        // Collect every read-only request the model made: context tools
-        // (requestTools), action tools (runTools — e.g. get-issue/search-issues,
-        // all harmless in WRITER mode) and explicit file requests.
+        // Collect legacy tool requests (requestTools/runTools) and explicit file requests.
+        // The REVIEW router rejects tools not explicitly enabled for read-only review.
         List<ImplementationPlan.ToolRequest> toolRequests = new ArrayList<>();
         List<String> requestFiles = null;
         if (plan != null) {
@@ -259,7 +274,7 @@ public final class ReviewAgentStrategy implements AgentStrategy {
                 ImplementationPlan.ToolRequest req = toolRequests.get(i);
                 ToolResult result = results.get(i);
                 if (result.outputTruncated()) {
-                    tools.append("Output is truncated; this is not complete evidence.\n");
+                    tools.append(ToolResult.TRUNCATED_OUTPUT_WARNING).append('\n');
                 }
                 tools.append("### `").append(req.getTool());
                 if (req.getArgs() != null && !req.getArgs().isEmpty()) {
@@ -308,48 +323,13 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         return out;
     }
 
-    /**
-     * Converts a native {@link ToolCall} into the positional-args
-     * {@link ImplementationPlan.ToolRequest} that {@link AgentToolRouter}
-     * expects. Only the read-only WRITER tool schemas are relevant here.
-     */
+    /** See {@link ToolArguments}: the mapping is shared, never copied per agent. */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
-        List<String> args = new ArrayList<>();
-        JsonNode root = call.args();
-        if (root != null && root.isObject()) {
-            if (McpTools.looksLikeMcpTool(call.name())) {
-                // MCP: pass the whole arguments object through as a single JSON blob.
-                args.add(root.toString());
-            } else {
-                JsonNode varargs = root.get("args");
-                if (varargs != null && varargs.isArray()) {
-                    varargs.forEach(node -> args.add(asString(node)));
-                } else {
-                    addIfPresent(root, "path", args);
-                    addIfPresent(root, "branch", args);
-                    addIfPresent(root, "startLine", args);
-                    addIfPresent(root, "endLine", args);
-                    if (args.isEmpty() && !root.isEmpty()) {
-                        args.add(root.toString());
-                    }
-                }
-            }
-        }
         return ImplementationPlan.ToolRequest.builder()
                 .id(call.id() == null || call.id().isBlank() ? UUID.randomUUID().toString() : call.id())
                 .tool(call.name())
-                .args(args)
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
-    }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
-    }
-
-    private static String asString(JsonNode node) {
-        return node.isString() ? node.asString() : node.toString();
     }
 }

@@ -216,9 +216,11 @@ public class OllamaClient extends AbstractAiClient {
         if (inputTokens != null || outputTokens != null) {
             log.info("Ollama chat-with-tools: {} prompt tokens, {} eval tokens, {} tool_call(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            reportUsage(inputTokens, outputTokens, 0L, response.getPromptEvalCachedCount(), request, response);
         }
-        return ChatTurn.withReportedUsage(text, calls, reason, inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text, calls, reason,
+                inputTokens == null ? null : inputTokens.longValue(),
+                outputTokens == null ? null : outputTokens.longValue());
     }
 
     private StopReason mapStopReason(String doneReason, boolean hasToolCalls) {
@@ -324,6 +326,7 @@ public class OllamaClient extends AbstractAiClient {
         merged.setDone(finalRef[0] != null);
         merged.setDoneReason(source.getDoneReason());
         merged.setPromptEvalCount(source.getPromptEvalCount());
+        merged.setPromptEvalCachedCount(source.getPromptEvalCachedCount());
         merged.setEvalCount(source.getEvalCount());
         merged.setTotalDuration(source.getTotalDuration());
         if (source.getModel() != null) {
@@ -348,7 +351,8 @@ public class OllamaClient extends AbstractAiClient {
                     context,
                     response.getPromptEvalCount(),
                     response.getEvalCount());
-            reportUsage(response.getPromptEvalCount(), response.getEvalCount(), 0L, 0L, request, response);
+            reportUsage(response.getPromptEvalCount(), response.getEvalCount(), 0L,
+                    response.getPromptEvalCachedCount(), request, response);
         }
 
         return result;

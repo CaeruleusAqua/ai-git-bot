@@ -66,6 +66,9 @@ public class GoogleAiResponse {
         @JsonProperty("promptTokenCount")
         private Integer promptTokenCount;
 
+        @JsonProperty("cachedContentTokenCount")
+        private Integer cachedContentTokenCount;
+
         @JsonProperty("candidatesTokenCount")
         private Integer candidatesTokenCount;
 

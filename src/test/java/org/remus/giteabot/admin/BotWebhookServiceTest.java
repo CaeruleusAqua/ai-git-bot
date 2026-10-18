@@ -22,6 +22,7 @@ import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
+import org.remus.giteabot.repository.Reactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.session.SessionService;
 import org.remus.giteabot.systemsettings.McpConfiguration;
@@ -111,7 +112,7 @@ class BotWebhookServiceTest {
         AgentServiceFactory agentServiceFactory = new AgentServiceFactory(aiClientFactory,
                 giteaClientFactory, promptService, agentConfig, agentSessionService,
                 toolExecutionService, toolCatalog, workspaceService,
-                mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService);
+                mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService, null);
         org.remus.giteabot.issueworkflow.IssueWorkflowRegistry issueWorkflowRegistry =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowRegistry(java.util.List.of(
                         new org.remus.giteabot.issueworkflow.coding.CodingIssueWorkflow(agentServiceFactory),
@@ -119,7 +120,7 @@ class BotWebhookServiceTest {
         org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator issueWorkflowOrchestrator =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator(
                         issueWorkflowRegistry, workflowSelectionService, botService, eventHookPublisher,
-                        retryNotices, commentAcknowledgement);
+                        retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
         botWebhookService = new BotWebhookService(giteaClientFactory,
                 agentSessionService, botService,
                 prWorkflowOrchestrator, e2eTestPrCloseHandler,
@@ -289,6 +290,30 @@ class BotWebhookServiceTest {
         assertTrue(botWebhookService.isReviewAgainRequestFromPullRequestAuthor(payload, "@ai_bot"));
     }
 
+    @Test
+    void isReviewAgainRequest_ignoresReviewKeywordInBotAlias() {
+        WebhookPayload payload = new WebhookPayload();
+        WebhookPayload.Comment comment = new WebhookPayload.Comment();
+        comment.setBody("@AI_Review_Bot can you repeat that explanation?");
+        payload.setComment(comment);
+
+        assertFalse(botWebhookService.isReviewAgainRequest(payload, "@AI_Review_Bot"));
+    }
+
+    @Test
+    void isReviewAgainRequest_usernameAliasNeedsReviewKeywordOutsideAlias() {
+        // GitLab aliases are "@" + bot username; "review" inside the username no longer counts
+        WebhookPayload payload = new WebhookPayload();
+        WebhookPayload.Comment comment = new WebhookPayload.Comment();
+        comment.setBody("@reviewbot again");
+        payload.setComment(comment);
+
+        assertFalse(botWebhookService.isReviewAgainRequest(payload, "@reviewbot"));
+
+        comment.setBody("@reviewbot please review this again");
+        assertTrue(botWebhookService.isReviewAgainRequest(payload, "@reviewbot"));
+    }
+
     // ---- handlePrComment routing tests ----
 
     @Test
@@ -311,6 +336,110 @@ class BotWebhookServiceTest {
 
         verify(aiClientFactory, never()).getClient(any());
         verify(giteaClientFactory, never()).getApiClient(any());
+    }
+
+    @Test
+    void reviewPullRequest_opened_addsEyesReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithNoEnabledWorkflowsDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        bot.setWorkflowConfiguration(emptyPrConfiguration);
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithEnabledWorkflowsReacts() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_reviewRequested_addsEyesReactionToPullRequest() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("review_requested");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithoutRepositoryOwnerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.getRepository().setOwner(null);
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedFromDisallowedCallerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of("allowed_user"));
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(giteaClientFactory, never()).getApiClient(any());
+        verify(prWorkflowOrchestrator, never()).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_reopened_doesNotAddReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("reopened");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addPullRequestReaction(any(), any(), any(), any());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
     }
 
     /**
@@ -443,9 +572,36 @@ class BotWebhookServiceTest {
 
         botWebhookService.handleIssueAssigned(bot, payload);
 
+        verify(repositoryApiClient).addIssueReaction("Test", "my-repo", 12L, Reactions.EYES);
         verify(repositoryApiClient).createIssue(eq("Test"), eq("my-repo"),
                 eq("AI Created Issue: Vague issue"), org.mockito.ArgumentMatchers.contains("Originates from #12"));
         verify(agentSessionService).setGeneratedIssueNumber(session, 99L);
+    }
+
+    @Test
+    void writerBot_issueAssignmentReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("writer", "writer_bot");
+        makeWriterBot(bot);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addIssueReaction(any(), any(), any(), any());
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient).addIssueReaction(
+                "Test", "my-repo", 12L, Reactions.EYES);
+        verify(repositoryApiClient).getIssueDetails("Test", "my-repo", 12L);
+    }
+
+    @Test
+    void issueAssignmentWithNoConfiguredWorkflowDoesNotReact() {
+        Bot bot = createBot("writer", "writer_bot");
+        bot.setIssueWorkflowConfiguration(null);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient, never()).addIssueReaction(any(), any(), any(), any());
     }
 
     @Test
@@ -1588,6 +1744,21 @@ class BotWebhookServiceTest {
         bot.setSystemPrompt(systemPrompt);
         bot.setIssueWorkflowConfiguration(codingIssueConfiguration);
         return bot;
+    }
+
+    private static WebhookPayload openedPrPayload() {
+        WebhookPayload payload = new WebhookPayload();
+        payload.setAction("opened");
+        WebhookPayload.Repository repository = new WebhookPayload.Repository();
+        repository.setName("my-repo");
+        WebhookPayload.Owner owner = new WebhookPayload.Owner();
+        owner.setLogin("Test");
+        repository.setOwner(owner);
+        payload.setRepository(repository);
+        WebhookPayload.PullRequest pullRequest = new WebhookPayload.PullRequest();
+        pullRequest.setNumber(42L);
+        payload.setPullRequest(pullRequest);
+        return payload;
     }
 
     /**
