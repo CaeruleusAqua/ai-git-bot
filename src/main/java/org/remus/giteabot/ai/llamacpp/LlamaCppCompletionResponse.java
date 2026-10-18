@@ -3,7 +3,9 @@ package org.remus.giteabot.ai.llamacpp;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+import org.remus.giteabot.ai.UsageCounterDeserializer;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.List;
 
@@ -32,9 +34,11 @@ public class LlamaCppCompletionResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Usage {
         @JsonProperty("prompt_tokens")
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
         private Integer promptTokens;
 
         @JsonProperty("completion_tokens")
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
         private Integer completionTokens;
 
         @JsonProperty("prompt_tokens_details")
@@ -45,6 +49,7 @@ public class LlamaCppCompletionResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class PromptTokensDetails {
         @JsonProperty("cached_tokens")
+        @JsonDeserialize(using = UsageCounterDeserializer.LongCounter.class)
         private Long cachedTokens;
     }
 
