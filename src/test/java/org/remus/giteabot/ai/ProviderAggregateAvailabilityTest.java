@@ -77,7 +77,7 @@ class ProviderAggregateAvailabilityTest {
     }
 
     @ParameterizedTest(name = "{0}: usage = {1}")
-    @MethodSource({"invalidOptionalComponents", "invalidPrimaryCounters", "invalidCachedMetadata"})
+    @MethodSource({"invalidOptionalComponents", "invalidPrimaryCounters", "invalidCachedMetadata", "invalidTotalMetadata"})
     void invalidCounterRetainsAnswerAndIndependentUsage(String provider, String usage,
             boolean inputReported, boolean outputReported, long input, long output, long cacheWrite, long cacheRead) {
         for (String path : List.of("native-turn", "text-turn", "chat")) {
@@ -130,6 +130,13 @@ class ProviderAggregateAvailabilityTest {
                 """.formatted(value), true, true, 100, 10, 0, 0));
     }
 
+    static Stream<Arguments> invalidTotalMetadata() {
+        return invalidCounterValues().map(value -> Arguments.of("google", """
+                {"totalTokenCount":%s,"promptTokenCount":100,"candidatesTokenCount":3,
+                 "thoughtsTokenCount":7,"cachedContentTokenCount":40}
+                """.formatted(value), true, true, 100, 10, 0, 40));
+    }
+
     @ParameterizedTest(name = "{0}: usage = {1}")
     @MethodSource("counterPresenceCases")
     void distinguishesMissingPrimaryCountersFromOmittedOptionalComponents(String provider, String usage,
@@ -152,6 +159,7 @@ class ProviderAggregateAvailabilityTest {
                 Arguments.of("anthropic", "{\"input_tokens\":0}", true, false, 0, 0, 0, 0),
                 Arguments.of("anthropic", "{\"output_tokens\":0}", false, true, 0, 0, 0, 0),
                 Arguments.of("google", "{}", false, false, 0, 0, 0, 0),
+                Arguments.of("google", "{\"totalTokenCount\":17}", false, false, 0, 0, 0, 0),
                 Arguments.of("google", "{\"promptTokenCount\":0,\"candidatesTokenCount\":0}", true, true, 0, 0, 0, 0),
                 Arguments.of("google", """
                         {"promptTokenCount":0,"candidatesTokenCount":0,"thoughtsTokenCount":0,"cachedContentTokenCount":0}

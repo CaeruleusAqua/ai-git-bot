@@ -89,6 +89,7 @@ public class GoogleAiResponse {
         }
 
         @JsonProperty("totalTokenCount")
-        private int totalTokenCount;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer totalTokenCount = 0;
     }
 }
