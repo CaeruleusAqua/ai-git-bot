@@ -2,6 +2,7 @@ package org.remus.giteabot.systemsettings;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.RequiredArgsConstructor;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotRepository;
@@ -9,6 +10,8 @@ import org.remus.giteabot.admin.EncryptionService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,11 +20,13 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class McpConfigurationService {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper()
+            .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
     private final McpConfigurationRepository mcpConfigurationRepository;
     private final BotRepository botRepository;
     private final EncryptionService encryptionService;
+    private final McpSelectedToolRepository mcpSelectedToolRepository;
 
     @Transactional(readOnly = true)
     public List<McpConfiguration> findAll() {
@@ -54,8 +59,40 @@ public class McpConfigurationService {
         if (duplicateName) {
             throw new IllegalArgumentException("An MCP configuration with this name already exists");
         }
-        mcpConfiguration.setJsonContent(encryptionService.encrypt(mcpConfiguration.getJsonContent()));
-        return mcpConfigurationRepository.save(mcpConfiguration);
+        if (mcpConfiguration.getId() != null) {
+            String hash = configurationHash(mcpConfiguration);
+            mcpSelectedToolRepository.findByMcpConfigurationId(mcpConfiguration.getId()).stream()
+                    .filter(tool -> !hash.equals(tool.getReviewApprovalConfigurationHash()))
+                    .forEach(McpSelectedTool::clearReviewReadOnlyApproval);
+        }
+        McpConfiguration stored = mcpConfiguration.getId() == null ? new McpConfiguration()
+                : mcpConfigurationRepository.findById(mcpConfiguration.getId())
+                        .orElseThrow(() -> new IllegalArgumentException("MCP configuration not found"));
+        // Never bind selections/approvals from the configuration form, or replace its orphan-removal collection.
+        stored.setName(mcpConfiguration.getName());
+        stored.setJsonContent(encryptionService.encrypt(mcpConfiguration.getJsonContent()));
+        return mcpConfigurationRepository.save(stored);
+    }
+
+    /** Hash of the complete decrypted configured JSON, never resolved runtime secrets. */
+    @Transactional(readOnly = true)
+    public String configurationHash(McpConfiguration configuration) {
+        try {
+            return approvalHash(OBJECT_MAPPER.readValue(getDecryptedJsonContent(configuration), Object.class));
+        } catch (Exception e) {
+            // Parser exceptions can quote credential-bearing JSON.
+            throw new IllegalArgumentException("Cannot bind approval to invalid MCP configuration");
+        }
+    }
+
+    static String approvalHash(Object value) {
+        try {
+            Object jsonValue = OBJECT_MAPPER.convertValue(value, Object.class);
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(OBJECT_MAPPER.writeValueAsBytes(jsonValue)));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Cannot hash MCP approval evidence");
+        }
     }
 
     /** Decrypted JSON content of the configuration (may contain credentials). */

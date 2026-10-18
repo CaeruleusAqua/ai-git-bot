@@ -205,7 +205,7 @@ class BotControllerTest {
         config.setId(7L);
         when(mcpConfigurationService.findById(7L)).thenReturn(Optional.of(config));
         when(mcpToolSelectionService.loadSelectedTools(7L)).thenReturn(List.of(
-                new McpToolSelectionRow("mcp:github:get_file", "github", "get_file", "Get file", "Read file", true)
+                new McpToolSelectionRow("mcp:github:get_file", "github", "get_file", "Get file", "Read file", true, false)
         ));
 
         ResponseEntity<List<java.util.Map<String, String>>> response = controller.selectedMcpTools(7L);

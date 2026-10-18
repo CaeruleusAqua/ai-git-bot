@@ -6,7 +6,7 @@ public record McpToolSelectionRow(
         String toolName,
         String title,
         String description,
-        boolean selected
+        boolean selected,
+        boolean reviewReadOnlyApproved
 ) {
 }
-

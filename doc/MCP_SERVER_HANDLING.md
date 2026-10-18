@@ -82,6 +82,49 @@ Unselected tools remain hidden from the AI agent.
 
 <img src="screenshots/mcp/screenshot_mcp_tool_selection.png" alt="MCP-Tools selection" width="600"/>
 
+### Read-only approval for the new review protocol (configuration only)
+
+The separate **Read-only approval (new review protocol)** checkbox is an explicit
+ADMIN trust decision. Selection, **select all visible**, descriptions and server
+`readOnlyHint` annotations never grant approval. Existing selections start
+unapproved. Only selected, currently discoverable tools can be approved; an
+unchecked approval revokes it. Filtering, paging and saving an unchanged selection
+preserve the independent approval state. The form submits explicit grant/revoke
+edits, not existing checked rows as new grants, so an old form cannot silently
+restore invalidated trust after a configuration change and revert.
+
+Approval is bound to the configuration ID, qualified/server/tool names, a SHA-256
+of the discovered tool definition (including its input schema and descriptive
+metadata), and a SHA-256 of the complete decrypted configured JSON. JSON object
+key order and whitespace do not change those hashes. Only hashes are persisted,
+not additional credential copies. Credential references are hashed as configured,
+not resolved; this is not a proof of the remote server's implementation or of
+runtime credential values. Editing configuration invalidates mismatching approvals,
+including endpoint, header, token or reference changes. An observed changed or
+unavailable definition is not approved. Reapproval requires a fresh form and an
+explicit checkbox; the server-held form snapshot prevents stale forms or submitted
+hashes from silently rebinding trust.
+
+`McpToolSelectionService.readReviewReadOnlyApprovals(configurationId, catalog)`
+returns immutable identity/schema/configuration-hash evidence only for selected,
+approved entries matching that catalog and the current stored configuration.
+It does not discover tools, freeze a run, or authorize execution. Its caller must
+provide a sufficiently fresh trusted catalog and freeze/verify the matching actual
+definitions and configuration for the run. Those runtime requirements belong to
+RR07B, together with descriptor/dispatch enforcement and run fencing.
+The admin form uses `loadSelectionSnapshot` so displayed rows and server-held
+evidence come from the same catalog/configuration read; request fields contain
+only names, explicit edits and a session-bound nonce, not proof hashes.
+
+**This configuration feature does not activate the new protocol. LEGACY0 and
+current legacy routes are unchanged and do not enforce this new approval.**
+
+The H2 and PostgreSQL `V63__review_mcp_read_only_approval.sql` files are provisional.
+Release is blocked (Draft) until the central V59 (#468) → V60 (#474) → V61 (control)
+→ V62 (completion) → V63 sequence is integrated and qualified. Isolated development
+tests are not qualification of an actual V60/V62 production upgrade; no missing
+migrations are copied or bypassed with `outOfOrder`.
+
 ## 3) View Selected Tools in Bot Configuration
 
 In **Bots → New/Edit**, next to the MCP configuration dropdown, use **Details**.
@@ -204,5 +247,3 @@ HMAC endpoint for an MCP-backed target.
 | You already operate an internal platform MCP server.              | Your deploy lives in Jenkins / CI directly.                  |
 | You want everything (tool whitelist, audit) under one MCP roof.   | You need a callback channel because deploy is fire-and-forget. |
 | Your deploy/status flow is naturally request/response.            | The CI side cannot easily call out to an MCP server.         |
-
-
