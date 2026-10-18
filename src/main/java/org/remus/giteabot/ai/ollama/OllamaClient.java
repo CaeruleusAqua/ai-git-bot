@@ -346,7 +346,7 @@ public class OllamaClient extends AbstractAiClient {
 
         String result = response.getMessage().getContent();
 
-        if (response.getPromptEvalCount() != null && response.getEvalCount() != null) {
+        if (response.getPromptEvalCount() != null || response.getEvalCount() != null) {
             log.info("Ollama {} response: {} prompt tokens, {} eval tokens",
                     context,
                     response.getPromptEvalCount(),
