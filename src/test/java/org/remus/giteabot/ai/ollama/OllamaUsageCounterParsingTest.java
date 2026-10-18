@@ -4,10 +4,13 @@ import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.ai.AiAuditRecorder;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
@@ -28,13 +31,15 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.longThat;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
+@ExtendWith(MockitoExtension.class)
 class OllamaUsageCounterParsingTest {
 
     private HttpServer server;
+    @Mock
+    private AiAuditRecorder recorder;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -66,7 +71,6 @@ class OllamaUsageCounterParsingTest {
             "9999999999999999999999999999999999999999999999999999999999999999999999999999999999"})
     void unavailableCountersPreserveTheAnswerWithoutReportingInvalidInput(String counterJson) {
         OllamaClient client = respondingWith(counterJson);
-        AiAuditRecorder recorder = mock(AiAuditRecorder.class);
         client.setAuditRecorder(recorder);
 
         ChatTurn turn = chatWithTools(client);
@@ -83,7 +87,6 @@ class OllamaUsageCounterParsingTest {
     @ValueSource(ints = {0, 7, Integer.MAX_VALUE})
     void validCountersStillReachTheTurnAndRawAudit(int counter) {
         OllamaClient client = respondingWith(Integer.toString(counter));
-        AiAuditRecorder recorder = mock(AiAuditRecorder.class);
         client.setAuditRecorder(recorder);
         AiUsageProperties properties = new AiUsageProperties();
         properties.setRawPayloadsEnabled(true);

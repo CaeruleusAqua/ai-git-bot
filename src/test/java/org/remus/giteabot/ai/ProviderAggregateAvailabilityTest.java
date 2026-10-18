@@ -32,48 +32,15 @@ class ProviderAggregateAvailabilityTest {
     void suppliedNullComponentInvalidatesOnlyItsDependentAggregate(
             String provider, boolean nativeTools, boolean inputReported, boolean outputReported,
             long input, long output) {
-        RestClient.Builder http = RestClient.builder().baseUrl("https://provider.example");
-        MockRestServiceServer server = MockRestServiceServer.bindTo(http).build();
-        AbstractAiClient client;
-        String endpoint;
-        String response;
-        switch (provider) {
-            case "anthropic" -> {
-                client = new AnthropicAiClient(http.build(), "test-model", 32, true, false, false, null);
-                endpoint = "/v1/messages";
-                response = """
-                        {"content":[{"type":"text","text":"Answer"}],"stop_reason":"end_turn",
-                         "usage":{"input_tokens":0,"output_tokens":3,"cache_creation_input_tokens":null}}
-                        """;
-            }
-            case "google" -> {
-                client = new GoogleAiClient(http.build(), "test-model", 32, true);
-                endpoint = "/v1beta/models/test-model:generateContent";
-                response = """
-                        {"candidates":[{"content":{"parts":[{"text":"Answer"}]},"finishReason":"STOP"}],
-                         "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":0,"thoughtsTokenCount":null}}
-                        """;
-            }
-            default -> throw new IllegalArgumentException(provider);
-        }
-        server.expect(requestTo("https://provider.example" + endpoint))
-                .andExpect(nativeTools ? jsonPath("$.tools").isNotEmpty() : jsonPath("$.tools").doesNotExist())
-                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
-        CapturingRecorder recorder = new CapturingRecorder();
-        client.setAuditRecorder(recorder);
-        List<ToolDescriptor> tools = nativeTools
-                ? List.of(new ToolDescriptor("lookup", "Read context", null)) : List.of();
-
-        ChatTurn turn = client.chatWithTools(List.of(), "Question", tools, "System", null, null);
-
-        server.verify();
-        assertAll(
-                () -> assertThat(turn.assistantText()).isEqualTo("Answer"),
-                () -> assertThat(turn.inputTokensReported()).as("input availability").isEqualTo(inputReported),
-                () -> assertThat(turn.outputTokensReported()).as("output availability").isEqualTo(outputReported),
-                () -> assertThat(turn.inputTokens()).isEqualTo(input),
-                () -> assertThat(turn.outputTokens()).isEqualTo(output),
-                () -> assertThat(recorder.usage).containsExactly(new RecordedUsage(input, output, 0, 0)));
+        String usage = "anthropic".equals(provider)
+                ? """
+                  {"input_tokens":0,"output_tokens":3,"cache_creation_input_tokens":null}
+                  """
+                : """
+                  {"promptTokenCount":5,"candidatesTokenCount":0,"thoughtsTokenCount":null}
+                  """;
+        assertUsage(provider, nativeTools ? "native-turn" : "text-turn", usage,
+                inputReported, outputReported, input, output, 0, 0);
     }
 
     @ParameterizedTest(name = "{0}: usage = {1}")
