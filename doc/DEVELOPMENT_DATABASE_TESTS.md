@@ -8,6 +8,16 @@ It checks Flyway validation and migration replay, validates all current JPA
 entities with Hibernate (`validate`, never schema generation), and proves a real
 JPA commit/reload/rollback. No application context, SSH setup or provider calls run.
 
+JPA validation derives naming defaults from the pinned Spring Boot 4.0.5
+`HibernateProperties`: `PhysicalNamingStrategySnakeCaseImpl` (the same physical
+strategy previously set explicitly) and `SpringImplicitNamingStrategy`. The
+fixture intentionally auto-detects and asserts the dialect of each actual engine:
+`H2Dialect` for H2, `PostgreSQLDialect` for PostgreSQL, matching the shipped
+`application.properties` and `application-docker.properties` respectively. It does
+not apply the base H2 dialect to PostgreSQL or load application profiles, external
+`spring.jpa.*` overrides or customizers. This is a fresh-schema mapping and
+transaction contract, not a full production application-startup check.
+
 ## Local checks (Linux, Java 21+, Maven 3.9+)
 
 ```bash
@@ -67,8 +77,12 @@ permission in this disposable database, not permission to create/drop databases.
 Keep full-chain migrations serial in this dedicated database: existing PostgreSQL
 guards (for example V12/V14) inspect constraint names without filtering schema.
 Concurrent migrated sibling schemas can therefore mask missing constraints. The
-current tests use Surefire's default serial execution; transaction race tests can
-still use separate connections inside one migrated fixture.
+contract class uses JUnit `@Isolated`, preventing overlap with other JUnit test
+classes even if parallel execution is enabled. Apply it to every later contract
+class that migrates or retains a migrated fixture; `@Execution(SAME_THREAD)` alone
+does not prevent overlap with other classes. Do not run separate test JVMs against
+the same disposable database. Transaction race tests can still use separate
+connections inside one migrated fixture.
 
 Use `flyway()` to migrate and `dataSource()` for real JDBC/JPA transactions in
 later control, lease and CAS contract tests. Add `*ContractTest` classes under

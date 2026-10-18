@@ -1,10 +1,17 @@
 package org.remus.giteabot.database;
 
+import org.hibernate.dialect.H2Dialect;
+import org.hibernate.dialect.PostgreSQLDialect;
+import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.opentest4j.TestAbortedException;
 import org.remus.giteabot.admin.AdminUser;
+import org.springframework.boot.hibernate.SpringImplicitNamingStrategy;
+import org.springframework.boot.hibernate.autoconfigure.HibernateProperties;
+import org.springframework.boot.hibernate.autoconfigure.HibernateSettings;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
@@ -16,6 +23,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Isolated("V12/V14 constraint guards inspect all PostgreSQL schemas")
 class FlywayDatabaseContractTest {
 
     @ParameterizedTest
@@ -35,23 +43,27 @@ class FlywayDatabaseContractTest {
             assertEquals(migrations, flyway.info().applied().length);
             assertEquals(0, flyway.info().pending().length);
             assertEquals(0, flyway.migrate().migrationsExecuted, "A second startup must not rerun migrations");
-            validateJpaAndTransactions(database);
+            validateJpaAndTransactions(database, vendor);
         }
     }
 
-    private static void validateJpaAndTransactions(FlywayDatabase database) {
+    private static void validateJpaAndTransactions(FlywayDatabase database, String vendor) {
         var factory = new LocalContainerEntityManagerFactoryBean();
         factory.setDataSource(database.dataSource());
         factory.setPackagesToScan("org.remus.giteabot");
         factory.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
-        factory.setJpaPropertyMap(Map.of(
+        // Use Boot's physical and implicit naming defaults, but detect the actual fixture's dialect.
+        factory.setJpaPropertyMap(new HibernateProperties().determineHibernateProperties(Map.of(
                 "hibernate.hbm2ddl.auto", "validate",
-                "hibernate.default_schema", database.schema(),
-                "hibernate.physical_naming_strategy", "org.hibernate.boot.model.naming.PhysicalNamingStrategySnakeCaseImpl"));
+                "hibernate.default_schema", database.schema()), new HibernateSettings()));
         try {
             factory.afterPropertiesSet();
             var entityManagerFactory = factory.getObject();
             assertNotNull(entityManagerFactory);
+            assertEquals(SpringImplicitNamingStrategy.class.getName(),
+                    entityManagerFactory.getProperties().get("hibernate.implicit_naming_strategy"));
+            assertEquals(vendor.equals("h2") ? H2Dialect.class : PostgreSQLDialect.class,
+                    entityManagerFactory.unwrap(SessionFactoryImplementor.class).getJdbcServices().getDialect().getClass());
             var entityManager = SharedEntityManagerCreator.createSharedEntityManager(entityManagerFactory);
             var transactions = new TransactionTemplate(new JpaTransactionManager(entityManagerFactory));
             var user = new AdminUser();
