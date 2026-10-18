@@ -27,12 +27,14 @@ public class McpToolSelectionService {
 
     /** Captures displayed rows and server-held approval evidence from the same configuration/catalog read. */
     public SelectionSnapshot loadSelectionSnapshot(Long mcpConfigurationId) {
-        McpConfiguration configuration = requireConfiguration(mcpConfigurationId);
-        McpToolCatalog catalog = mcpOrchestrationService.discoverTools(configuration);
+        McpConfiguration observed = captureConfiguration(mcpConfigurationId);
+        McpToolCatalog catalog = mcpOrchestrationService.discoverTools(observed);
+        McpConfiguration configuration = lockObservedConfiguration(observed);
+        List<McpSelectedTool> selected = mcpConfigurationService.refreshSelectedTools(mcpConfigurationId);
         Map<String, ReviewReadOnlyApproval> candidates = approvalCandidates(configuration, catalog);
-        Set<String> approved = validatedApprovals(mcpConfigurationId, candidates).stream()
+        Set<String> approved = validatedApprovals(selected, candidates).stream()
                 .map(ReviewReadOnlyApproval::qualifiedName).collect(Collectors.toSet());
-        Set<String> selectedQualifiedNames = selectedQualifiedToolNameSet(mcpConfigurationId);
+        Set<String> selectedQualifiedNames = selected.stream().map(McpSelectedTool::getQualifiedName).collect(Collectors.toSet());
         List<McpToolSelectionRow> rows = catalog.tools().stream()
                 .sorted(Comparator
                         .comparing(McpToolDefinition::serverName, String.CASE_INSENSITIVE_ORDER)
@@ -83,17 +85,18 @@ public class McpToolSelectionService {
                                   List<String> reviewReadOnlyApprovedQualifiedNames,
                                   List<String> revokedQualifiedNames,
                                   Map<String, ReviewReadOnlyApproval> reviewedEvidence) {
-        McpConfiguration configuration = requireConfiguration(mcpConfigurationId);
+        McpConfiguration observed = captureConfiguration(mcpConfigurationId);
         Set<String> selected = new LinkedHashSet<>(selectedQualifiedNames == null ? List.of() : selectedQualifiedNames);
         Set<String> approved = new LinkedHashSet<>(reviewReadOnlyApprovedQualifiedNames == null
                 ? List.of() : reviewReadOnlyApprovedQualifiedNames);
         Set<String> revoked = new LinkedHashSet<>(revokedQualifiedNames == null ? List.of() : revokedQualifiedNames);
 
-        Map<String, McpSelectedTool> existingByQualifiedName = mcpSelectedToolRepository.findByMcpConfigurationId(mcpConfigurationId)
+        McpToolCatalog catalog = mcpOrchestrationService.discoverTools(observed);
+        McpConfiguration configuration = lockObservedConfiguration(observed);
+        Map<String, McpSelectedTool> existingByQualifiedName = mcpConfigurationService.refreshSelectedTools(mcpConfigurationId)
                 .stream()
                 .collect(HashMap::new, (map, entry) -> map.put(entry.getQualifiedName(), entry), HashMap::putAll);
 
-        McpToolCatalog catalog = mcpOrchestrationService.discoverTools(configuration);
         Map<String, McpToolDefinition> discoveredByQualifiedName = catalog.tools().stream()
                 .collect(HashMap::new, (map, entry) -> map.put(entry.qualifiedName(), entry), HashMap::putAll);
         Map<String, ReviewReadOnlyApproval> currentEvidence = approvalCandidates(configuration, catalog);
@@ -150,19 +153,20 @@ public class McpToolSelectionService {
     }
 
     /**
-     * Reads selected admin approvals matching the supplied trusted catalog and current configuration,
+     * Reads selected admin approvals matching a captured configuration and its trusted catalog,
      * invalidating stale bindings. Does not discover, authorize execution or freeze a run.
      * A future protocol caller owns catalog freshness and freezing the matching definitions/configuration.
      */
-    public List<ReviewReadOnlyApproval> readReviewReadOnlyApprovals(Long mcpConfigurationId, McpToolCatalog catalog) {
-        McpConfiguration configuration = requireConfiguration(mcpConfigurationId);
-        return validatedApprovals(mcpConfigurationId, approvalCandidates(configuration, catalog));
+    public List<ReviewReadOnlyApproval> readReviewReadOnlyApprovals(McpConfiguration observedConfiguration, McpToolCatalog catalog) {
+        McpConfiguration configuration = lockObservedConfiguration(observedConfiguration);
+        return validatedApprovals(mcpConfigurationService.refreshSelectedTools(configuration.getId()),
+                approvalCandidates(configuration, catalog));
     }
 
-    private List<ReviewReadOnlyApproval> validatedApprovals(Long mcpConfigurationId,
+    private List<ReviewReadOnlyApproval> validatedApprovals(List<McpSelectedTool> selectedTools,
                                                           Map<String, ReviewReadOnlyApproval> current) {
         List<ReviewReadOnlyApproval> result = new ArrayList<>();
-        for (McpSelectedTool selected : mcpSelectedToolRepository.findByMcpConfigurationId(mcpConfigurationId)) {
+        for (McpSelectedTool selected : selectedTools) {
             ReviewReadOnlyApproval evidence = current.get(selected.getQualifiedName());
             if (matchesApproval(selected, evidence)) {
                 result.add(evidence);
@@ -236,8 +240,25 @@ public class McpToolSelectionService {
                 .collect(LinkedHashSet::new, Set::add, Set::addAll);
     }
 
-    private McpConfiguration requireConfiguration(Long id) {
-        return mcpConfigurationRepository.findById(id)
+    private McpConfiguration captureConfiguration(Long id) {
+        McpConfiguration stored = mcpConfigurationRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("MCP configuration not found"));
+        McpConfiguration captured = new McpConfiguration();
+        captured.setId(stored.getId());
+        captured.setName(stored.getName());
+        captured.setJsonContent(stored.getJsonContent());
+        captured.setCreatedAt(stored.getCreatedAt());
+        captured.setUpdatedAt(stored.getUpdatedAt());
+        captured.setReviewApprovalRevision(stored.getReviewApprovalRevision());
+        return captured;
+    }
+
+    private McpConfiguration lockObservedConfiguration(McpConfiguration observed) {
+        String binding = mcpConfigurationService.configurationHash(observed);
+        McpConfiguration current = mcpConfigurationService.lockForApprovalUpdate(observed.getId());
+        if (!binding.equals(mcpConfigurationService.configurationHash(current))) {
+            throw new IllegalArgumentException("MCP configuration changed during discovery; reload the tool form");
+        }
+        return current;
     }
 }

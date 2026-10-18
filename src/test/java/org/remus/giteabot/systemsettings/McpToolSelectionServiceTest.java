@@ -86,7 +86,7 @@ class McpToolSelectionServiceTest {
 
         assertEquals(List.of("mcp:github:search"), service.loadSelectedTools(configuration.getId()).stream()
                 .map(McpToolSelectionRow::qualifiedName).toList());
-        assertTrue(service.readReviewReadOnlyApprovals(configuration.getId(),
+        assertTrue(service.readReviewReadOnlyApprovals(configuration,
                 mcpOrchestrationService.discoverTools(configuration)).isEmpty());
     }
 
@@ -95,6 +95,13 @@ class McpToolSelectionServiceTest {
         configuration.setName("Config");
         configuration.setJsonContent("[{\"name\":\"github\",\"url\":\"https://example.test/mcp\"}]");
         return mcpConfigurationRepository.save(configuration);
+    }
+
+    @Test
+    void legacySixArgumentRowConstructorDoesNotGrantApproval() {
+        McpToolSelectionRow row = new McpToolSelectionRow("mcp:docs:read", "docs", "read", "Read", "Read files", true);
+        assertTrue(row.selected());
+        org.junit.jupiter.api.Assertions.assertFalse(row.reviewReadOnlyApproved());
     }
 
     private McpToolDefinition tool(String qualifiedName, String serverName, String name) {

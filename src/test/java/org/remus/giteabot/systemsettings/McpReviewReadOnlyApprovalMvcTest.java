@@ -107,7 +107,7 @@ class McpReviewReadOnlyApprovalMvcTest {
                         .param("reviewReadOnlyApprovedQualifiedNames", NAME)
                         .param("reviewApprovalSchemaHash", "forged").param("reviewApprovalConfigurationHash", "forged"))
                 .andExpect(redirectedUrl("/system-settings"));
-        var evidence = selections.readReviewReadOnlyApprovals(id, catalog);
+        var evidence = readApprovals(catalog);
         assertEquals(1, evidence.size());
         assertEquals(id, evidence.getFirst().mcpConfigurationId());
         assertEquals(NAME, evidence.getFirst().qualifiedName());
@@ -116,7 +116,7 @@ class McpReviewReadOnlyApprovalMvcTest {
         var row = repository.findByMcpConfigurationId(id).stream().filter(t -> NAME.equals(t.getQualifiedName())).findFirst().orElseThrow();
         assertEquals(evidence.getFirst().schemaHash(), row.getReviewApprovalSchemaHash());
         selections.saveSelection(id, List.of(NAME, OTHER));
-        assertEquals(evidence, selections.readReviewReadOnlyApprovals(id, catalog));
+        assertEquals(evidence, readApprovals(catalog));
         assertNotEquals(row.getId(), repository.findByMcpConfigurationId(id).getFirst().getId());
         assertTrue(selections.loadAvailableTools(id).stream().anyMatch(t -> NAME.equals(t.qualifiedName()) && t.reviewReadOnlyApproved()));
 
@@ -159,10 +159,10 @@ class McpReviewReadOnlyApprovalMvcTest {
     void schemaChangesAndUnavailabilityInvalidatePersistedApprovalWithoutResurrection() {
         approve();
         McpToolCatalog changed = new McpToolCatalog(List.of(tool("read", Map.of("type", "array"))));
-        assertTrue(selections.readReviewReadOnlyApprovals(id, changed).isEmpty());
+        assertTrue(readApprovals(changed).isEmpty());
         assertUnapproved();
         approve();
-        assertTrue(selections.readReviewReadOnlyApprovals(id, McpToolCatalog.empty()).isEmpty());
+        assertTrue(readApprovals(McpToolCatalog.empty()).isEmpty());
         assertUnapproved();
     }
 
@@ -194,9 +194,9 @@ class McpReviewReadOnlyApprovalMvcTest {
     @Test
     void unchangedConfigurationAndReorderedJsonKeepApprovalAndSelection() {
         approve();
-        var approved = selections.readReviewReadOnlyApprovals(id, catalog);
+        var approved = readApprovals(catalog);
         saveConfiguration("{\"headers\":{\"X-Key\":\"credential-sentinel\"}, \"url\":\"https://example.test/mcp\",\"name\":\"docs\"}");
-        assertEquals(approved, selections.readReviewReadOnlyApprovals(id, catalog));
+        assertEquals(approved, readApprovals(catalog));
         assertEquals(1, selections.loadSelectedTools(id).size());
     }
 
@@ -211,7 +211,34 @@ class McpReviewReadOnlyApprovalMvcTest {
                 .andExpect(redirectedUrl(toolsUrl())).andExpect(flash().attributeExists("error"));
         assertUnapproved();
         approve();
-        assertEquals(1, selections.readReviewReadOnlyApprovals(id, catalog).size());
+        assertEquals(1, readApprovals(catalog).size());
+    }
+
+    @Test
+    void configurationEvidenceIsOpaquePerConfigurationAndCannotBeReplayedAfterAChangeAndRevert() {
+        McpConfiguration first = configurations.findById(id).orElseThrow();
+        String original = configurations.configurationHash(first);
+        McpConfiguration identical = new McpConfiguration();
+        identical.setName("Identical JSON with independent identity");
+        identical.setJsonContent(JSON);
+        identical = configurations.save(identical);
+        assertNotEquals(original, configurations.configurationHash(identical));
+        assertTrue(original.matches("[a-f0-9]{64}"));
+        saveConfiguration(JSON.replace("credential-sentinel", "changed-secret"));
+        String changed = configurations.configurationHash(configurations.findById(id).orElseThrow());
+        assertNotEquals(original, changed);
+        saveConfiguration(JSON);
+        assertNotEquals(original, configurations.configurationHash(configurations.findById(id).orElseThrow()));
+    }
+
+    @Test
+    void configurationFormCannotReplaceTheServerOwnedApprovalRevision() throws Exception {
+        String original = configurations.configurationHash(configurations.findById(id).orElseThrow());
+        mvc.perform(post("/system-settings/mcp-configurations/save").with(user("admin").roles("ADMIN")).with(csrf())
+                        .param("id", id.toString()).param("name", "Name-only edit").param("jsonContent", JSON)
+                        .param("reviewApprovalRevision", "client-owned-revision"))
+                .andExpect(status().is3xxRedirection()).andExpect(flash().attributeExists("success"));
+        assertEquals(original, configurations.configurationHash(configurations.findById(id).orElseThrow()));
     }
 
     @Test
@@ -222,14 +249,14 @@ class McpReviewReadOnlyApprovalMvcTest {
         catalog = new McpToolCatalog(List.of(tool("read", schema)));
         when(mcpOrchestrationService.discoverTools(any(McpConfiguration.class))).thenReturn(catalog);
         approve();
-        var approved = selections.readReviewReadOnlyApprovals(id, catalog);
+        var approved = readApprovals(catalog);
         var reordered = new java.util.LinkedHashMap<String, Object>();
         reordered.put("properties", schema.get("properties"));
         reordered.put("type", "object");
         catalog = new McpToolCatalog(List.of(tool("read", reordered)));
         when(mcpOrchestrationService.discoverTools(any(McpConfiguration.class))).thenReturn(catalog);
         selections.saveSelection(id, List.of(NAME));
-        assertEquals(approved, selections.readReviewReadOnlyApprovals(id, catalog));
+        assertEquals(approved, readApprovals(catalog));
         catalog = new McpToolCatalog(List.of(new McpToolDefinition("docs", "read", "Changed tool", "Changed description", reordered, NAME)));
         assertUnapproved();
     }
@@ -261,6 +288,7 @@ class McpReviewReadOnlyApprovalMvcTest {
         selected.setReviewReadOnlyApproved(true);
         selected.setReviewApprovalSchemaHash("forged");
         selected.setReviewApprovalConfigurationHash("forged");
+        repository.flush();
         assertUnapproved();
     }
 
@@ -289,7 +317,7 @@ class McpReviewReadOnlyApprovalMvcTest {
     }
 
     private void assertUnapproved() {
-        assertTrue(selections.readReviewReadOnlyApprovals(id, catalog).isEmpty());
+        assertTrue(readApprovals(catalog).isEmpty());
         repository.findByMcpConfigurationId(id).forEach(tool -> {
             assertFalse(tool.isReviewReadOnlyApproved());
             assertNull(tool.getReviewApprovalSchemaHash());
@@ -303,6 +331,10 @@ class McpReviewReadOnlyApprovalMvcTest {
         edit.setName("Approval fixture");
         edit.setJsonContent(json);
         configurations.save(edit);
+    }
+
+    private List<McpToolSelectionService.ReviewReadOnlyApproval> readApprovals(McpToolCatalog discovered) {
+        return selections.readReviewReadOnlyApprovals(configurations.findById(id).orElseThrow(), discovered);
     }
 
     private McpToolDefinition tool(String name, Map<String, Object> schema) {

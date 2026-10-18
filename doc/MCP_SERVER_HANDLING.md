@@ -95,17 +95,18 @@ restore invalidated trust after a configuration change and revert.
 
 Approval is bound to the configuration ID, qualified/server/tool names, a SHA-256
 of the discovered tool definition (including its input schema and descriptive
-metadata), and a SHA-256 of the complete decrypted configured JSON. JSON object
-key order and whitespace do not change those hashes. Only hashes are persisted,
-not additional credential copies. Credential references are hashed as configured,
-not resolved; this is not a proof of the remote server's implementation or of
-runtime credential values. Editing configuration invalidates mismatching approvals,
-including endpoint, header, token or reference changes. An observed changed or
-unavailable definition is not approved. Reapproval requires a fresh form and an
-explicit checkbox; the server-held form snapshot prevents stale forms or submitted
-hashes from silently rebinding trust.
+metadata), and a SHA-256 of the configuration ID plus its server-owned opaque
+approval revision. Each configuration has an independent random UUID revision;
+no fingerprint of decrypted credentials is persisted or exposed. A semantic
+configured-JSON change rotates that revision and clears approvals atomically,
+including endpoint, header, token or reference changes. JSON object key order,
+formatting and name-only edits preserve the revision; changing and reverting the
+JSON does not restore an old revision. Resolved runtime secret values and remote
+server implementation changes are not inferred from configuration. An observed
+changed or unavailable definition is not approved. Reapproval requires a fresh
+form and an explicit checkbox; submitted revision/proof metadata is not trusted.
 
-`McpToolSelectionService.readReviewReadOnlyApprovals(configurationId, catalog)`
+`McpToolSelectionService.readReviewReadOnlyApprovals(observedConfiguration, catalog)`
 returns immutable identity/schema/configuration-hash evidence only for selected,
 approved entries matching that catalog and the current stored configuration.
 It does not discover tools, freeze a run, or authorize execution. Its caller must
@@ -115,6 +116,14 @@ RR07B, together with descriptor/dispatch enforcement and run fencing.
 The admin form uses `loadSelectionSnapshot` so displayed rows and server-held
 evidence come from the same catalog/configuration read; request fields contain
 only names, explicit edits and a session-bound nonce, not proof hashes.
+Discovery uses a detached configuration capture **before** any row lock. Then
+replacement, validation/invalidation, configuration saves and deletion serialize
+on the same configuration row, refresh persisted state, and reject a configuration
+revision that changed during discovery. No configuration/protocol lock spans MCP
+discovery. This prevents an ordinary stale selection save from undoing a committed
+revocation. The public read seam requires the configuration captured for its
+catalog, rather than pairing an old catalog with whichever configuration is now
+stored. Runtime callers still own catalog freshness and per-run freezing.
 
 **This configuration feature does not activate the new protocol. LEGACY0 and
 current legacy routes are unchanged and do not enforce this new approval.**

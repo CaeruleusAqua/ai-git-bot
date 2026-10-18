@@ -17,6 +17,7 @@ class McpReadOnlyApprovalMigrationTest {
             try (var statement = connection.createStatement()) {
                 statement.execute("CREATE TABLE mcp_configurations (id BIGINT PRIMARY KEY)");
                 statement.execute("INSERT INTO mcp_configurations VALUES (1)");
+                statement.execute("INSERT INTO mcp_configurations VALUES (2)");
             }
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource("db/migration/h2/V8__mcp_selected_tools.sql"));
@@ -27,6 +28,16 @@ class McpReadOnlyApprovalMigrationTest {
             ScriptUtils.executeSqlScript(connection,
                     new ClassPathResource("db/migration/h2/V63__review_mcp_read_only_approval.sql"));
             try (var statement = connection.createStatement()) {
+                statement.execute("INSERT INTO mcp_configurations (id) VALUES (3)");
+                try (var revisions = statement.executeQuery("SELECT review_approval_revision FROM mcp_configurations")) {
+                    var unique = new java.util.HashSet<String>();
+                    while (revisions.next()) {
+                        assertNotNull(revisions.getString(1));
+                        java.util.UUID.fromString(revisions.getString(1));
+                        assertTrue(unique.add(revisions.getString(1)), "each configuration needs an independent opaque revision");
+                    }
+                    assertEquals(3, unique.size());
+                }
                 statement.execute("INSERT INTO mcp_selected_tools (mcp_configuration_id, qualified_name, server_name, tool_name) "
                         + "VALUES (1, 'mcp:docs:new', 'docs', 'new')");
                 try (var rows = statement.executeQuery("SELECT review_read_only_approved, review_approval_schema_hash, "

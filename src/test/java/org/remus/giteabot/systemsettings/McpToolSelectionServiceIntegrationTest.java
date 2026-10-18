@@ -53,14 +53,14 @@ class McpToolSelectionServiceIntegrationTest {
                 new McpToolDefinition("github", "get_commit", "get_commit", "desc", Map.of(), name))));
 
         service.saveSelection(id, List.of(name));
-        assertTrue(service.readReviewReadOnlyApprovals(id,
+        assertTrue(service.readReviewReadOnlyApprovals(configuration,
                 mcpOrchestrationService.discoverTools(configuration)).isEmpty());
 
         service.saveSelection(id, List.of(name), List.of(name), List.of(), service.loadSelectionSnapshot(id).approvalCandidates());
-        var approved = service.readReviewReadOnlyApprovals(id, mcpOrchestrationService.discoverTools(configuration));
+        var approved = service.readReviewReadOnlyApprovals(configuration, mcpOrchestrationService.discoverTools(configuration));
         assertEquals(1, approved.size());
         service.saveSelection(id, List.of(name));
-        assertEquals(approved, service.readReviewReadOnlyApprovals(id,
+        assertEquals(approved, service.readReviewReadOnlyApprovals(configuration,
                 mcpOrchestrationService.discoverTools(configuration)));
     }
 
