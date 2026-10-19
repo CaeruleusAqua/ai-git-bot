@@ -211,16 +211,16 @@ public class OllamaClient extends AbstractAiClient {
         }
         StopReason reason = response.isDone()
                 ? mapStopReason(response.getDoneReason(), !calls.isEmpty()) : StopReason.OTHER;
-        long inputTokens = 0L;
-        long outputTokens = 0L;
-        if (response.getPromptEvalCount() != null && response.getEvalCount() != null) {
-            inputTokens = response.getPromptEvalCount();
-            outputTokens = response.getEvalCount();
+        Integer inputTokens = response.getPromptEvalCount();
+        Integer outputTokens = response.getEvalCount();
+        if (inputTokens != null || outputTokens != null) {
             log.info("Ollama chat-with-tools: {} prompt tokens, {} eval tokens, {} tool_call(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            reportUsage(inputTokens, outputTokens, 0L, response.getPromptEvalCachedCount(), request, response);
         }
-        return new ChatTurn(text, calls, reason, inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text, calls, reason,
+                inputTokens == null ? null : inputTokens.longValue(),
+                outputTokens == null ? null : outputTokens.longValue());
     }
 
     private StopReason mapStopReason(String doneReason, boolean hasToolCalls) {
@@ -326,6 +326,7 @@ public class OllamaClient extends AbstractAiClient {
         merged.setDone(finalRef[0] != null);
         merged.setDoneReason(source.getDoneReason());
         merged.setPromptEvalCount(source.getPromptEvalCount());
+        merged.setPromptEvalCachedCount(source.getPromptEvalCachedCount());
         merged.setEvalCount(source.getEvalCount());
         merged.setTotalDuration(source.getTotalDuration());
         if (source.getModel() != null) {
@@ -345,12 +346,13 @@ public class OllamaClient extends AbstractAiClient {
 
         String result = response.getMessage().getContent();
 
-        if (response.getPromptEvalCount() != null && response.getEvalCount() != null) {
+        if (response.getPromptEvalCount() != null || response.getEvalCount() != null) {
             log.info("Ollama {} response: {} prompt tokens, {} eval tokens",
                     context,
                     response.getPromptEvalCount(),
                     response.getEvalCount());
-            reportUsage(response.getPromptEvalCount(), response.getEvalCount(), 0L, 0L, request, response);
+            reportUsage(response.getPromptEvalCount(), response.getEvalCount(), 0L,
+                    response.getPromptEvalCachedCount(), request, response);
         }
 
         return result;

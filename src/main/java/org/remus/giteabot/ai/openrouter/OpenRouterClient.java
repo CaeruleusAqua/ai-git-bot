@@ -92,7 +92,12 @@ public final class OpenRouterClient extends AbstractAiClient {
             }
         }
         ChatTurn turn = response.toTurn();
-        if (response.usage() != null) reportUsage(turn.inputTokens(), turn.outputTokens(), 0L, 0L, request, response);
+        if (response.usage() != null) {
+            OpenRouterResponse.PromptTokensDetails details = response.usage().promptTokensDetails();
+            reportUsage(turn.inputTokens(), turn.outputTokens(),
+                    details != null ? details.cacheWriteTokens() : null,
+                    details != null ? details.cachedTokens() : null, request, response);
+        }
         return turn;
     }
 

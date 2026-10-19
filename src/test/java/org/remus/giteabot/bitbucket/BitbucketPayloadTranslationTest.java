@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class BitbucketPayloadTranslationTest {
 
-    private final BitbucketWebhookHandler handler = new BitbucketWebhookHandler(null);
+    private final BitbucketWebhookHandler handler = new BitbucketWebhookHandler(null, null, null);
 
     @Test
     void translatePullRequestCreated_mapsAllFields() {
@@ -120,12 +120,12 @@ class BitbucketPayloadTranslationTest {
     }
 
     @Test
-    void translateRepository_usesRepositorySlugInsteadOfDisplayName() {
+    void translateRepository_usesCanonicalSlugsInsteadOfDisplayNameAndLegacyOwner() {
         Map<String, Object> raw = new HashMap<>(createPullRequestPayload());
         raw.put("repository", Map.of(
                 "name", "Review fixture",
                 "full_name", "workspace/review-fixture",
-                "owner", Map.of("username", "workspace", "display_name", "Workspace Owner"),
+                "owner", Map.of("username", "legacy-owner", "display_name", "Workspace Owner"),
                 "workspace", Map.of("slug", "workspace")));
 
         WebhookPayload payload = handler.translatePayload("pullrequest:created", raw);
@@ -236,6 +236,33 @@ class BitbucketPayloadTranslationTest {
         ));
 
         return raw;
+    }
+
+    @Test
+    void teamOwnedRepository_usesWorkspaceSlugInsteadOfLegacyOwnerUsername() {
+        Map<String, Object> raw = createPullRequestPayload();
+        raw.put("repository", Map.of(
+                "name", "ai-git-bot-test-bitbucket",
+                "full_name", "postremus/ai-git-bot-test-bitbucket",
+                "owner", Map.of("type", "team", "username", "postremus1", "display_name", "postremus"),
+                "workspace", Map.of("type", "workspace", "slug", "postremus", "name", "postremus")));
+
+        WebhookPayload payload = handler.translatePayload("pullrequest:created", raw);
+
+        assertEquals("postremus", payload.getRepository().getOwner().getLogin());
+    }
+
+    @Test
+    void repositoryWithoutWorkspace_fallsBackToFullNamePrefix() {
+        Map<String, Object> raw = createPullRequestPayload();
+        raw.put("repository", Map.of(
+                "name", "repo",
+                "full_name", "postremus/repo",
+                "owner", Map.of("username", "postremus1")));
+
+        WebhookPayload payload = handler.translatePayload("pullrequest:created", raw);
+
+        assertEquals("postremus", payload.getRepository().getOwner().getLogin());
     }
 
     private Map<String, Object> createCommentPayload(String body, Map<String, Object> inline) {

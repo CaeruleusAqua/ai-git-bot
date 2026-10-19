@@ -62,7 +62,12 @@ record OpenRouterResponse(String id, String model, List<Choice> choices, Usage u
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Function(String name, String arguments) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
-    record Usage(@JsonProperty("prompt_tokens") long promptTokens, @JsonProperty("completion_tokens") long completionTokens) {}
+    record Usage(@JsonProperty("prompt_tokens") long promptTokens,
+                 @JsonProperty("completion_tokens") long completionTokens,
+                 @JsonProperty("prompt_tokens_details") PromptTokensDetails promptTokensDetails) {}
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    record PromptTokensDetails(@JsonProperty("cached_tokens") Long cachedTokens,
+                               @JsonProperty("cache_write_tokens") Long cacheWriteTokens) {}
     @JsonIgnoreProperties(ignoreUnknown = true)
     record Error(JsonNode code, String message) {
         int httpStatus() {
