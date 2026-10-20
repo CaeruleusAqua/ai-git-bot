@@ -50,6 +50,14 @@ public enum ToolKind {
     PR_WORKFLOW,
 
     /**
+     * The agent's own control surface: tools that steer one run rather than touch the
+     * repository. {@code execute-code} is the only member, and it is dispatched before the
+     * tool families because it runs a program that calls back into them. Silent, like the
+     * rest of the agent's bookkeeping.
+     */
+    AGENT_CONTROL,
+
+    /**
      * Tool name is not configured for the current agent role.
      */
     UNKNOWN

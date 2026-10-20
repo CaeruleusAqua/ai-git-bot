@@ -5,6 +5,7 @@ import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.repository.PostReviewAction;
+import org.remus.giteabot.util.BotMention;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 
@@ -134,7 +135,7 @@ public class GitLabWebhookHandler {
         String noteBody = (String) attrs.get("note");
         String botAlias = botWebhookService.getBotAlias(bot);
 
-        if (noteBody == null || !noteBody.contains(botAlias)) {
+        if (!BotMention.isMentioned(noteBody, botAlias)) {
             return ResponseEntity.ok("ignored");
         }
 
@@ -185,11 +186,11 @@ public class GitLabWebhookHandler {
 
         String botAlias = botWebhookService.getBotAlias(bot);
         if (botWebhookService.isReviewAgainRequest(webhookPayload, botAlias)) {
-            if (botWebhookService.isReviewAgainRequestFromPullRequestAuthor(webhookPayload, botAlias)) {
-                botWebhookService.reviewPullRequest(bot, webhookPayload);
-                return ResponseEntity.ok("review triggered");
+            if (!botWebhookService.isPullRequestAuthor(webhookPayload)) {
+                return ResponseEntity.ok("ignored");
             }
-            return ResponseEntity.ok("ignored");
+            botWebhookService.reviewPullRequest(bot, webhookPayload);
+            return ResponseEntity.ok("review triggered");
         }
 
         botWebhookService.handleBotCommand(bot, webhookPayload);

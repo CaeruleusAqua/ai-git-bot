@@ -9,6 +9,7 @@ import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -45,7 +46,8 @@ class I18nCoverageServiceTest {
         agent = mock(I18nCoverageAgent.class);
         AiClient aiClient = mock(AiClient.class);
         SystemPrompt systemPrompt = new SystemPrompt();
-        service = new I18nCoverageService(repoClient, aiClient, systemPrompt, workspaceService, agent);
+        service = new I18nCoverageService(repoClient, aiClient, systemPrompt, workspaceService, agent,
+                mock(WorkflowToolSurfaceFactory.class));
     }
 
     private I18nCoverageService.Request request(WebhookPayload payload, SuiteLifecycleMode mode) {
@@ -116,7 +118,7 @@ class I18nCoverageServiceTest {
                 request(payloadWithHead("feature/x"), SuiteLifecycleMode.COMMIT_TO_PR));
 
         assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.SUCCESS);
-        verify(agent, never()).generate(any(), any(), anyString(), any(), any(), anyString(),
+        verify(agent, never()).generate(any(), any(), any(), anyString(), any(), any(), anyString(),
                 org.mockito.ArgumentMatchers.anyInt());
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
@@ -160,9 +162,9 @@ class I18nCoverageServiceTest {
                 repoClient, "acme", "my-repo", "feature/i18n", 42L))
                 .thenReturn(WorkspaceResult.success(workspace));
         when(repoClient.getPullRequestDiff("acme", "my-repo", 42L)).thenReturn("diff");
-        when(agent.generate(any(), any(), anyString(), any(), any(), anyString(),
+        when(agent.generate(any(), any(), any(), anyString(), any(), any(), anyString(),
                 org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation -> {
-                    I18nCoverageToolContext toolContext = invocation.getArgument(1);
+                    I18nCoverageToolContext toolContext = invocation.getArgument(2);
                     Files.writeString(workspace.resolve("i18n/messages_de.properties"), "a=1\nb=2");
                     toolContext.recordUpdated("i18n/messages_de.properties");
                     return new I18nCoverageAgent.Result(1, "updated", false);

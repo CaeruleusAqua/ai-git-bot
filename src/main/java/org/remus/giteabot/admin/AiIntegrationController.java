@@ -4,10 +4,14 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.ai.AiProviderRegistry;
+import org.remus.giteabot.ai.openrouter.OpenRouterDataCollection;
+import org.remus.giteabot.ai.openrouter.OpenRouterRegion;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.util.List;
@@ -62,6 +66,8 @@ public class AiIntegrationController {
         model.addAttribute("suggestedModels", providerRegistry.getSuggestedModels());
         model.addAttribute("apiKeyRequirements", providerRegistry.getApiKeyRequirements());
         model.addAttribute("providerFlavors", providerRegistry.getFlavors());
+        model.addAttribute("openRouterRegions", OpenRouterRegion.values());
+        model.addAttribute("openRouterDataCollections", OpenRouterDataCollection.values());
     }
 
     @PostMapping("/save")
@@ -70,11 +76,20 @@ public class AiIntegrationController {
                        @RequestParam(required = false) String apiKey,
                        @RequestParam(required = false, defaultValue = "false") boolean clearApiKey,
                        RedirectAttributes redirectAttributes) {
+        // Numeric form mistakes get a safe flash message; malformed non-numeric settings stay HTTP 400.
+        int numericErrors = bindingResult.getFieldErrorCount("maxTokens")
+                + bindingResult.getFieldErrorCount("contextWindowTokens")
+                + bindingResult.getFieldErrorCount("parallelWorkerLimit");
+        if (bindingResult.getErrorCount() > numericErrors) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid AI integration settings");
+        }
         // The form limits the value in the browser; this stops a hand-made POST
         // from storing a value the limiter would read as "unlimited".
         if (bindingResult.hasErrors()) {
+            String messageKey = bindingResult.getErrorCount() == bindingResult.getFieldErrorCount("parallelWorkerLimit")
+                    ? "flash.aiWorkerLimitOutOfRange" : "flash.aiNumericFieldsInvalid";
             redirectAttributes.addFlashAttribute("error", messageSource.getMessage(
-                    "flash.aiWorkerLimitOutOfRange", null, LocaleContextHolder.getLocale()));
+                    messageKey, null, LocaleContextHolder.getLocale()));
             return "redirect:/ai-integrations";
         }
         try {

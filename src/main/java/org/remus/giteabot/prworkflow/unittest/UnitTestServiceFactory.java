@@ -7,6 +7,7 @@ import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GiteaClientFactory;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.unittest.agents.UnitTestAuthorAgent;
 import org.remus.giteabot.prworkflow.unittest.runner.UnitTestRunner;
 import org.remus.giteabot.repository.RepositoryApiClient;
@@ -28,6 +29,7 @@ public class UnitTestServiceFactory {
     private final UnitTestAuthorAgent authorAgent;
     private final UnitTestRunner runner;
     private final UnitTestSuiteRepository suiteRepository;
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     public UnitTestService create(Bot bot) {
         if (bot.getSystemPrompt() == null) {
@@ -36,7 +38,7 @@ public class UnitTestServiceFactory {
         AiClient aiClient = aiClientFactory.getClient(bot.getAiIntegration());
         RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
         return new UnitTestService(repoClient, aiClient, bot.getSystemPrompt(),
-                workspaceService, frameworkDetector, authorAgent, runner, suiteRepository);
+                workspaceService, frameworkDetector, authorAgent, runner, suiteRepository, surfaceFactory);
     }
 }
 

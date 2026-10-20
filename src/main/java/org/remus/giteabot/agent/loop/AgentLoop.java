@@ -9,6 +9,7 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.ResourceAccessException;
 
@@ -75,6 +76,7 @@ public final class AgentLoop {
         List<PendingMessage> pending = new ArrayList<>();
         pending.add(new PendingMessage("user", initialUserMessage));
         String currentMessage = initialUserMessage;
+        AiMessage closingReminder = null;
 
         ToolingMode resolvedMode = resolveMode(strategy);
         ctx.setToolingMode(resolvedMode);
@@ -93,10 +95,20 @@ public final class AgentLoop {
 
             AgentMetricsHolder.recordToolCallMode(modeTag(resolvedMode), providerTag);
 
+            if (closingReminder == null) {
+                String reminder = strategy.roundBudgetReminder(budget.maxRounds() - round + 1, resolvedMode);
+                if (reminder != null && !reminder.isBlank()) {
+                    closingReminder = AiMessage.builder().role("user").content(reminder).build();
+                    pending.add(new PendingMessage("user", reminder));
+                }
+            }
+            if (closingReminder != null && !history.contains(closingReminder)) {
+                history.add(closingReminder);
+            }
             long started = System.nanoTime();
             ChatTurn turn;
             try {
-                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round);
+                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round, closingReminder);
             } finally {
                 AgentMetricsHolder.recordLatency(modeTag(resolvedMode), providerTag,
                         Duration.ofNanos(System.nanoTime() - started));
@@ -148,8 +160,7 @@ public final class AgentLoop {
                 // Include toolResult (not just content) and tool descriptors
                 // in the estimation — these are part of every API call.
                 int historyChars = history.stream()
-                        .mapToInt(m -> (m.getContent() == null ? 0 : m.getContent().length())
-                                + (m.getToolResult() == null ? 0 : m.getToolResult().length()))
+                        .mapToInt(HistoryCompactor::messageChars)
                         .sum();
                 int systemPromptChars = systemPrompt != null ? systemPrompt.length() : 0;
                 int currentMessageChars = currentMessage != null ? currentMessage.length() : 0;
@@ -183,8 +194,8 @@ public final class AgentLoop {
             if (ctx.auditToolCallConsumer() != null
                     && decision instanceof StepDecision.ContinueWithToolResults(
                             List<StepDecision.ToolCallResult> results, String follow)) {
-                Long inTokens = turn.inputTokens() > 0 ? turn.inputTokens() : null;
-                Long outTokens = turn.outputTokens() > 0 ? turn.outputTokens() : null;
+                Long inTokens = turn.inputTokensReported() ? turn.inputTokens() : null;
+                Long outTokens = turn.outputTokensReported() ? turn.outputTokens() : null;
                 var toolCalls = turn.toolCalls();
                 for (int i = 0; i < Math.min(results.size(), toolCalls.size()); i++) {
                     var tc = toolCalls.get(i);
@@ -216,11 +227,7 @@ public final class AgentLoop {
             if (currentMessage != null && !currentMessage.isEmpty()) {
                 history.add(AiMessage.builder().role("user").content(currentMessage).build());
             }
-            history.add(AiMessage.builder()
-                    .role("assistant")
-                    .content(aiResponse)
-                    .toolCalls(turn.toolCalls().isEmpty() ? null : turn.toolCalls())
-                    .build());
+            history.add(turn.toAssistantMessage());
 
             if (decision instanceof StepDecision.ContinueWithToolResults(
                     List<StepDecision.ToolCallResult> results, String follow
@@ -314,11 +321,10 @@ public final class AgentLoop {
         return mode == ToolingMode.NATIVE ? "native" : "legacy";
     }
 
-    /** Sums content + toolResult character counts for all history messages. */
+    /** Sums visible content, tool results and opaque reasoning for all history messages. */
     private static int historyMessageChars(List<AiMessage> history) {
         return history.stream()
-                .mapToInt(m -> (m.getContent() == null ? 0 : m.getContent().length())
-                        + (m.getToolResult() == null ? 0 : m.getToolResult().length()))
+                .mapToInt(HistoryCompactor::messageChars)
                 .sum();
     }
 
@@ -350,7 +356,7 @@ public final class AgentLoop {
      * connection aborted) and streaming transport failures wrapped in
      * {@link ResourceAccessException} (read timeout, mid-stream connection
      * drop, malformed stream line — see {@link
-     * org.remus.giteabot.ai.StreamingLineReader}).
+     * org.remus.giteabot.ai.StreamingLineReader}), and HTTP 408 request timeouts.
      *
      * <p>All other failures, and any failure on the second attempt, are
      * re-thrown to the caller.</p>
@@ -359,7 +365,8 @@ public final class AgentLoop {
      * @throws RuntimeException if the failure is not retryable or the retry fails
      */
     private ChatTurn callAiWithRetry(List<AiMessage> history, String currentMessage,
-                                     List<ToolDescriptor> tools, String systemPrompt, int round) {
+                                     List<ToolDescriptor> tools, String systemPrompt, int round,
+                                     AiMessage closingReminder) {
         int maxAttempts = 2;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -368,6 +375,7 @@ public final class AgentLoop {
                         null, budget.maxTokensPerCall());
             } catch (RuntimeException e) {
                 boolean promptTooLong = e instanceof HttpClientErrorException clientError
+                        && clientError.getStatusCode().value() != HttpStatus.REQUEST_TIMEOUT.value()
                         && aiClient.isPromptTooLongError(clientError);
                 boolean transientNetworkFailure = isTransientNetworkFailure(e);
 
@@ -381,6 +389,9 @@ public final class AgentLoop {
                             attempt, maxAttempts, e.getMessage());
                     // Aggressive compaction: keep only the last 2 compaction units
                     compactor.compactAggressively(history);
+                    if (closingReminder != null && !history.contains(closingReminder)) {
+                        history.add(closingReminder);
+                    }
                 } else {
                     log.warn("AgentLoop: AI call failed with a transient network error on attempt {}/{}. "
                             + "Retrying without changing history. Error: {}",
@@ -402,6 +413,10 @@ public final class AgentLoop {
             // StreamingLineReader); a retry is the intended recovery, so treat
             // the whole family as transient rather than matching the message.
             switch (current) {
+                case HttpClientErrorException clientError
+                        when clientError.getStatusCode().value() == HttpStatus.REQUEST_TIMEOUT.value() -> {
+                    return true;
+                }
                 case ResourceAccessException resourceAccessException -> {
                     return true;
                 }

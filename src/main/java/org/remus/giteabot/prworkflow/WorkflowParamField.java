@@ -28,6 +28,10 @@ import java.util.Objects;
  * @param description   short hint shown beneath the input
  * @param allowedValues ordered list of permitted choices; non-empty only when
  *                      {@code type == }{@link ParamType#ENUM}
+ * @param minimum       inclusive lower bound for {@link ParamType#INTEGER};
+ *                      {@code null} means no lower bound
+ * @param maximum       inclusive upper bound for {@link ParamType#INTEGER};
+ *                      {@code null} means no upper bound
  */
 public record WorkflowParamField(
         String name,
@@ -36,7 +40,9 @@ public record WorkflowParamField(
         boolean required,
         String defaultValue,
         String description,
-        List<EnumOption> allowedValues) {
+        List<EnumOption> allowedValues,
+        Long minimum,
+        Long maximum) {
 
     public WorkflowParamField {
         Objects.requireNonNull(name, "name");
@@ -55,6 +61,14 @@ public record WorkflowParamField(
                     "allowedValues is only supported for ENUM fields, but field '" + name
                             + "' has type " + type);
         }
+        if (type != ParamType.INTEGER && (minimum != null || maximum != null)) {
+            throw new IllegalArgumentException(
+                    "minimum/maximum is only supported for INTEGER fields, but field '" + name
+                            + "' has type " + type);
+        }
+        if (minimum != null && maximum != null && minimum > maximum) {
+            throw new IllegalArgumentException("minimum must not exceed maximum (field '" + name + "')");
+        }
         for (EnumOption opt : allowedValues) {
             Objects.requireNonNull(opt, "allowedValues entry must not be null (field '" + name + "')");
             if (opt.key() == null || opt.key().isBlank()) {
@@ -70,6 +84,19 @@ public record WorkflowParamField(
     }
 
     /**
+     * Backwards-compatible constructor for fields without numeric bounds.
+     */
+    public WorkflowParamField(String name,
+                              String label,
+                              ParamType type,
+                              boolean required,
+                              String defaultValue,
+                              String description,
+                              List<EnumOption> allowedValues) {
+        this(name, label, type, required, defaultValue, description, allowedValues, null, null);
+    }
+
+    /**
      * Convenience constructor for non-{@link ParamType#ENUM ENUM} fields that
      * takes a {@link WorkflowParamName} enum value for compile-time key safety.
      */
@@ -81,6 +108,22 @@ public record WorkflowParamField(
                               String description) {
         this(Objects.requireNonNull(name, "name").key(),
                 label, type, required, defaultValue, description, List.of());
+    }
+
+    /**
+     * Convenience constructor for bounded {@link ParamType#INTEGER INTEGER}
+     * fields with a compile-time-safe parameter name.
+     */
+    public WorkflowParamField(WorkflowParamName name,
+                              String label,
+                              ParamType type,
+                              boolean required,
+                              String defaultValue,
+                              String description,
+                              Long minimum,
+                              Long maximum) {
+        this(Objects.requireNonNull(name, "name").key(),
+                label, type, required, defaultValue, description, List.of(), minimum, maximum);
     }
 
     /**

@@ -11,6 +11,7 @@ import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
 import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
+import org.remus.giteabot.agent.tools.ToolArguments;
 import org.remus.giteabot.agent.tools.ToolCallContext;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
@@ -22,7 +23,6 @@ import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
-import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -370,72 +370,21 @@ public final class CodingAgentStrategy implements AgentStrategy {
         return text.strip();
     }
 
-    /** Convert a single native {@link ToolCall} into a positional-args
-     *  {@link ImplementationPlan.ToolRequest} compatible with the existing
-     *  {@link AgentToolRouter}. */
+    /**
+     * Convert a single native {@link ToolCall} into a positional-args
+     * {@link ImplementationPlan.ToolRequest} compatible with the existing
+     * {@link AgentToolRouter}. The JSON-to-positional mapping itself lives in
+     * {@link ToolArguments} because the code-execution bridge needs the identical one.
+     */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
-        List<String> args = new ArrayList<>();
-        JsonNode root = call.args();
-        if (root != null && root.isObject()) {
-            // MCP tools accept arbitrary provider-defined schemas (any field name).
-            // Flattening only known property names would silently drop all of them
-            // and the MCP server would reject the call with a parameter-validation
-            // error. Pass the full args object as a single JSON-encoded arg so
-            // McpOrchestrationService.parseArguments can turn it back into a Map.
-            if (McpTools.looksLikeMcpTool(call.name())) {
-                args.add(root.toString());
-            } else {
-                // 1) varargs convention: a top-level "args" array.
-                JsonNode varargs = root.get("args");
-                if (varargs != null && varargs.isArray()) {
-                    varargs.forEach(node -> args.add(asString(node)));
-                } else {
-                    // 2) Typed schema (write-file/patch-file/mkdir/delete-file/cat/branch-switcher):
-                    //    flatten the known property order into positional args. We honour the
-                    //    schema ordering documented in ToolCatalog so the existing executors
-                    //    keep working unchanged.
-                    addIfPresent(root, "path", args);
-                    addIfPresent(root, "branch", args);
-                    addIfPresent(root, "content", args);
-                    addIfPresent(root, "search", args);
-                    addIfPresent(root, "replacement", args);
-                    addIfPresent(root, "startLine", args);
-                    addIfPresent(root, "endLine", args);
-                    // 3) Safety net: if the whitelist matched nothing but the args object
-                    //    actually carried fields, the model is either using a tool we don't
-                    //    recognise or a schema we haven't updated. Fall through to a JSON
-                    //    blob so the call still carries data and surface a warning so the
-                    //    schema drift gets noticed.
-                    if (args.isEmpty() && !root.isEmpty()) {
-                        log.warn("Tool '{}' called with unrecognised arg fields {} — "
-                                + "passing raw JSON. Update CodingAgentStrategy.toRequest if this tool "
-                                + "is supposed to be supported natively.",
-                                call.name(), fieldNames(root));
-                        args.add(root.toString());
-                    }
-                }
-            }
-        }
         return ImplementationPlan.ToolRequest.builder()
-                .id(call.id() == null || call.id().isBlank() ? java.util.UUID.randomUUID().toString() : call.id())
+                .id(call.id() == null || call.id().isBlank()
+                        ? java.util.UUID.randomUUID().toString()
+                        : call.id())
                 .tool(call.name())
-                .args(args)
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
-    }
-
-    private static List<String> fieldNames(JsonNode root) {
-        return new ArrayList<>(root.propertyNames());
-    }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
-    }
-
-    private static String asString(JsonNode node) {
-        return node.isString() ? node.asString() : node.toString();
     }
 
     /**

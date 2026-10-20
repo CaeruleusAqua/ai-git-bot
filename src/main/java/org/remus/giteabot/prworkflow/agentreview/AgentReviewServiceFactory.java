@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
@@ -25,6 +26,7 @@ public class AgentReviewServiceFactory {
 
     private final AiClientFactory aiClientFactory;
     private final GiteaClientFactory giteaClientFactory;
+    private final PythonExecutionService pythonExecution;
     private final McpToolSelectionService mcpToolSelectionService;
     private final McpOrchestrationService mcpOrchestrationService;
     private final BotToolSelectionService botToolSelectionService;
@@ -59,6 +61,6 @@ public class AgentReviewServiceFactory {
 
         return new AgentReviewService(context, agentSessionService, toolExecutionService,
                 toolCatalog, workspaceService, agentConfig, mcpOrchestrationService,
-                bot, eventHookPublisher);
+                bot, eventHookPublisher, pythonExecution);
     }
 }

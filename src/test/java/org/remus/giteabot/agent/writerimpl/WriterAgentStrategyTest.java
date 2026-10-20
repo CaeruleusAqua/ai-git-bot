@@ -3,6 +3,7 @@ package org.remus.giteabot.agent.writerimpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.agent.loop.AgentRunContext;
@@ -12,12 +13,15 @@ import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.session.AgentSession;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
+import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
+import org.remus.giteabot.agent.tools.ToolCallContext;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
+import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.repository.RepositoryApiClient;
 
@@ -86,6 +90,31 @@ class WriterAgentStrategyTest {
         assertThat(continued.results().getFirst().toolCallId()).isEqualTo("call_1");
         assertThat(continued.results().getFirst().resultText()).contains("file body");
         verify(toolRouter).execute(eq(AgentToolRouter.Mode.WRITER), any());
+    }
+
+    /**
+     * The writer used to carry its own copy of the JSON-to-positional mapping, and that copy never
+     * learned about {@code execute-code}'s {@code code} property: the program handed to the sandbox
+     * was the argument object, which Python accepts as a dict literal — printed nothing, exited 0.
+     * The mapping is shared now; this pins that the writer actually uses it.
+     */
+    @Test
+    void aProgramReachesTheSandboxNotItsArgumentObject() {
+        WriterAgentStrategy withRealCatalog = new WriterAgentStrategy("sys", new WriterPromptBuilder(),
+                new WriterResponseParser(), sessionService, repositoryClient, branchSwitcher, toolRouter,
+                mcpToolCatalog, new ToolCatalog(new AgentConfigProperties()), Set.of(), MAX_TOOL_ROUNDS);
+        when(branchSwitcher.apply(any(), anyString(), anyList(), any()))
+                .thenAnswer(inv -> new BranchSwitcher.Result("main", "main", inv.getArgument(2)));
+        when(toolRouter.execute(eq(AgentToolRouter.Mode.WRITER), any()))
+                .thenReturn(new ToolResult(true, 0, "CHARS 11\nLINES 1\n", ""));
+
+        withRealCatalog.step(ctx, turn("running a program", new ToolCall("call_1", "execute-code",
+                AgentJackson.mapper().createObjectNode().put("code", "print('CHARS', 11)"))),
+                MAX_TOOL_ROUNDS);
+
+        ArgumentCaptor<ToolCallContext> executed = ArgumentCaptor.forClass(ToolCallContext.class);
+        verify(toolRouter).execute(eq(AgentToolRouter.Mode.WRITER), executed.capture());
+        assertThat(executed.getValue().args()).containsExactly("print('CHARS', 11)");
     }
 
     @Test

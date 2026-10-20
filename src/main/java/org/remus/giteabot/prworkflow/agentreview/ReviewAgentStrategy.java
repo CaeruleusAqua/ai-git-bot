@@ -9,10 +9,10 @@ import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.loop.ToolingMode;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.shared.BranchSwitcher;
-import org.remus.giteabot.agent.shared.McpTools;
 import org.remus.giteabot.agent.shared.ToolFailures;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
 import org.remus.giteabot.agent.tools.ToolCallContext;
+import org.remus.giteabot.agent.tools.ToolArguments;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.ai.ChatTurn;
@@ -20,7 +20,6 @@ import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.mcp.McpToolCatalog;
-import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -33,13 +32,12 @@ import java.util.UUID;
  * Read-only {@link AgentStrategy} powering the agentic PR-review workflow.
  *
  * <p>The strategy is deliberately <em>read-only</em>: it advertises the
- * {@link ToolCatalog.Role#WRITER} descriptor surface (repository-exploration
+ * {@link ToolCatalog.Role#REVIEW} descriptor surface (repository-exploration
  * tools such as {@code cat}, {@code rg}, {@code find}, {@code tree},
  * {@code git-log}, {@code git-blame}, the read-only issue helpers and MCP
- * tools) and routes execution through {@link AgentToolRouter.Mode#WRITER},
- * which never reaches a file-mutation, validation/build or git-write tool.
- * The model can therefore explore the repository freely while remaining unable
- * to change it.</p>
+ * tools) and routes execution through {@link AgentToolRouter.Mode#REVIEW},
+ * which rejects file-mutation, validation/build and branch-switching built-ins.
+ * Operators must select only read-only MCP tools for the review configuration.</p>
  *
  * <p>Two transports are supported, mirroring
  * {@link org.remus.giteabot.agent.issueimpl.CodingAgentStrategy}: in
@@ -55,6 +53,9 @@ import java.util.UUID;
 @Slf4j
 public final class ReviewAgentStrategy implements AgentStrategy {
 
+    /** Number of rounds before the limit at which the completion reminder is sent. */
+    private static final int CLOSING_REMINDER_OFFSET = 2;
+
     /** Fetches repository file contents for the legacy {@code requestFiles} protocol. */
     @FunctionalInterface
     public interface FileFetcher {
@@ -69,9 +70,10 @@ public final class ReviewAgentStrategy implements AgentStrategy {
 
     // Legacy-mode collaborators (mirror CodingAgentStrategy).
     private final AiResponseParser responseParser;
-    private final BranchSwitcher branchSwitcher;
     private final FileFetcher fileFetcher;
     private final int maxContextRounds;
+    private final int maxToolRounds;
+    private int toolRounds;
 
     /** Read-only context-fetch rounds consumed in legacy mode. */
     private int contextRounds = 0;
@@ -85,15 +87,25 @@ public final class ReviewAgentStrategy implements AgentStrategy {
                                BranchSwitcher branchSwitcher,
                                FileFetcher fileFetcher,
                                int maxContextRounds) {
+        this(systemPrompt, toolRouter, catalog, mcpToolCatalog, allowedBuiltinTools, responseParser,
+                branchSwitcher, fileFetcher, maxContextRounds, maxContextRounds);
+    }
+
+    /** Configures independent legacy context and native tool-round limits. */
+    public ReviewAgentStrategy(String systemPrompt, AgentToolRouter toolRouter, ToolCatalog catalog,
+                               McpToolCatalog mcpToolCatalog, Set<String> allowedBuiltinTools,
+                               AiResponseParser responseParser, BranchSwitcher branchSwitcher,
+                               FileFetcher fileFetcher, int maxContextRounds, int maxToolRounds) {
         this.systemPrompt = systemPrompt;
         this.toolRouter = toolRouter;
         this.catalog = catalog;
         this.mcpToolCatalog = mcpToolCatalog != null ? mcpToolCatalog : McpToolCatalog.empty();
         this.allowedBuiltinTools = allowedBuiltinTools;
         this.responseParser = responseParser;
-        this.branchSwitcher = branchSwitcher;
+        // Retain the constructor parameter for callers; reviews never switch branches.
         this.fileFetcher = fileFetcher;
         this.maxContextRounds = Math.max(1, maxContextRounds);
+        this.maxToolRounds = Math.max(1, maxToolRounds);
     }
 
     @Override
@@ -102,14 +114,28 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     }
 
     @Override
+    public String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
+        int explorationRounds = mode == ToolingMode.NATIVE
+                ? maxToolRounds - toolRounds : maxContextRounds - contextRounds;
+        return Math.min(remainingRounds, explorationRounds) <= CLOSING_REMINDER_OFFSET + 1 ? """
+                The review is approaching its exploration or round limit. \
+                Conclude your review now using \
+                the evidence already gathered. Avoid further tool calls and additional exploration. \
+                Return your final response in the required output format, including any required \
+                severity classification. Clearly state unverified areas or limitations; do not \
+                claim they were checked.
+                """ : null;
+    }
+
+    @Override
     public ToolingMode preferredToolMode() {
         return ToolingMode.NATIVE;
     }
 
-    /** Read-only WRITER toolbox (context tools + issue lookups + MCP). No write tools are exposed. */
+    /** Read-only review toolbox plus the explicitly selected MCP catalog. */
     @Override
     public List<ToolDescriptor> toolDescriptors() {
-        return catalog.nativeDescriptors(ToolCatalog.Role.WRITER, mcpToolCatalog, allowedBuiltinTools);
+        return catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, mcpToolCatalog, allowedBuiltinTools);
     }
 
     @Override
@@ -122,6 +148,11 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         if (!turn.hasToolCalls()) {
             return finish(ctx, turn.assistantText());
         }
+
+        if (toolRounds >= maxToolRounds) {
+            return new StepDecision.Finish(onBudgetExhausted(ctx));
+        }
+        toolRounds++;
 
         // Execute every requested (read-only) tool and feed the results back.
         List<ImplementationPlan.ToolRequest> requests = new ArrayList<>();
@@ -154,9 +185,8 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     public StepDecision step(AgentRunContext ctx, String aiResponse, int round) {
         ImplementationPlan plan = responseParser.parseAiResponse(aiResponse);
 
-        // Collect every read-only request the model made: context tools
-        // (requestTools), action tools (runTools — e.g. get-issue/search-issues,
-        // all harmless in WRITER mode) and explicit file requests.
+        // Collect legacy tool requests (requestTools/runTools) and explicit file requests.
+        // The REVIEW router rejects tools not explicitly enabled for read-only review.
         List<ImplementationPlan.ToolRequest> toolRequests = new ArrayList<>();
         List<String> requestFiles = null;
         if (plan != null) {
@@ -177,11 +207,8 @@ public final class ReviewAgentStrategy implements AgentStrategy {
             log.info("Agentic review (legacy) gathering context for PR #{} (round {}/{})",
                     ctx.issueNumber(), contextRounds, maxContextRounds);
 
-            BranchSwitcher.Result branchResult = branchSwitcher.apply(
-                    ctx.workspaceDir(), ctx.baseBranch(), toolRequests, ctx.issueNumber());
-            ctx.setBaseBranch(branchResult.selectedBranch());
-
-            String context = gatherContext(ctx, requestFiles, branchResult.remainingToolRequests());
+            // Review context stays on the original revision; all tools pass through the review policy.
+            String context = gatherContext(ctx, requestFiles, toolRequests);
             return new StepDecision.Continue(
                     "Here is the requested repository context:\n" + context
                             + "\n\nContinue your review. When you have gathered enough context, reply with "
@@ -246,6 +273,9 @@ public final class ReviewAgentStrategy implements AgentStrategy {
             for (int i = 0; i < toolRequests.size(); i++) {
                 ImplementationPlan.ToolRequest req = toolRequests.get(i);
                 ToolResult result = results.get(i);
+                if (result.outputTruncated()) {
+                    tools.append(ToolResult.TRUNCATED_OUTPUT_WARNING).append('\n');
+                }
                 tools.append("### `").append(req.getTool());
                 if (req.getArgs() != null && !req.getArgs().isEmpty()) {
                     tools.append(' ').append(String.join(" ", req.getArgs()));
@@ -271,7 +301,7 @@ public final class ReviewAgentStrategy implements AgentStrategy {
     private List<ToolResult> executeAll(AgentRunContext ctx, List<ImplementationPlan.ToolRequest> requests) {
         List<ToolResult> results = new ArrayList<>(requests.size());
         for (ImplementationPlan.ToolRequest req : requests) {
-            results.add(toolRouter.execute(AgentToolRouter.Mode.WRITER,
+            results.add(toolRouter.execute(AgentToolRouter.Mode.REVIEW,
                     new ToolCallContext(ctx.owner(), ctx.repo(), ctx.issueNumber(),
                             ctx.workspaceDir(), req, ctx.diffSummary())));
         }
@@ -293,49 +323,13 @@ public final class ReviewAgentStrategy implements AgentStrategy {
         return out;
     }
 
-    /**
-     * Converts a native {@link ToolCall} into the positional-args
-     * {@link ImplementationPlan.ToolRequest} that {@link AgentToolRouter}
-     * expects. Only the read-only WRITER tool schemas are relevant here.
-     */
+    /** See {@link ToolArguments}: the mapping is shared, never copied per agent. */
     private ImplementationPlan.ToolRequest toRequest(ToolCall call) {
-        List<String> args = new ArrayList<>();
-        JsonNode root = call.args();
-        if (root != null && root.isObject()) {
-            if (McpTools.looksLikeMcpTool(call.name())) {
-                // MCP: pass the whole arguments object through as a single JSON blob.
-                args.add(root.toString());
-            } else {
-                JsonNode varargs = root.get("args");
-                if (varargs != null && varargs.isArray()) {
-                    varargs.forEach(node -> args.add(asString(node)));
-                } else {
-                    addIfPresent(root, "path", args);
-                    addIfPresent(root, "branch", args);
-                    addIfPresent(root, "startLine", args);
-                    addIfPresent(root, "endLine", args);
-                    if (args.isEmpty() && !root.isEmpty()) {
-                        args.add(root.toString());
-                    }
-                }
-            }
-        }
         return ImplementationPlan.ToolRequest.builder()
                 .id(call.id() == null || call.id().isBlank() ? UUID.randomUUID().toString() : call.id())
                 .tool(call.name())
-                .args(args)
+                .args(ToolArguments.toPositional(call.name(), call.args(),
+                        catalog.schemaOf(call.name()).orElse(null)))
                 .build();
     }
-
-    private static void addIfPresent(JsonNode root, String field, List<String> out) {
-        JsonNode v = root.get(field);
-        if (v != null && !v.isMissingNode() && !v.isNull()) {
-            out.add(asString(v));
-        }
-    }
-
-    private static String asString(JsonNode node) {
-        return node.isString() ? node.asString() : node.toString();
-    }
 }
-

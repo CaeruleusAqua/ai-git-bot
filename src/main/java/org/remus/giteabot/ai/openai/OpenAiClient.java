@@ -206,16 +206,21 @@ public class OpenAiClient extends AbstractAiClient {
                 reason = StopReason.TOOL_USE;
             }
         }
-        long inputTokens = 0L;
-        long outputTokens = 0L;
+        Integer inputTokens = null;
+        Integer outputTokens = null;
         if (response.getUsage() != null) {
             inputTokens = response.getUsage().getPromptTokens();
             outputTokens = response.getUsage().getCompletionTokens();
             log.info("OpenAI chat-with-tools: {} prompt tokens, {} completion tokens, {} tool_call(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(validUsageCount(inputTokens), validUsageCount(outputTokens),
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
-        return new ChatTurn(text, calls, reason, inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text, calls, reason,
+                inputTokens == null ? null : inputTokens.longValue(),
+                outputTokens == null ? null : outputTokens.longValue());
     }
 
     private StopReason mapStopReason(String finishReason) {
@@ -228,6 +233,11 @@ public class OpenAiClient extends AbstractAiClient {
             case "length" -> StopReason.MAX_TOKENS;
             default -> StopReason.OTHER;
         };
+    }
+
+    private static Integer validUsageCount(Integer count) {
+        // The legacy audit stores unavailable counters as zero; ChatTurn retains separate presence flags.
+        return count == null || count < 0 ? null : count;
     }
 
     private String doRequest(String model, int maxTokens,
@@ -291,8 +301,11 @@ public class OpenAiClient extends AbstractAiClient {
                     context,
                     response.getUsage().getPromptTokens(),
                     response.getUsage().getCompletionTokens());
-            reportUsage(response.getUsage().getPromptTokens(),
-                    response.getUsage().getCompletionTokens(), 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(validUsageCount(response.getUsage().getPromptTokens()),
+                    validUsageCount(response.getUsage().getCompletionTokens()),
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
 
         return content;

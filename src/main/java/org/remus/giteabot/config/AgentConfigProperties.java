@@ -3,6 +3,7 @@ package org.remus.giteabot.config;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
+import org.springframework.util.unit.DataSize;
 
 import java.util.List;
 
@@ -47,6 +48,11 @@ public class AgentConfigProperties {
     private ValidationConfig validation = new ValidationConfig();
 
     /**
+     * Code-execution (the {@code execute-code} agent tool) settings.
+     */
+    private CodeExecutionConfig codeExecution = new CodeExecutionConfig();
+
+    /**
      * Context-size settings for prompts built during issue implementation.
      */
     private ContextConfig context = new ContextConfig();
@@ -82,6 +88,70 @@ public class AgentConfigProperties {
     private CriticConfig critic = new CriticConfig();
 
 
+    /**
+     * The {@code execute-code} sandbox knobs.
+     *
+     * <p>Only what is specific to spawning an interpreter lives here. The wall-clock timeout and
+     * the result caps are the ones every other tool call already uses
+     * ({@code agent.validation.tool-timeout-seconds}, {@code agent.budget.max-tool-result-chars}),
+     * which is what keeps one owner per limit. Sizes are {@link DataSize} so the property file can
+     * say {@code 100KB}.</p>
+     */
+    @Data
+    public static class CodeExecutionConfig {
+
+        /** Nested tool calls one program may make. The loop budget is per round, so none matches it. */
+        private int maxToolCalls = 150;
+
+        /** Cap on the submitted program itself. */
+        private DataSize maxCodeSize = DataSize.ofKilobytes(100);
+
+        /** {@code RLIMIT_AS} for the program and anything it spawns. */
+        private int maxMemoryMb = 256;
+
+        /** {@code RLIMIT_CPU}, the bound that survives the JVM timeout not firing. */
+        private int cpuSeconds = 120;
+
+        /** {@code RLIMIT_FSIZE}: the largest file the program may create. */
+        private DataSize maxFileSize = DataSize.ofMegabytes(10);
+
+        /**
+         * {@code RLIMIT_NPROC}: also bounds forks a runaway program could make. It counts every task
+         * of the uid and is not enforced at all for uid 0, so it only bounds a program that has a
+         * uid of its own — where {@code sandbox-slots} is blank the program runs as the service
+         * user and shares that user's budget: on a service user that already runs more tasks than
+         * program cannot start a thread or spawn a child at all. That is the limit working as
+         * specified, not a bug — raise it if your programs legitimately need threads.
+         */
+        private int maxProcesses = 64;
+
+        /** Interpreter to spawn. */
+        private String pythonBinary = "python3";
+
+        /**
+         * The pool of identities the interpreter may be switched to before it starts, so a program
+         * cannot read what the service user reads — this JVM's start-time environment included. One
+         * line of {@code name uid gid} per slot. Blank — the field default, so unit tests and a
+         * deployment that names none keep the old behaviour — runs the program as the service user;
+         * {@code application.properties} defaults it to the file the installer writes.
+         *
+         * <p>Naming the file is not on its own enough to switch: the slots are accounts sudo may
+         * become, and the rule the installer generates from the same file is what grants that — with
+         * no {@code (root)} and no {@code (ALL)} runas, so the service can become a slot and nothing
+         * else. sudo rather than a copy of {@code setpriv} carrying {@code CAP_SETUID}, because such
+         * a copy hands root to whoever can exec it with one {@code --reuid=0} and the service user is
+         * the one that runs repository code. Every execution takes one slot, so concurrent runs never
+         * share a uid — nor the workspace group that follows from it. See
+         * {@code docker/install-execute-code-sandbox.sh}.</p>
+         */
+        private String sandboxSlots = "";
+
+        /**
+         * The {@code sudo} the switch is made with. Only worth overriding to exercise the sandbox
+         * without provisioning one: a stand-in that records the invocation and execs the rest.
+         */
+        private String sudoBinary = "/usr/bin/sudo";
+    }
     @Data
     public static class SchemaConfig {
         /**

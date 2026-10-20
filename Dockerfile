@@ -64,6 +64,7 @@ RUN set -eux; \
         golang-go \
         gcc g++ make cmake \
         ruby ruby-bundler \
+        sudo \
         ubuntu-keyring \
     && rm -rf /var/lib/apt/lists/*
 
@@ -152,6 +153,60 @@ RUN set -eux; \
     useradd -m -u 1000 -g appgroup -s /bin/bash appuser; \
     mkdir -p /app /app/prompts; \
     chown -R appuser:appgroup /app /home/appuser
+
+# ---------------------------------------------------------------------------
+# execute-code sandbox identity
+#
+# The `execute-code` tool runs a model-written Python program, and it must not run
+# as appuser — for two separate reasons: `/proc/<jvm-pid>/environ` is readable by
+# same-uid processes, so the program would see every secret the app was started
+# with, and appuser is the account that runs repository-supplied build scripts and
+# plugins, so whatever appuser can reach, a repository can reach.
+#
+# The switch is sudo, provisioned by docker/install-execute-code-sandbox.sh, which
+# is copied in and run below. Read that script for the detail; the shape is one
+# account per slot, the pool file the JVM allocates them from, and a single rule
+#
+#     appuser ALL=(execute-code-10001,…) NOPASSWD: ALL
+#
+# with no (root) and no (ALL) runas, so the service can become a sandbox slot and
+# nothing else. sudo is the only switch that can be restricted to named targets: a
+# copy of setpriv carrying CAP_SETUID is one --reuid=0 away from root for whoever
+# can exec it, and appuser can; runuser refuses non-root callers and su wants a
+# password.
+#
+# One slot per running execution, so two runs never share a uid. With a single
+# sandbox uid a program can read the next run's source, connect to its bridge
+# socket — answered with that run's bot whitelist — and signal its process. The
+# throwaway workspace is handed over by chgrp to the slot's group, which the
+# service user is a member of (ProcessPythonExecutionService).
+#
+# What is deliberately NOT done here: no capability is set on any binary, and in
+# particular not on java. A binary carrying one runs in secure-execution mode
+# (AT_SECURE), where the loader ignores $ORIGIN in RUNPATH and LD_LIBRARY_PATH, so
+# the launcher stops finding libjli.so and the image does not start. None is
+# needed: the timeout's process-group kill cannot reach a program that has a uid
+# of its own, so the service stops it the way sudo allows — as the slot, by uid
+# (`sudo -u <slot> kill -KILL -- -1`), which needs no capability at all.
+#
+# The pool path and the sudo path are the defaults of
+# agent.code-execution.sandbox-slots / -sudo-binary in application.properties, so
+# the image is sandboxed without any environment variable; docker-compose.yml
+# forwards both for an override. A runtime that cannot switch — no sudo, a pool
+# that is missing or unusable — makes execute-code fail closed instead of quietly
+# running the program as appuser.
+#
+# The two ARGs size the pool; the script stays in the image (/usr/local/src), so a
+# running container can be provisioned the same way a host is.
+# ---------------------------------------------------------------------------
+ARG EXECUTE_CODE_FIRST_SLOT=10001
+ARG EXECUTE_CODE_SLOT_COUNT=16
+COPY docker/install-execute-code-sandbox.sh /usr/local/src/
+RUN set -eux; \
+    chmod 0755 /usr/local/src/install-execute-code-sandbox.sh; \
+    EXECUTE_CODE_FIRST_SLOT="$EXECUTE_CODE_FIRST_SLOT" \
+    EXECUTE_CODE_SLOT_COUNT="$EXECUTE_CODE_SLOT_COUNT" \
+        /usr/local/src/install-execute-code-sandbox.sh appuser
 
 # ---------------------------------------------------------------------------
 # Playwright + Cypress — installed GLOBALLY under /usr/local/lib/node_modules

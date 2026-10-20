@@ -105,18 +105,21 @@ public class LlamaCppClient extends AbstractAiClient {
                 effectiveModel, maxTokens, "chat", grammar);
         LlamaCppCompletionResponse response = executeRequest(request);
 
-        long inputTokens = usageTokens(response, true);
-        long outputTokens = usageTokens(response, false);
+        Integer inputTokens = usageTokens(response, true);
+        Integer outputTokens = usageTokens(response, false);
         if (response.getUsage() != null) {
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            LlamaCppCompletionResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(inputTokens, outputTokens, 0L,
+                    details != null ? details.getCachedTokens() : null, request, response);
         } else {
             log.debug("llama.cpp chat response did not include usage counters");
         }
         LlamaCppCompletionResponse.Choice choice = firstChoice(response);
         String text = choice == null || choice.getText() == null ? "" : choice.getText();
         logTruncationIfNeeded(choice, "chat");
-        return new ChatTurn(text, List.of(), mapStopReason(choice == null ? null : choice.getFinishReason()),
-                inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text, List.of(), mapStopReason(choice == null ? null : choice.getFinishReason()),
+                inputTokens == null ? null : inputTokens.longValue(),
+                outputTokens == null ? null : outputTokens.longValue());
     }
 
     @Override
@@ -306,7 +309,9 @@ public class LlamaCppClient extends AbstractAiClient {
                     context,
                     usageTokens(response, true),
                     usageTokens(response, false));
-            reportUsage(usageTokens(response, true), usageTokens(response, false), 0L, 0L, request, response);
+            LlamaCppCompletionResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(usageTokens(response, true), usageTokens(response, false), 0L,
+                    details != null ? details.getCachedTokens() : null, request, response);
         } else {
             log.debug("llama.cpp {} response did not include usage counters", context);
         }
@@ -355,13 +360,13 @@ public class LlamaCppClient extends AbstractAiClient {
         return new ResourceAccessException(detail);
     }
 
-    private long usageTokens(LlamaCppCompletionResponse response, boolean prompt) {
+    private Integer usageTokens(LlamaCppCompletionResponse response, boolean prompt) {
         if (response.getUsage() == null) {
-            return 0L;
+            return null;
         }
         Integer count = prompt ? response.getUsage().getPromptTokens()
                 : response.getUsage().getCompletionTokens();
-        return count == null ? 0L : count;
+        return count;
     }
 
     private StopReason mapStopReason(String finishReason) {

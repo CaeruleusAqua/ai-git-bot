@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.issueimpl.AiResponseParser;
 import org.remus.giteabot.agent.loop.AgentBudget;
 import org.remus.giteabot.agent.loop.AgentLoop;
@@ -45,7 +46,7 @@ import java.util.regex.Pattern;
  *
  * <p>The flow mirrors {@link org.remus.giteabot.agent.IssueImplementationService}
  * but is strictly read-only: it clones a workspace, lets the LLM explore the
- * repository through {@link ToolCatalog.Role#WRITER} (read-only) tools and MCP,
+ * repository through {@link ToolCatalog.Role#REVIEW} (read-only) tools and selected MCP,
  * then posts a single review comment. When the operator enables the optional
  * formal review decision, the model classifies its findings by severity and the
  * application computes the formal action (approve / request changes) from
@@ -133,7 +134,8 @@ public class AgentReviewService {
                               AgentConfigProperties agentConfig,
                               McpOrchestrationService mcpOrchestrationService,
                               Bot bot,
-                              EventHookPublisher eventHookPublisher) {
+                              EventHookPublisher eventHookPublisher,
+                              PythonExecutionService pythonExecution) {
         this.context = context;
         this.bot = bot;
         this.eventHookPublisher = eventHookPublisher;
@@ -146,7 +148,8 @@ public class AgentReviewService {
         this.branchSwitcher = new BranchSwitcher(toolExecutionService);
         this.toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog,
                 mcpOrchestrationService, context.mcpConfiguration(),
-                context.mcpToolCatalog(), this.repositoryClient, context.allowedBuiltinTools());
+                context.mcpToolCatalog(), this.repositoryClient, context.allowedBuiltinTools(),
+                pythonExecution);
     }
 
     /**
@@ -610,15 +613,15 @@ public class AgentReviewService {
                                       String systemPrompt, String userMessage, int maxToolRounds,
                                       DiffSummary diffSummary, Long runId,
                                       Consumer<AgentRunContext.ToolCallRecord> toolCallConsumer) {
+        int rounds = Math.max(1, maxToolRounds);
         ReviewAgentStrategy strategy = new ReviewAgentStrategy(
                 systemPrompt, toolRouter, toolCatalog,
                 context.mcpToolCatalog(), context.allowedBuiltinTools(),
                 responseParser, branchSwitcher, this::fetchFiles,
-                agentConfig.getBudget().getMaxContextRounds());
+                agentConfig.getBudget().getMaxContextRounds(), rounds);
 
         AgentConfigProperties.BudgetConfig budgetCfg = agentConfig.getBudget();
-        int rounds = clamp(maxToolRounds, 1, 30);
-        int hardCap = Math.max(budgetCfg.getMaxRounds(), rounds + 2);
+        int hardCap = Math.max(budgetCfg.getMaxRounds(), Math.addExact(rounds, 2));
         AgentBudget budget = new AgentBudget(hardCap, budgetCfg.getMaxContextRounds(),
                 budgetCfg.getMaxValidationRetries(), budgetCfg.getMaxTokensPerCall(),
                 budgetCfg.getMaxToolResultChars(), budgetCfg.getMaxHistoryChars(),
@@ -635,8 +638,8 @@ public class AgentReviewService {
         ToolingMode mode = (aiClient != null && aiClient.supportsNativeTools())
                 ? ToolingMode.NATIVE : ToolingMode.LEGACY;
         String base = systemPromptAssembler.assemble(context.reviewAgentSystemPrompt(), toolCatalog,
-                context.allowedBuiltinTools(), context.mcpToolCatalog(), mode,
-                SystemPromptAssembler.PromptKind.WRITER_AGENT);
+                toolCatalog.reviewToolNames(context.allowedBuiltinTools()), context.mcpToolCatalog(), mode,
+                SystemPromptAssembler.PromptKind.AGENT_REVIEW_AGENT);
 
         if (!enableFormalDecision) {
             return base;
@@ -739,7 +742,4 @@ public class AgentReviewService {
         return sb.toString();
     }
 
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
-    }
 }

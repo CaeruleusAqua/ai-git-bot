@@ -3,6 +3,8 @@ package org.remus.giteabot.ai.ollama;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+import org.remus.giteabot.ai.UsageCounterDeserializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.List;
 import java.util.Map;
@@ -27,9 +29,15 @@ public class OllamaResponse {
     private Long totalDuration;
 
     @JsonProperty("prompt_eval_count")
+    @JsonDeserialize(using = UsageCounterDeserializer.class)
     private Integer promptEvalCount;
 
+    @JsonProperty("prompt_eval_cached_count")
+    @JsonDeserialize(using = UsageCounterDeserializer.class)
+    private Integer promptEvalCachedCount;
+
     @JsonProperty("eval_count")
+    @JsonDeserialize(using = UsageCounterDeserializer.class)
     private Integer evalCount;
 
     @Data

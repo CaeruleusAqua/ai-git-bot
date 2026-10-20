@@ -1072,6 +1072,6 @@ class IssueImplementationServiceTest {
 
     private AgentCollaborators collaborators(AgentConfigProperties agentConfig) {
         return new AgentCollaborators(promptService, agentConfig, sessionService,
-                toolExecutionService, toolCatalog, workspaceService);
+                toolExecutionService, toolCatalog, workspaceService, null);
     }
 }

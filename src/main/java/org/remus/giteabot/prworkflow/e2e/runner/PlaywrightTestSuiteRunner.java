@@ -8,6 +8,8 @@ import org.remus.giteabot.admin.GiteaClientFactory;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.E2eTestFramework;
 import org.remus.giteabot.prworkflow.e2e.PrTestCase;
 import org.remus.giteabot.prworkflow.e2e.PrTestCaseRepository;
@@ -27,8 +29,10 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * M4 wave 2 LLM-driven {@link TestSuiteRunner} for
@@ -60,10 +64,24 @@ public class PlaywrightTestSuiteRunner implements TestSuiteRunner {
     private final TestRunnerAgent runnerAgent;
     private final PrTestCaseRepository caseRepository;
     private final PrWorkflowToolExecutor toolExecutor;
+    /** Builds each e2e agent run's tool surface (own tools + the read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     @Override
     public E2eTestFramework framework() {
         return E2eTestFramework.PLAYWRIGHT;
+    }
+
+    /**
+     * The tool surface both e2e agents share: their own workflow tools plus the read-only catalogue
+     * tools and {@code execute-code}, resolved from the bot's tool configuration.
+     */
+    private WorkflowToolSurface workflowSurface(TestSuiteRequest request, Bot bot,
+                                                RepositoryApiClient apiClient, OwnerRepoPr addr) {
+        Set<String> workflowTools = new LinkedHashSet<>(TestAuthorAgent.WORKFLOW_TOOLS);
+        workflowTools.addAll(TestRunnerAgent.WORKFLOW_TOOLS);
+        return surfaceFactory.create(bot, apiClient, workflowTools,
+                addr.owner(), addr.repo(), addr.prNumber(), request.workspace());
     }
 
     @Override
@@ -132,7 +150,8 @@ public class PlaywrightTestSuiteRunner implements TestSuiteRunner {
                 addr.owner(), addr.repo(), addr.prNumber(),
                 apiClient);
 
-        TestAuthorAgent.Result authorResult = authorAgent.write(aiClient, toolContext, plan, systemPrompt);
+        WorkflowToolSurface surface = workflowSurface(request, bot, apiClient, addr);
+        TestAuthorAgent.Result authorResult = authorAgent.write(aiClient, surface, toolContext, plan, systemPrompt);
         if (!authorResult.wroteAnything()) {
             return TestSuiteOutcome.error(
                     "TestAuthorAgent wrote zero files (budgetExhausted="
@@ -140,7 +159,7 @@ public class PlaywrightTestSuiteRunner implements TestSuiteRunner {
         }
 
         int effectiveRetries = effectiveRetries(plan, request.maxRetries());
-        TestRunnerAgent.Result runResult = runnerAgent.execute(aiClient, toolContext, plan, effectiveRetries, systemPrompt);
+        TestRunnerAgent.Result runResult = runnerAgent.execute(aiClient, surface, toolContext, plan, effectiveRetries, systemPrompt);
 
         // Aggregate per-case outcomes from the database — those are the source of truth.
         List<PrTestCase> cases = caseRepository.findBySuiteOrderByIdAsc(request.suite());

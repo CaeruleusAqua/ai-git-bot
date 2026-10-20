@@ -13,6 +13,8 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.remus.giteabot.agent.loop.AgentRunContext;
 import org.remus.giteabot.agent.loop.StepDecision;
 import org.remus.giteabot.agent.tools.AgentToolRouter;
+import org.remus.giteabot.agent.tools.ToolCatalog;
+import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.ai.AiAuditRecorder;
 import org.remus.giteabot.ai.ChatTurn;
@@ -232,10 +234,10 @@ class OllamaClientStreamingTest {
         ChatTurn turn = client.chatWithTools(List.of(), "Read Example.java",
                 List.of(new ToolDescriptor("cat", "Read a file", null)), "sys", null, null);
         AgentToolRouter router = mock(AgentToolRouter.class);
-        when(router.execute(eq(AgentToolRouter.Mode.WRITER), any()))
+        when(router.execute(eq(AgentToolRouter.Mode.REVIEW), any()))
                 .thenReturn(new ToolResult(true, 0, "class Example {}", ""));
-        ReviewAgentStrategy strategy = new ReviewAgentStrategy("sys", router, null, null,
-                Set.of("cat"), null, null, null, 1);
+        ReviewAgentStrategy strategy = new ReviewAgentStrategy("sys", router, new ToolCatalog(new AgentConfigProperties()),
+                null, Set.of("cat"), null, null, null, 1);
         AgentRunContext context = new AgentRunContext(null, "owner", "repo", 1L, null, "main");
 
         StepDecision decision = strategy.step(context, turn, 1);
@@ -249,7 +251,7 @@ class OllamaClientStreamingTest {
         assertEquals(301L, turn.inputTokens());
         assertEquals(74L, turn.outputTokens());
         assertEquals(1, recorder.invocations);
-        verify(router).execute(eq(AgentToolRouter.Mode.WRITER), any());
+        verify(router).execute(eq(AgentToolRouter.Mode.REVIEW), any());
     }
 
     @Test
@@ -310,8 +312,8 @@ class OllamaClientStreamingTest {
 
     private static void assertReviewRejected(ChatTurn turn) {
         AgentToolRouter router = mock(AgentToolRouter.class);
-        ReviewAgentStrategy strategy = new ReviewAgentStrategy("sys", router, null, null,
-                Set.of(), null, null, null, 1);
+        ReviewAgentStrategy strategy = new ReviewAgentStrategy("sys", router, new ToolCatalog(new AgentConfigProperties()),
+                null, Set.of(), null, null, null, 1);
         AgentRunContext context = new AgentRunContext(null, "owner", "repo", 1L, null, "main");
 
         StepDecision.Finish decision = assertInstanceOf(StepDecision.Finish.class, strategy.step(context, turn, 1));

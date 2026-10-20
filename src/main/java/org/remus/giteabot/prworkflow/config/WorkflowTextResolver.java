@@ -43,9 +43,9 @@ public class WorkflowTextResolver {
     /**
      * Returns a copy of the workflow's params schema whose field labels,
      * descriptions and enum-option labels/descriptions are localized. Field
-     * {@code name}/{@code type}/{@code required}/{@code defaultValue} and enum
-     * option {@code key} are left untouched — they are identifiers and JSON
-     * values, never translated.
+     * {@code name}/{@code type}/{@code required}/{@code defaultValue}, numeric
+     * bounds and enum option {@code key} are left untouched — only operator-
+     * facing text is translated.
      */
     public WorkflowParamsSchema localizedSchema(WorkflowDescriptor workflow) {
         Locale locale = LocaleContextHolder.getLocale();
@@ -66,7 +66,7 @@ public class WorkflowTextResolver {
                         resolve(prefix + ".option." + opt.key() + ".description", opt.description())))
                 .toList();
         return new WorkflowParamField(field.name(), label, field.type(), field.required(),
-                field.defaultValue(), description, options);
+                field.defaultValue(), description, options, field.minimum(), field.maximum());
     }
 
     private String resolve(String key, String fallback) {

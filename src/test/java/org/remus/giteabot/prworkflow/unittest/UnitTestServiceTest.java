@@ -12,6 +12,7 @@ import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.prworkflow.unittest.agents.UnitTestAuthorAgent;
 import org.remus.giteabot.prworkflow.unittest.runner.UnitTestRunner;
@@ -42,6 +43,7 @@ class UnitTestServiceTest {
     @Mock private UnitTestAuthorAgent authorAgent;
     @Mock private UnitTestRunner runner;
     @Mock private UnitTestSuiteRepository suiteRepository;
+    @Mock private WorkflowToolSurfaceFactory surfaceFactory;
     @InjectMocks private UnitTestService service;
 
     @Test
@@ -98,7 +100,7 @@ class UnitTestServiceTest {
             suite.setId(10L);
             return suite;
         });
-        when(authorAgent.write(any(), any(), anyString(), any(), eq(1)))
+        when(authorAgent.write(any(), any(), any(), anyString(), any(), eq(1)))
                 .thenReturn(new UnitTestAuthorAgent.Result(1, "written", false));
         when(workspaceService.hasUncommittedChanges(workspace)).thenReturn(true);
         when(workspaceService.listChangedFiles(workspace))

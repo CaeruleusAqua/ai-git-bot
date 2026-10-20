@@ -4,6 +4,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
@@ -18,6 +19,7 @@ import org.remus.giteabot.agent.validation.ToolExecutionService;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
+import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
@@ -68,14 +70,15 @@ class AgentReviewCompletionTest {
 
     private AgentReviewService service;
     private WebhookPayload payload;
+    private AgentConfigProperties config;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         payload = AgentJackson.mapper().readValue("""
                 {"repository":{"name":"repo","owner":{"login":"owner"}},
                  "pull_request":{"number":1,"title":"Update example","head":{"ref":"feature"}}}
                 """, WebhookPayload.class);
-        AgentConfigProperties config = new AgentConfigProperties();
+        config = new AgentConfigProperties();
         config.getBudget().setMaxRounds(3);
         ToolCatalog catalog = new ToolCatalog(config);
         service = new AgentReviewService(
@@ -83,7 +86,7 @@ class AgentReviewCompletionTest {
                         null, null, Set.of("pr-diff"), 200_000),
                 new AgentSessionService(mock(AgentSessionRepository.class)),
                 new ToolExecutionService(config, catalog, workspaceService), catalog, workspaceService,
-                config, null, new Bot(), eventHooks);
+                config, null, new Bot(), eventHooks, null);
         lenient().when(aiClient.supportsNativeTools()).thenReturn(true);
         when(repositoryClient.getPullRequestDiff("owner", "repo", 1L)).thenReturn(DIFF);
         lenient().when(workspaceService.prepareWorkspace(repositoryClient, "owner", "repo", "feature", 1L))
@@ -182,6 +185,48 @@ class AgentReviewCompletionTest {
                 argThat(body -> body.contains("No correctness issues found.") && !body.contains("Let me check")),
                 eq(PostReviewAction.NONE));
         verify(workspaceService).cleanupWorkspace(WORKSPACE);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "20,true,false", "20,true,true", "60,true,false", "60,true,true",
+            "20,false,false", "20,false,true", "60,false,false", "60,false,true"
+    })
+    void honorsSixtyExplorationRoundsAndRemindsOnRound58(int loopLimit,
+            boolean nativeMode, boolean clarification) {
+        config.getBudget().setMaxRounds(loopLimit);
+        config.getBudget().setMaxContextRounds(60);
+        when(aiClient.supportsNativeTools()).thenReturn(nativeMode);
+        var reminderCounts = new ArrayList<Long>();
+        when(aiClient.chatWithTools(anyList(), any(), anyList(), anyString(), isNull(), anyInt()))
+                .thenAnswer(invocation -> {
+                    List<AiMessage> history = invocation.getArgument(0);
+                    reminderCounts.add(history.stream().filter(message -> message.getContent() != null
+                            && message.getContent().contains("Conclude your review now")).count());
+                    int round = reminderCounts.size();
+                    if (round == 60) {
+                        return ChatTurn.text("Completed review");
+                    }
+                    return nativeMode ? exploration(round)
+                            : ChatTurn.text("{\"requestTools\":[{\"tool\":\"pr-diff\",\"args\":[]}]}");
+                });
+
+        AgentReviewService.ReviewResult result = clarification
+                ? service.answerClarification(payload, "Why was this changed?", 60)
+                : service.reviewPullRequest(payload, 60, false, null,
+                        new AgentReviewService.SeverityThresholds(null, null, null), 1L, null);
+
+        assertThat(result).isEqualTo(AgentReviewService.ReviewResult.POSTED);
+        assertThat(reminderCounts).hasSize(60);
+        assertThat(reminderCounts.subList(0, 57)).containsOnly(0L);
+        assertThat(reminderCounts.subList(57, 60)).containsOnly(1L);
+        if (clarification) {
+            verify(repositoryClient).postPullRequestComment(eq("owner"), eq("repo"), eq(1L),
+                    argThat(body -> body.contains("Completed review")));
+        } else {
+            verify(repositoryClient).postReview(eq("owner"), eq("repo"), eq(1L),
+                    argThat(body -> body.contains("Completed review")), eq(PostReviewAction.NONE));
+        }
     }
 
     @ParameterizedTest

@@ -2,6 +2,7 @@ package org.remus.giteabot.agent.writerimpl;
 
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.AgentErrorNotificationService;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.loop.AgentBudget;
 import org.remus.giteabot.agent.loop.AgentLoop;
 import org.remus.giteabot.agent.loop.AgentRunContext;
@@ -77,7 +78,8 @@ public class WriterAgentService {
                               McpConfiguration mcpConfiguration,
                               McpToolCatalog mcpToolCatalog,
                               java.util.Set<String> allowedBuiltinTools,
-                              int contextWindowTokens) {
+                              int contextWindowTokens,
+                              PythonExecutionService pythonExecution) {
         this.repositoryClient = repositoryClient;
         this.aiClient = aiClient;
         this.promptService = promptService;
@@ -92,7 +94,8 @@ public class WriterAgentService {
         this.errorNotificationService = new AgentErrorNotificationService(repositoryClient);
         this.branchSwitcher = new BranchSwitcher(toolExecutionService);
         this.toolRouter = new AgentToolRouter(toolExecutionService, toolCatalog, mcpOrchestrationService,
-                mcpConfiguration, this.mcpToolCatalog, repositoryClient, allowedBuiltinTools);
+                mcpConfiguration, this.mcpToolCatalog, repositoryClient, allowedBuiltinTools,
+                pythonExecution);
         this.contextWindowTokens = contextWindowTokens;
     }
 

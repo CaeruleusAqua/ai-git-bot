@@ -66,6 +66,34 @@ class GitIntegrationServiceTest {
         assertDoesNotThrow(() -> gitIntegrationService.validateSave(integration, false, false));
     }
 
+    @Test
+    void validateSave_acceptsEncryptedTokenUpToStorageLimit() {
+        // Encrypted Bitbucket tokens (~190 chars plaintext) exceed the former 255-char column.
+        GitIntegration integration = bitbucketIntegration();
+        when(encryptionService.encrypt("bb-token")).thenReturn("e".repeat(1000));
+
+        assertDoesNotThrow(() -> gitIntegrationService.validateSave(integration, false, false));
+    }
+
+    @Test
+    void validateSave_rejectsEncryptedTokenAboveStorageLimit() {
+        GitIntegration integration = bitbucketIntegration();
+        when(encryptionService.encrypt("bb-token")).thenReturn("e".repeat(1001));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> gitIntegrationService.validateSave(integration, false, false));
+        assertEquals("API token exceeds the storage limit", ex.getMessage());
+    }
+
+    private GitIntegration bitbucketIntegration() {
+        GitIntegration integration = new GitIntegration();
+        integration.setName("bitbucket");
+        integration.setProviderType(RepositoryType.BITBUCKET);
+        integration.setUsername("user");
+        integration.setToken("bb-token");
+        return integration;
+    }
+
     private GitIntegration sshIntegration(String knownHosts) {
         GitIntegration integration = new GitIntegration();
         integration.setName("gitea");

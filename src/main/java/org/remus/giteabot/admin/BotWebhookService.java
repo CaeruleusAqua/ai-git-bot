@@ -22,6 +22,7 @@ import org.remus.giteabot.prworkflow.unittest.UnitTestWorkflow;
 import org.remus.giteabot.repository.Reactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.review.CodeReviewService;
+import org.remus.giteabot.util.BotMention;
 import org.remus.giteabot.util.BranchFilter;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -414,7 +415,7 @@ public class BotWebhookService {
             try {
                 if (agenticEnabled) {
                     String question = extractReviewBody(payload);
-                    if (!mentionsBot(bot, question)) {
+                    if (!BotMention.isMentioned(question, getBotAlias(bot))) {
                         log.debug("[Bot '{}'] Submitted review does not mention the bot — ignoring (agentic-review only responds when addressed)",
                                 bot.getName());
                         return;
@@ -643,9 +644,9 @@ public class BotWebhookService {
         }
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
-        String body = buildUnrecognisedCommandReply(bot);
         try {
             RepositoryApiClient client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            String body = buildUnrecognisedCommandReply(bot, resolveMentionName(bot, client));
             client.postIssueComment(owner, repo, prNumber, body);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to post unrecognised-command reply on PR #{}: {}",
@@ -653,8 +654,26 @@ public class BotWebhookService {
         }
     }
 
-    private String buildUnrecognisedCommandReply(Bot bot) {
-        String mention = bot.getUsername() == null ? "bot" : bot.getUsername();
+    /**
+     * Name to show after {@code @} in replies: the provider's mention name if it has one,
+     * otherwise the bot username. Falls back to "bot" when the provider lookup fails, since
+     * the bot username may not identify the bot on that provider (e.g. Bitbucket).
+     */
+    private String resolveMentionName(Bot bot, RepositoryApiClient client) {
+        try {
+            var providerName = client.getBotMentionName();
+            if (providerName.isPresent()) {
+                return providerName.get();
+            }
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Could not resolve the bot's mention name from the Git provider: {}",
+                    bot.getName(), e.getMessage());
+            return "bot";
+        }
+        return bot.getUsername() == null ? "bot" : bot.getUsername();
+    }
+
+    private String buildUnrecognisedCommandReply(Bot bot, String mention) {
         StringBuilder sb = new StringBuilder();
         sb.append("🤖 Sorry, I did not understand that command.\n\n");
         sb.append("This bot is not configured to run code reviews, so I can only respond ");
@@ -828,19 +847,6 @@ public class BotWebhookService {
         return "@" + username;
     }
 
-    /**
-     * Returns {@code true} when {@code text} @-mentions the bot. Used to gate
-     * agentic responses so the bot only reacts when it is explicitly addressed,
-     * never on unrelated activity (e.g. another reviewer's approval or comment).
-     */
-    private boolean mentionsBot(Bot bot, String text) {
-        if (text == null || text.isBlank()) {
-            return false;
-        }
-        String alias = getBotAlias(bot);
-        return !alias.isEmpty() && text.contains(alias);
-    }
-
     public boolean isPullRequestAuthor(WebhookPayload payload) {
         String author = null;
         if (payload.getPullRequest() != null && payload.getPullRequest().getUser() != null) {
@@ -859,19 +865,13 @@ public class BotWebhookService {
         return author != null && author.equalsIgnoreCase(commenter);
     }
 
-    public boolean isReviewAgainRequestFromPullRequestAuthor(WebhookPayload payload, String botAlias) {
-        if (!isPullRequestAuthor(payload)) {
-            return false;
-        }
-        return isReviewAgainRequest(payload, botAlias);
-    }
-
     public boolean isReviewAgainRequest(WebhookPayload payload, String botAlias) {
         String body = payload.getComment() != null ? payload.getComment().getBody() : null;
-        if (body == null || botAlias == null || !body.contains(botAlias)) {
+        if (!BotMention.isMentioned(body, botAlias)) {
             return false;
         }
-        String normalized = body.toLowerCase();
+        // Ignore the alias itself, so a bot named e.g. @reviewbot does not count as asking for a review
+        String normalized = BotMention.replaceMention(body, botAlias, " ").toLowerCase();
         return normalized.contains("review")
                 && (normalized.contains("again") || normalized.contains("re-review") || normalized.contains("repeat"));
     }

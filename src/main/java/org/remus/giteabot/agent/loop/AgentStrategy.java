@@ -35,6 +35,17 @@ public interface AgentStrategy {
     String systemPrompt();
 
     /**
+     * Optional user reminder appended to conversation history before a model call.
+     * The remaining loop count includes that upcoming call; strategies may also
+     * consider their own budget for the resolved tooling mode. Once added, the
+     * hook is no longer called and the reminder is restored before requests if
+     * compaction removes it. {@code null} adds nothing.
+     */
+    default String roundBudgetReminder(int remainingRounds, ToolingMode mode) {
+        return null;
+    }
+
+    /**
      * Decide what to do given the AI's latest assistant turn (text path).
      *
      * <p>May execute tools, post comments, mutate {@code ctx} (e.g. update

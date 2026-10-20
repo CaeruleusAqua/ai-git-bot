@@ -2,6 +2,8 @@ package org.remus.giteabot.ai.anthropic;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+import org.remus.giteabot.ai.UsageCounterDeserializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
 import java.util.List;
 import java.util.Map;
 @Data
@@ -35,12 +37,26 @@ public class AnthropicResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Usage {
         @JsonProperty("input_tokens")
-        private int inputTokens;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer inputTokens;
         @JsonProperty("output_tokens")
-        private int outputTokens;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer outputTokens;
         @JsonProperty("cache_creation_input_tokens")
-        private int cacheCreationInputTokens;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer cacheCreationInputTokens = 0;
         @JsonProperty("cache_read_input_tokens")
-        private int cacheReadInputTokens;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer cacheReadInputTokens = 0;
+
+        /** Anthropic excludes cache reads/writes from input_tokens; add each exactly once. */
+        public Long totalInputTokens() {
+            if (inputTokens == null || inputTokens < 0
+                    || cacheCreationInputTokens == null || cacheCreationInputTokens < 0
+                    || cacheReadInputTokens == null || cacheReadInputTokens < 0) {
+                return null;
+            }
+            return (long) inputTokens + cacheCreationInputTokens + cacheReadInputTokens;
+        }
     }
 }

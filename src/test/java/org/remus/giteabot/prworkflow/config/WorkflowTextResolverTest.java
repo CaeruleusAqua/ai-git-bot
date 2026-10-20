@@ -12,8 +12,10 @@ import org.springframework.context.support.StaticMessageSource;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class WorkflowTextResolverTest {
 
@@ -25,7 +27,9 @@ class WorkflowTextResolverTest {
             return WorkflowParamsSchema.of(new WorkflowParamField(
                     "framework", "Test framework", WorkflowParamField.ParamType.ENUM,
                     false, "a", "English field description",
-                    List.of(new WorkflowParamField.EnumOption("a", "Alpha", "Alpha desc"))));
+                    List.of(new WorkflowParamField.EnumOption("a", "Alpha", "Alpha desc"))),
+                    new WorkflowParamField("count", "Count", WorkflowParamField.ParamType.INTEGER,
+                            false, "2147483648", "English count description", List.of(), 1L, 4294967295L));
         }
     };
 
@@ -70,5 +74,27 @@ class WorkflowTextResolverTest {
         assertEquals("Alpha-FR", field.allowedValues().get(0).label(), "option label should be localized");
         assertEquals("a", field.allowedValues().get(0).key(), "option key must stay untouched");
         assertEquals("Alpha desc", field.allowedValues().get(0).description(), "missing option description -> fallback");
+    }
+
+    @Test
+    void localizedSchema_preservesIntegerBoundsAndDefaultsWithTranslatedText() {
+        LocaleContextHolder.setLocale(Locale.GERMAN);
+        StaticMessageSource ms = new StaticMessageSource();
+        ms.addMessage("workflow.review.param.count.label", Locale.GERMAN, "Anzahl");
+        ms.addMessage("workflow.review.param.count.description", Locale.GERMAN, "Beschreibung");
+
+        WorkflowParamsSchema localized = new WorkflowTextResolver(ms).localizedSchema(workflow);
+        WorkflowParamField field = localized.require("count");
+
+        assertEquals("Anzahl", field.label());
+        assertEquals("Beschreibung", field.description());
+        assertEquals(WorkflowParamField.ParamType.INTEGER, field.type());
+        assertEquals("2147483648", field.defaultValue());
+        assertEquals(1L, field.minimum());
+        assertEquals(4294967295L, field.maximum());
+        assertEquals(Map.of("count", "2147483648", "framework", "a"),
+                new WorkflowParamsValidator().validate(null, localized));
+        assertThrows(IllegalArgumentException.class,
+                () -> new WorkflowParamsValidator().validate(Map.of("count", "4294967296"), localized));
     }
 }
