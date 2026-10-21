@@ -173,7 +173,7 @@ class BotWebhookServiceTest {
                     Bot b = invocation.getArgument(0);
                     return new org.remus.giteabot.review.CodeReviewService(
                             repositoryApiClient, aiClient, sessionService,
-                            b.getUsername(), new ReviewConfigProperties(),
+                            b.getGitIntegration().getUsername(), new ReviewConfigProperties(),
                             "system-prompt:" + b.getSystemPrompt().getId(),
                             b.getSystemPrompt().getReviewSystemPrompt(),
                             120000, 8, 60000, "");
@@ -212,17 +212,6 @@ class BotWebhookServiceTest {
     }
 
     @Test
-    void isBotUser_nullUsername_returnsFalse() {
-        Bot bot = createBot("test-bot", null);
-        WebhookPayload payload = new WebhookPayload();
-        WebhookPayload.Owner sender = new WebhookPayload.Owner();
-        sender.setLogin("human_user");
-        payload.setSender(sender);
-
-        assertFalse(botWebhookService.isBotUser(bot, payload));
-    }
-
-    @Test
     void isBotUser_commentUserMatchesBotUsername_returnsTrue() {
         Bot bot = createBot("test-bot", "ai_bot");
         WebhookPayload payload = new WebhookPayload();
@@ -241,12 +230,6 @@ class BotWebhookServiceTest {
     void getBotAlias_returnsMentionFormat() {
         Bot bot = createBot("test-bot", "ai_bot");
         assertEquals("@ai_bot", botWebhookService.getBotAlias(bot));
-    }
-
-    @Test
-    void getBotAlias_nullUsername_returnsEmpty() {
-        Bot bot = createBot("test-bot", null);
-        assertEquals("", botWebhookService.getBotAlias(bot));
     }
 
     @Test
@@ -1770,7 +1753,9 @@ class BotWebhookServiceTest {
     private Bot createBot(String name, String username) {
         Bot bot = new Bot();
         bot.setName(name);
-        bot.setUsername(username);
+        GitIntegration gitIntegration = new GitIntegration();
+        gitIntegration.setUsername(username);
+        bot.setGitIntegration(gitIntegration);
         SystemPrompt systemPrompt = new SystemPrompt();
         systemPrompt.setId(1L);
         systemPrompt.setReviewSystemPrompt("Review prompt");

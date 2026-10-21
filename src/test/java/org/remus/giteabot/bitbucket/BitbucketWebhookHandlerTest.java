@@ -51,8 +51,6 @@ class BitbucketWebhookHandlerTest {
         integration.setUsername("bot@example.com");
         bot = new Bot();
         bot.setName("test-bot");
-        // Deliberately different from the Bitbucket account: the bot username must have no effect.
-        bot.setUsername("unrelated-bot-name");
         bot.setGitIntegration(integration);
 
         lenient().when(clientFactory.getApiClient(integration)).thenReturn(bitbucketClient);
