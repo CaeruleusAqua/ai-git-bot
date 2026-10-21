@@ -32,6 +32,7 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ### Fixed
 
+- The MCP client now reports the running application version (e.g. `1.29.0-SNAPSHOT`, or `dev` without build info) as `clientInfo.version` to MCP servers instead of the hardcoded `1.5.0`.
 - Comment-based re-review requests on GitLab and Bitbucket no longer count the word "review" inside the bot's own mention. A bot named e.g. `reviewbot` is no longer triggered by `@reviewbot again`; the comment itself must ask for a review, e.g. `@reviewbot please review this again`. Gitea and GitHub are not affected, since they re-request reviews through the reviewer workflow.
 - The bot no longer reacts to mentions of other users whose name starts with the bot's username (e.g. `@ai_bot2` or `@ai_bot.helper` for a bot named `ai_bot`) or to e-mail addresses such as `me@ai_bot.com`. Mentions are now matched as whole names on Gitea, GitHub and GitLab; `@ai_bot,` or `@ai_bot.` at the end of a sentence still count. A bot without a username is no longer treated as mentioned by every comment.
 - Bitbucket webhooks for team-owned workspaces whose legacy owner username differs from the workspace slug (e.g. owner `postremus1`, workspace `postremus`) no longer fail with `404 Not Found`: API calls now use the repository's `workspace.slug` (falling back to the `full_name` prefix) instead of the owner's username.
