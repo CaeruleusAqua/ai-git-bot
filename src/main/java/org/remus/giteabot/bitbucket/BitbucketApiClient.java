@@ -118,25 +118,31 @@ public class BitbucketApiClient implements RepositoryApiClient {
     @Override
     public void postReviewComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting review comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        restClient.post()
-                .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments",
-                        owner, repo, pullNumber)
-                .body(Map.of("content", Map.of("raw", body)))
-                .retrieve()
-                .toBodilessEntity();
+        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
         log.info("Review comment posted successfully");
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        restClient.post()
+        Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
+        log.info("Comment posted successfully");
+        return RepositoryApiClient.commentId(response);
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        restClient.put()
+                .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments/{comment_id}",
+                        owner, repo, pullNumber, commentId)
+                .body(Map.of("content", Map.of("raw", body))).retrieve().toBodilessEntity();
+    }
+
+    private RestClient.ResponseSpec commentCreationRequest(String owner, String repo, Long pullNumber, String body) {
+        return restClient.post()
                 .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments",
                         owner, repo, pullNumber)
-                .body(Map.of("content", Map.of("raw", body)))
-                .retrieve()
-                .toBodilessEntity();
-        log.info("Comment posted successfully");
+                .body(Map.of("content", Map.of("raw", body))).retrieve();
     }
 
     /**

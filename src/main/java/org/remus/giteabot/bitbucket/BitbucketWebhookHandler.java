@@ -219,6 +219,12 @@ public class BitbucketWebhookHandler {
             repository.setId((long) uuid.hashCode());
         }
 
+        // The repository name can be a display label; full_name contains its API slug.
+        String fullName = (String) repo.get("full_name");
+        if (fullName != null && fullName.contains("/")) {
+            repository.setName(fullName.substring(fullName.indexOf('/') + 1));
+        }
+
         String workspace = resolveWorkspaceSlug(repo);
         if (workspace != null) {
             WebhookPayload.Owner owner = new WebhookPayload.Owner();

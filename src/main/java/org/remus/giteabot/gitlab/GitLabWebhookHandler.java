@@ -463,6 +463,16 @@ public class GitLabWebhookHandler {
                 pr.setTitle((String) mr.get("title"));
                 pr.setBody((String) mr.get("description"));
                 pr.setUser(extractGitLabAuthor(mr, user));
+                WebhookPayload.Head head = new WebhookPayload.Head();
+                head.setRef((String) mr.get("source_branch"));
+                Map<String, Object> lastCommit = (Map<String, Object>) mr.get("last_commit");
+                if (lastCommit != null) {
+                    head.setSha((String) lastCommit.get("id"));
+                }
+                pr.setHead(head);
+                WebhookPayload.Head base = new WebhookPayload.Head();
+                base.setRef((String) mr.get("target_branch"));
+                pr.setBase(base);
                 payload.setPullRequest(pr);
             }
         } else if ("Issue".equals(noteableType)) {
