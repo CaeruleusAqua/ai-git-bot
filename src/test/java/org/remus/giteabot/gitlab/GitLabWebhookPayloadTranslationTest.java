@@ -2,6 +2,8 @@ package org.remus.giteabot.gitlab;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 
@@ -19,6 +21,30 @@ class GitLabWebhookPayloadTranslationTest {
     @BeforeEach
     void setUp() {
         handler = new GitLabWebhookHandler(mock(BotWebhookService.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"merge_request", "issue", "note"})
+    void translateRepository_usesCanonicalPathInsteadOfDisplayNames(String hookType) {
+        Map<String, Object> project = Map.of(
+                "id", 1,
+                "name", "Readable Project Name",
+                "path", "project-slug",
+                "path_with_namespace", "team/subgroup/project-slug",
+                "namespace", "Administrator");
+        Map<String, Object> attrs = Map.of("iid", 42, "noteable_type", "Issue");
+        Map<String, Object> payload = Map.of("project", project, "object_attributes", attrs);
+
+        WebhookPayload translated = switch (hookType) {
+            case "merge_request" -> handler.translateMergeRequestPayload(payload, attrs);
+            case "issue" -> handler.translateIssuePayload(payload, attrs);
+            case "note" -> handler.translateNotePayload(payload, attrs);
+            default -> throw new IllegalArgumentException(hookType);
+        };
+
+        assertEquals("team/subgroup", translated.getRepository().getOwner().getLogin());
+        assertEquals("project-slug", translated.getRepository().getName());
+        assertEquals("team/subgroup/project-slug", translated.getRepository().getFullName());
     }
 
     @Test
