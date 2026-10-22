@@ -345,9 +345,9 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
      * visible without counting as unresolved discussions.
      */
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber,
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber,
                                        String body) {
-        postThread(owner, repo, pullNumber, body, THREAD_STATUS_CLOSED);
+        return postThread(owner, repo, pullNumber, body, THREAD_STATUS_CLOSED);
     }
 
     /** A review summary is left active, like the inline findings it accompanies. */
@@ -356,11 +356,11 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
         postThread(owner, repo, pullNumber, body, THREAD_STATUS_ACTIVE);
     }
 
-    private void postThread(String owner, String repo, Long pullNumber, String body,
+    private Long postThread(String owner, String repo, Long pullNumber, String body,
                             int status) {
         AzureDevopsAddress addr = AzureDevopsAddress.parse(owner, repo);
         Scope scope = repositoryScope(addr);
-        run(() -> restClient.post()
+        Map<String, Object> created = call(() -> restClient.post()
                 .uri(builder -> builder
                         .path(scope.path() + "/pullRequests/{prId}/threads")
                         .queryParam("api-version", API_VERSION)
@@ -372,8 +372,15 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
                                 "commentType", 1)),
                         "status", status))
                 .retrieve()
-                .toBodilessEntity(),
+                .body(new ParameterizedTypeReference<Map<String, Object>>() {}),
+                null,
                 "post comment on PR #{} in {}", pullNumber, repo);
+        // Azure DevOps answers with the created thread; callers that only post
+        // ignore the id, so a missing id must not fail the request.
+        if (created == null || !(created.get("id") instanceof Number id)) {
+            return null;
+        }
+        return id.longValue();
     }
 
     @Override
