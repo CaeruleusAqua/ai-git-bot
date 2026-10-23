@@ -31,10 +31,14 @@ In the bot's admin UI, create a new Git Integration:
 
 1. Select **Provider Type**: `AZURE_DEVOPS`
 2. Enter the **URL** — see the table below for your deployment
-3. Enter the **Personal Access Token** you created in Step 1
+3. Enter the **Username** of the account that owns the PAT — see below
+4. Enter the **Personal Access Token** you created in Step 1
 
-There is no username field. Azure DevOps PATs authenticate as HTTP Basic with an empty
-username, so the bot never collects one for this provider.
+The **Username** is the account's Azure DevOps `uniqueName`: usually the sign-in email on
+Azure DevOps Services (e.g. `ai-bot@yourcompany.com`) and `DOMAIN\user` on Azure DevOps
+Server. The bot compares this value with the PR's reviewers and with the author of each
+event, so with any other value it neither recognizes itself as a requested reviewer nor
+ignores its own comments.
 
 ### Which URL to enter
 
@@ -72,12 +76,6 @@ for that.
 Create a new Bot in the admin UI and link it to:
 - Your Azure DevOps Git Integration
 - Your AI Integration (e.g. Anthropic)
-
-Set the bot's **Username** to the login of the account that owns the PAT, its Azure DevOps
-`uniqueName`: usually the sign-in email on Azure DevOps Services (e.g.
-`ai-bot@yourcompany.com`) and `DOMAIN\user` on Azure DevOps Server. The bot compares this
-value with the PR's reviewers and with the author of each event, so with any other value it
-neither recognizes itself as a requested reviewer nor ignores its own comments.
 
 Save the bot, then copy the **Webhook URL** shown at the top of its edit form (e.g.
 `/api/webhook/abc123-def456-...`). It already contains the bot's generated path secret —
