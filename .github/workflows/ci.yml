@@ -5,6 +5,11 @@ on:
     branches:
       - main
       - develop
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'doc/**'
 
 permissions:
   contents: read

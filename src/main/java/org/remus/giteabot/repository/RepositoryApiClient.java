@@ -48,15 +48,30 @@ public interface RepositoryApiClient {
     }
 
     /**
-     * Resolves the complete, credential-free Git remote for one repository.
-     * Providers may override this to select a repository-specific transport.
+     * Validates an HTTP clone base URL and returns it normalized: lower-case scheme, no
+     * trailing slash.
+     * <p>
+     * The remote this feeds is handed to {@code git} as a command-line argument and is
+     * echoed back in git's own error output, so it must never carry a secret. A base URL
+     * with userinfo would both leak the credential there and corrupt the credential-store
+     * host {@code WorkspaceService} derives from the remote. Query and fragment are
+     * rejected for the same reason: neither is meaningful in a Git remote, and both would
+     * survive into the concatenated URL.
+     * <p>
+     * Exposed as a static helper rather than being inlined into
+     * {@link #getRepositoryRemote} so that providers overriding that method to build a
+     * provider-specific path — Azure DevOps addresses repositories as
+     * {@code /{org}/{project}/_git/{name}} — keep the same guarantee instead of
+     * reimplementing (and quietly dropping) it.
+     *
+     * @throws IllegalStateException when the URL is missing, unparseable, not HTTP(S), or
+     *                               carries userinfo, a query or a fragment
      */
-    default String getRepositoryRemote(String owner, String repo) {
-        String cloneBaseUrl = getCloneUrl();
-        if (cloneBaseUrl == null || cloneBaseUrl.isBlank()
-                || owner == null || owner.isBlank() || repo == null || repo.isBlank()) {
+    static String validatedCloneBaseUrl(String cloneBaseUrl) {
+        if (cloneBaseUrl == null || cloneBaseUrl.isBlank()) {
             throw new IllegalStateException("Repository remote cannot be resolved");
         }
+        String normalized;
         try {
             URI base = URI.create(cloneBaseUrl);
             if (!("http".equalsIgnoreCase(base.getScheme()) || "https".equalsIgnoreCase(base.getScheme()))
@@ -64,15 +79,28 @@ public interface RepositoryApiClient {
                     || base.getRawQuery() != null || base.getRawFragment() != null) {
                 throw new IllegalStateException("HTTP clone base URL must be credential-free");
             }
-            cloneBaseUrl = base.getScheme().toLowerCase(Locale.ROOT)
+            normalized = base.getScheme().toLowerCase(Locale.ROOT)
                     + cloneBaseUrl.substring(base.getScheme().length());
         } catch (IllegalArgumentException e) {
             throw new IllegalStateException("HTTP clone base URL is invalid", e);
         }
-        while (cloneBaseUrl.endsWith("/")) {
-            cloneBaseUrl = cloneBaseUrl.substring(0, cloneBaseUrl.length() - 1);
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
         }
-        return cloneBaseUrl + "/" + owner + "/" + repo + ".git";
+        return normalized;
+    }
+
+    /**
+     * Resolves the complete, credential-free Git remote for one repository.
+     * Providers may override this to select a repository-specific transport; an override
+     * that still builds an HTTP remote must run its base URL through
+     * {@link #validatedCloneBaseUrl}.
+     */
+    default String getRepositoryRemote(String owner, String repo) {
+        if (owner == null || owner.isBlank() || repo == null || repo.isBlank()) {
+            throw new IllegalStateException("Repository remote cannot be resolved");
+        }
+        return validatedCloneBaseUrl(getCloneUrl()) + "/" + owner + "/" + repo + ".git";
     }
 
     /**
@@ -134,8 +162,25 @@ public interface RepositoryApiClient {
      * <p>
      * Providers like GitHub and Gitea can often reuse the same underlying endpoint as issue comments,
      * while GitLab requires a merge-request-specific endpoint.
+     *
+     * @return the positive integral comment ID, or {@code null} if the response has no usable ID;
+     *         callers that only need to publish a comment can ignore the return value
      */
-    void postPullRequestComment(String owner, String repo, Long pullNumber, String body);
+    Long postPullRequestComment(String owner, String repo, Long pullNumber, String body);
+
+    /** Updates a top-level PR comment owned by the authenticated account. */
+    default void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        throw new UnsupportedOperationException("Updating PR comments is not supported");
+    }
+
+    /** Returns the positive integral ID from a comment response, or {@code null} if unavailable. */
+    static Long commentId(Map<?, ?> response) {
+        Object id = response == null ? null : response.get("id");
+        if ((id instanceof Integer || id instanceof Long) && ((Number) id).longValue() > 0) {
+            return ((Number) id).longValue();
+        }
+        return null;
+    }
 
     /**
      * Attaches an artifact (test screenshot, trace, log file, …) to a pull
