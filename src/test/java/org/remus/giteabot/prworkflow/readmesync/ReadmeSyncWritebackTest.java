@@ -8,7 +8,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowCancelledException;
 import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;

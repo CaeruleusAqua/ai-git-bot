@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.remus.giteabot.admin.BotWebhookService;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 
 import java.util.HashMap;
 import java.util.List;

@@ -1,7 +1,7 @@
 package org.remus.giteabot.azuredevops;
 
 import org.junit.jupiter.api.Test;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 
 import java.util.List;
 import java.util.Map;

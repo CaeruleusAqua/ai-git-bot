@@ -3,7 +3,7 @@ package org.remus.giteabot.gitea;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.util.BotMention;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
@@ -14,9 +14,9 @@ import java.util.Map;
 /**
  * Handler for Gitea webhook events.
  * <p>
- * Receives raw webhook payloads and processes them using the common
- * {@link WebhookPayload} model. Gitea payloads map directly to the WebhookPayload
- * structure, so minimal translation is needed.
+ * Receives raw webhook payloads, translates them into the provider-neutral
+ * {@link WebhookPayload} model, then processes them. Gitea's field names closely
+ * match WebhookPayload, so the translation is mostly a one-to-one copy.
  */
 @Slf4j
 @Component

@@ -8,7 +8,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GitIntegration;
 import org.remus.giteabot.admin.RepositoryApiClientFactory;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.repository.RepositoryApiClient;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;

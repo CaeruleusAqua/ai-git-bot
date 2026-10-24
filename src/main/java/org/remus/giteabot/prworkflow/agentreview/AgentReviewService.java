@@ -26,7 +26,7 @@ import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.eventhook.EventHookEventType;
 import org.remus.giteabot.eventhook.EventHookPublisher;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
