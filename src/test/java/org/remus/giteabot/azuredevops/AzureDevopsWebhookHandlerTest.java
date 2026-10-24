@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 
 import java.util.List;
@@ -24,15 +24,15 @@ import static org.mockito.Mockito.*;
 class AzureDevopsWebhookHandlerTest {
 
     private BotWebhookService botWebhookService;
-    private GiteaClientFactory clientFactory;
+    private RepositoryApiClientFactory repositoryApiClientFactory;
     private AzureDevopsWebhookHandler handler;
     private Bot bot;
 
     @BeforeEach
     void setUp() {
         botWebhookService = mock(BotWebhookService.class);
-        clientFactory = mock(GiteaClientFactory.class);
-        handler = new AzureDevopsWebhookHandler(botWebhookService, clientFactory);
+        repositoryApiClientFactory = mock(RepositoryApiClientFactory.class);
+        handler = new AzureDevopsWebhookHandler(botWebhookService, repositoryApiClientFactory);
 
         GitIntegration integration = new GitIntegration();
         integration.setUrl("https://dev.azure.com/contoso");

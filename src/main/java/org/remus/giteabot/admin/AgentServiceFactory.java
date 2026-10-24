@@ -37,7 +37,7 @@ import org.springframework.stereotype.Component;
 public class AgentServiceFactory {
 
     private final AiClientFactory aiClientFactory;
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final PromptService promptService;
     private final AgentConfigProperties agentConfig;
     private final AgentSessionService agentSessionService;
@@ -54,7 +54,7 @@ public class AgentServiceFactory {
      */
     public IssueImplementationService createIssueImplementationService(Bot bot) {
         AiClient aiClient = getAiClient(bot);
-        RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
+        RepositoryApiClient repoClient = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         McpToolCatalog mcpToolCatalog = discoverMcpToolCatalog(bot);
         requireSystemPrompt(bot);
         IssueImplementationContext context = new IssueImplementationContext(
@@ -80,7 +80,7 @@ public class AgentServiceFactory {
      */
     public WriterAgentService createWriterAgentService(Bot bot) {
         AiClient aiClient = getAiClient(bot);
-        RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
+        RepositoryApiClient repoClient = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         McpToolCatalog mcpToolCatalog = discoverMcpToolCatalog(bot);
         requireSystemPrompt(bot);
         return new WriterAgentService(repoClient, aiClient, promptService, agentConfig,

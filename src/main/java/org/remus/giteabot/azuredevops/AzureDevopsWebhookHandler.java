@@ -3,7 +3,7 @@ package org.remus.giteabot.azuredevops;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.springframework.http.ResponseEntity;
@@ -71,7 +71,7 @@ public class AzureDevopsWebhookHandler {
     private static final int MAX_TRACKED_PULL_REQUESTS = 5000;
 
     private final BotWebhookService botWebhookService;
-    private final GiteaClientFactory clientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
 
     /**
      * What the previous event said about one pull request: the source-branch commit it
@@ -112,9 +112,9 @@ public class AzureDevopsWebhookHandler {
             });
 
     public AzureDevopsWebhookHandler(BotWebhookService botWebhookService,
-                                     GiteaClientFactory clientFactory) {
+                                     RepositoryApiClientFactory repositoryApiClientFactory) {
         this.botWebhookService = botWebhookService;
-        this.clientFactory = clientFactory;
+        this.repositoryApiClientFactory = repositoryApiClientFactory;
     }
 
     /**
@@ -402,7 +402,7 @@ public class AzureDevopsWebhookHandler {
             return;
         }
         try {
-            RepositoryApiClient client = clientFactory.getApiClient(bot.getGitIntegration());
+            RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
             if (!(client instanceof AzureDevopsApiClient azureClient)) {
                 return;
             }

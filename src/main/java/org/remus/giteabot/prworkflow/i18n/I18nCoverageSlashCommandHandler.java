@@ -3,7 +3,7 @@ package org.remus.giteabot.prworkflow.i18n;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.PrWorkflowOrchestrator;
@@ -39,7 +39,7 @@ public class I18nCoverageSlashCommandHandler {
 
     private final PrWorkflowOrchestrator orchestrator;
     private final WorkflowSelectionService selectionService;
-    private final GiteaClientFactory repositoryClientFactory;
+    private final RepositoryApiClientFactory repositoryClientFactory;
 
     /**
      * @return {@code true} when the comment was recognized as the
