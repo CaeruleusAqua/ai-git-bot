@@ -1229,7 +1229,7 @@ class BotWebhookServiceTest {
             // Code-review path MUST NOT be entered
             verify(sessionService, never()).getOrCreateSession(any(), any(), any(), any());
             // Unrecognised-command reply MUST be posted
-            verify(repositoryApiClient).postIssueComment(eq(OWNER), eq(REPO), eq(PR_NUMBER),
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER),
                     org.mockito.ArgumentMatchers.contains("did not understand"));
         }
 
@@ -1247,7 +1247,7 @@ class BotWebhookServiceTest {
             botWebhookService.handlePrComment(bot, prCommentPayload);
 
             org.mockito.ArgumentCaptor<String> body = org.mockito.ArgumentCaptor.forClass(String.class);
-            verify(repositoryApiClient).postIssueComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
             assertThat(body.getValue()).contains("`@AI Bot rerun-tests`").doesNotContain("@claude_bot");
         }
 
@@ -1265,7 +1265,7 @@ class BotWebhookServiceTest {
             botWebhookService.handlePrComment(bot, prCommentPayload);
 
             org.mockito.ArgumentCaptor<String> body = org.mockito.ArgumentCaptor.forClass(String.class);
-            verify(repositoryApiClient).postIssueComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
             assertThat(body.getValue()).contains("`@bot rerun-tests`").doesNotContain("@claude_bot");
         }
 
@@ -1284,7 +1284,7 @@ class BotWebhookServiceTest {
             botWebhookService.handlePrComment(bot, prCommentPayload);
 
             verify(sessionService).getOrCreateSession(OWNER, REPO, PR_NUMBER, "system-prompt:1");
-            verify(repositoryApiClient, never()).postIssueComment(any(), any(), any(),
+            verify(repositoryApiClient, never()).postPullRequestComment(any(), any(), any(),
                     org.mockito.ArgumentMatchers.contains("did not understand"));
         }
     }
