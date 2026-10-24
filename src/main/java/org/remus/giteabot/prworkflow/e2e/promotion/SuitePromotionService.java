@@ -3,7 +3,7 @@ package org.remus.giteabot.prworkflow.e2e.promotion;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
@@ -73,7 +73,7 @@ public class SuitePromotionService {
     private static final String GIT_AUTHOR_EMAIL = "ai-git-bot@local";
 
     private final WorkspaceService workspaceService;
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final PrWorkflowRunRepository runRepository;
 
     public Outcome promote(Bot bot, PrWorkflowRun run, PrTestSuite suite,
@@ -101,7 +101,7 @@ public class SuitePromotionService {
 
         RepositoryApiClient client;
         try {
-            client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         } catch (RuntimeException e) {
             return Outcome.failure("Failed to obtain repository client: " + e.getMessage());
         }

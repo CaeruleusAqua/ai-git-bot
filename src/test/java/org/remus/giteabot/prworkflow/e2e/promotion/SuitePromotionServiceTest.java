@@ -5,8 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.admin.GiteaClientFactory;
 import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.prworkflow.PrWorkflowRun;
@@ -52,11 +52,11 @@ class SuitePromotionServiceTest {
     void setUp(@TempDir Path tmp) throws IOException {
         workspace = Files.createDirectories(tmp.resolve("ws"));
         workspaceService = mock(WorkspaceService.class);
-        GiteaClientFactory giteaClientFactory = mock(GiteaClientFactory.class);
+        RepositoryApiClientFactory repositoryApiClientFactory = mock(RepositoryApiClientFactory.class);
         PrWorkflowRunRepository runRepository = mock(PrWorkflowRunRepository.class);
         repoClient = mock(RepositoryApiClient.class);
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repoClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repoClient);
         when(repoClient.getDefaultBranch(anyString(), anyString())).thenReturn("main");
         when(workspaceService.prepareWorkspace(any(RepositoryApiClient.class),
                 anyString(), anyString(), anyString(), any()))
@@ -70,7 +70,7 @@ class SuitePromotionServiceTest {
                 .thenReturn(true);
         lenient().when(runRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service = new SuitePromotionService(workspaceService, giteaClientFactory, runRepository);
+        service = new SuitePromotionService(workspaceService, repositoryApiClientFactory, runRepository);
     }
 
     @Test

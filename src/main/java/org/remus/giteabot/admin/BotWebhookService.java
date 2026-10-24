@@ -36,7 +36,7 @@ import java.util.Set;
  * <p>
  * This is the bridge between the admin data model and the code-review / agent
  * services.  Each bot gets its own {@link AiClient} (via {@link AiClientFactory})
- * and its own {@link RepositoryApiClient} (via {@link GiteaClientFactory}).
+ * and its own {@link RepositoryApiClient} (via {@link RepositoryApiClientFactory}).
  * <p>
  * PR events are delegated to the {@link PrWorkflowOrchestrator}, issue events
  * (assignments and comments, including follow-ups on agent-created PRs) to the
@@ -47,7 +47,7 @@ import java.util.Set;
 @Service
 public class BotWebhookService {
 
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final AgentSessionService agentSessionService;
     private final BotService botService;
     private final PrWorkflowOrchestrator prWorkflowOrchestrator;
@@ -60,7 +60,7 @@ public class BotWebhookService {
     private final WorkflowSelectionService workflowSelectionService;
     private final IssueWorkflowOrchestrator issueWorkflowOrchestrator;
 
-    public BotWebhookService(GiteaClientFactory giteaClientFactory,
+    public BotWebhookService(RepositoryApiClientFactory repositoryApiClientFactory,
                              AgentSessionService agentSessionService,
                              BotService botService,
                              PrWorkflowOrchestrator prWorkflowOrchestrator,
@@ -72,7 +72,7 @@ public class BotWebhookService {
                              I18nCoverageSlashCommandHandler i18nCoverageSlashCommandHandler,
                              WorkflowSelectionService workflowSelectionService,
                              IssueWorkflowOrchestrator issueWorkflowOrchestrator) {
-        this.giteaClientFactory = giteaClientFactory;
+        this.repositoryApiClientFactory = repositoryApiClientFactory;
         this.agentSessionService = agentSessionService;
         this.botService = botService;
         this.prWorkflowOrchestrator = prWorkflowOrchestrator;
@@ -131,7 +131,7 @@ public class BotWebhookService {
             if (IssueWorkflowOrchestrator.enabledWorkflowKeys(bot, workflowSelectionService).isEmpty()) {
                 return;
             }
-            giteaClientFactory.getApiClient(bot.getGitIntegration())
+            repositoryApiClientFactory.getApiClient(bot.getGitIntegration())
                     .addIssueReaction(owner, repo, issueNumber, Reactions.EYES);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to add 👀 reaction to issue #{}: {}: {}",
@@ -161,7 +161,7 @@ public class BotWebhookService {
             if (PrWorkflowOrchestrator.enabledWorkflowKeys(bot, workflowSelectionService).isEmpty()) {
                 return;
             }
-            giteaClientFactory.getApiClient(bot.getGitIntegration())
+            repositoryApiClientFactory.getApiClient(bot.getGitIntegration())
                     .addPullRequestReaction(owner, repo, pullNumber, Reactions.EYES);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}: {}",
@@ -645,7 +645,7 @@ public class BotWebhookService {
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
         try {
-            RepositoryApiClient client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
             String body = buildUnrecognisedCommandReply(bot, resolveMentionName(bot, client));
             client.postIssueComment(owner, repo, prNumber, body);
         } catch (RuntimeException e) {

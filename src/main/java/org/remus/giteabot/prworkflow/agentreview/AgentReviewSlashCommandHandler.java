@@ -4,7 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.gitea.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.PrWorkflowOrchestrator;
@@ -55,7 +55,7 @@ public class AgentReviewSlashCommandHandler {
      * {@link org.remus.giteabot.repository.RepositoryProviderRegistry}
      * based on {@code bot.getGitIntegration().getProviderType()}.
      */
-    private final GiteaClientFactory repositoryClientFactory;
+    private final RepositoryApiClientFactory repositoryClientFactory;
 
     /**
      * @return {@code true} when the comment was recognized as an agentic-review
