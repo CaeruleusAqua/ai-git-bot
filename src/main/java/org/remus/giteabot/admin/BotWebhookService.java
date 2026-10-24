@@ -647,7 +647,7 @@ public class BotWebhookService {
         try {
             RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
             String body = buildUnrecognisedCommandReply(bot, resolveMentionName(bot, client));
-            client.postIssueComment(owner, repo, prNumber, body);
+            client.postPullRequestComment(owner, repo, prNumber, body);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to post unrecognised-command reply on PR #{}: {}",
                     bot.getName(), prNumber, e.getMessage());

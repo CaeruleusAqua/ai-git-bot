@@ -208,7 +208,7 @@ public class E2eTestSlashCommandHandler {
                 + "_Please check the bot logs for the full stack trace._";
         try {
             RepositoryApiClient client = repositoryClientFactory.getApiClient(bot.getGitIntegration());
-            client.postIssueComment(owner, repo, prNumber, body);
+            client.postPullRequestComment(owner, repo, prNumber, body);
         } catch (RuntimeException postError) {
             log.warn("[Bot '{}'] Failed to post internal-error comment on PR #{}: {}",
                     bot.getName(), prNumber, postError.getMessage());
