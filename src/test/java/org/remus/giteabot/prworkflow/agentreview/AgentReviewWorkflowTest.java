@@ -9,7 +9,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowResult;

@@ -26,7 +26,7 @@ import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.eventhook.EventHookPublisher;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.RepositoryType;
@@ -84,10 +84,20 @@ class AgentReviewCompletionTest {
 
     @BeforeEach
     void setUp() {
-        payload = AgentJackson.mapper().readValue("""
-                {"repository":{"name":"repo","owner":{"login":"owner"}},
-                 "pull_request":{"number":1,"title":"Update example","head":{"ref":"feature"}}}
-                """, WebhookPayload.class);
+        WebhookPayload.Owner owner = new WebhookPayload.Owner();
+        owner.setLogin("owner");
+        WebhookPayload.Repository repository = new WebhookPayload.Repository();
+        repository.setName("repo");
+        repository.setOwner(owner);
+        WebhookPayload.Head head = new WebhookPayload.Head();
+        head.setRef("feature");
+        WebhookPayload.PullRequest pullRequest = new WebhookPayload.PullRequest();
+        pullRequest.setNumber(1L);
+        pullRequest.setTitle("Update example");
+        pullRequest.setHead(head);
+        payload = new WebhookPayload();
+        payload.setRepository(repository);
+        payload.setPullRequest(pullRequest);
         config = new AgentConfigProperties();
         config.getBudget().setMaxRounds(3);
         ToolCatalog catalog = new ToolCatalog(config);

@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.PrWorkflowOrchestrator;

@@ -6,7 +6,7 @@ import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowToolSurface;
 import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;

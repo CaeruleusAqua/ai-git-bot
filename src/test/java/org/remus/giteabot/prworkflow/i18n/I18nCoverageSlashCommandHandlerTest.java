@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.RepositoryApiClientFactory;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.PrWorkflowOrchestrator;
 import org.remus.giteabot.prworkflow.config.WorkflowConfiguration;

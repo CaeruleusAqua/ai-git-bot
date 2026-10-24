@@ -9,7 +9,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.springframework.http.ResponseEntity;
 
 import java.util.HashMap;

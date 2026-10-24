@@ -2,7 +2,7 @@ package org.remus.giteabot.prworkflow.agentreview;
 
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflow;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;

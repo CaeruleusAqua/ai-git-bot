@@ -7,7 +7,7 @@ import org.mockito.ArgumentCaptor;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;

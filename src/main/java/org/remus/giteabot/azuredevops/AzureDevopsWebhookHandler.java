@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotWebhookService;
 import org.remus.giteabot.admin.RepositoryApiClientFactory;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;

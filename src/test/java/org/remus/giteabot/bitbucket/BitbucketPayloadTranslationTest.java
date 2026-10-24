@@ -1,7 +1,7 @@
 package org.remus.giteabot.bitbucket;
 
 import org.junit.jupiter.api.Test;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.HashMap;

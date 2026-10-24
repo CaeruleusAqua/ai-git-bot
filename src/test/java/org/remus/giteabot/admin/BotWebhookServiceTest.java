@@ -19,7 +19,7 @@ import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.config.PromptService;
 import org.remus.giteabot.config.ReviewChunkingProperties;
 import org.remus.giteabot.config.ReviewConfigProperties;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.repository.Reactions;
