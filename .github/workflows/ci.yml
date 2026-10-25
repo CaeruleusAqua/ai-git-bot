@@ -7,7 +7,7 @@ on:
       - develop
   push:
     branches:
-      - main
+      - develop
     paths-ignore:
       - 'doc/**'
 

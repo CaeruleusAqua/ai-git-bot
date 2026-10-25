@@ -5,6 +5,13 @@ on:
     branches:
       - main
       - develop
+    paths:
+      - 'src/main/resources/db/migration/**'
+  push:
+    branches:
+      - develop
+    paths-ignore:
+      - 'doc/**'
 
 permissions:
   contents: read
