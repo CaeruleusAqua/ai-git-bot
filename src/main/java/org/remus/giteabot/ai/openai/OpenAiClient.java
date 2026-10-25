@@ -264,9 +264,6 @@ public class OpenAiClient extends AbstractAiClient {
                 .tools(tools)
                 .build();
 
-        log.info("OpenAI {} request: model={}, flavor={}, chat_template_kwargs={}",
-                context, model, flavor.getId(), chatTemplateKwargs);
-
         OpenAiResponse response = executeRequest(request);
 
         return extractText(request, response, context);

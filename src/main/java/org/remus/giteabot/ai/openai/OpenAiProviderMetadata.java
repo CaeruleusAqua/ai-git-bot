@@ -82,7 +82,7 @@ public class OpenAiProviderMetadata implements AiProviderMetadata {
                 : rawFlavor.trim().toLowerCase(Locale.ROOT);
         OpenAiFlavor flavor = OpenAiFlavor.fromId(storedFlavor);
         // A blank or unknown value degrades to 'standard' silently; only a
-        // non-blank value that we do not recognise is worth flagging.
+        // non-blank value that we do not recognize is worth flagging.
         if (storedFlavor != null && !OpenAiFlavor.STANDARD.getId().equals(storedFlavor)
                 && flavor == OpenAiFlavor.STANDARD) {
             log.warn("Unknown model flavor '{}' for OpenAI integration '{}'; using 'standard'",

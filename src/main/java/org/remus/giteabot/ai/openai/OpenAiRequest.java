@@ -42,8 +42,7 @@ public class OpenAiRequest {
      * {@code --default-chat-template-kwargs} for this one request — that is how
      * a review bot asks for {@code enable_thinking=false} (or a lower
      * {@code reasoning_effort}) on an endpoint another client uses as a
-     * full-effort code agent. Populated only by a flavor that sets them; see
-     * {@link OpenAiFlavor}.
+     * full-effort code agent.
      */
     @JsonProperty("chat_template_kwargs")
     private Map<String, Object> chatTemplateKwargs;
