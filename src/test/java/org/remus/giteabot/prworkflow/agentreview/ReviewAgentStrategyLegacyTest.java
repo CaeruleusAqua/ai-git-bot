@@ -110,7 +110,7 @@ class ReviewAgentStrategyLegacyTest {
         server.expect(requestTo("https://provider.example/v1/chat/completions"))
                 .andExpect(jsonPath("$.tools").doesNotExist())
                 .andRespond(withSuccess(response.toString(), MediaType.APPLICATION_JSON));
-        AiClient client = new OpenAiClient(http.build(), "test-model", 32, false, OpenAiFlavor.STANDARD);
+        AiClient client = new OpenAiClient(http.build(), "test-model", 32, false, OpenAiFlavor.STANDARD, null);
         AiResponseParser parser = mock(AiResponseParser.class);
         ReviewAgentStrategy.FileFetcher fetcher = mock(ReviewAgentStrategy.FileFetcher.class);
         ReviewAgentStrategy strategy = new ReviewAgentStrategy("system", toolRouter,

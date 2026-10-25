@@ -6,6 +6,7 @@ import org.remus.giteabot.admin.AiIntegration;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiProviderMetadata;
 import org.remus.giteabot.ai.ModelFlavor;
+import org.remus.giteabot.config.OpenAiProperties;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -30,6 +31,8 @@ public class OpenAiProviderMetadata implements AiProviderMetadata {
     );
 
     private final ObjectProvider<RestClient.Builder> restClientBuilder;
+    /** Provider-scoped request settings; {@code chat_template_kwargs} lives there. */
+    private final OpenAiProperties openAiProperties;
 
     @Override
     public String getProviderType() {
@@ -90,7 +93,8 @@ public class OpenAiProviderMetadata implements AiProviderMetadata {
                 integration.getModel(),
                 integration.getMaxTokens(),
                 !integration.isUseLegacyToolCalling(),
-                flavor
+                flavor,
+                openAiProperties.getParsedChatTemplateKwargs()
         );
     }
 }

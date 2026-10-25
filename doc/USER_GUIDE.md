@@ -192,6 +192,8 @@ Troubleshooting:
 - **Empty or malformed responses**: The provider may not return the expected OpenAI chat completions response format for that model.
 - **Context length or token errors**: Reduce **Max Diff Chars/Chunk**, **Max Diff Chunks**, or **Max Tokens**, or choose a model with a larger context window.
 - **400 "Function tools with reasoning_effort are not supported"**: Your gateway injects a default `reasoning_effort`, which the selected model rejects when function tools are used on `/v1/chat/completions`. In the integration, set **Model Flavor** to `No reasoning effort` (sends `reasoning_effort: "none"`).
+- **400 "Unexpected reasoning effort ..."**: the model's chat template inside vLLM validates the value, and each template has its own vocabulary (Qwen templates accept `xhigh`, `medium`, `low`; others take a number or only a boolean). Correct `OPENAI_CHAT_TEMPLATE_KWARGS` (property `openai.chat-template-kwargs`) to a value the template lists, or clear it to use the server default.
+- **Reviews spend more tokens than expected on a self-hosted model**: a vLLM started with `--default-chat-template-kwargs '{"enable_thinking":true,...}'` applies that effort to every client. Set `OPENAI_CHAT_TEMPLATE_KWARGS` for the bot (e.g. `{"enable_thinking": true, "reasoning_effort": "low"}` or `{"enable_thinking": false}`); the request then carries `chat_template_kwargs` and overrides the server default for this bot only, because `--default-chat-template-kwargs` has no per-request opt-out of its own.
 
 #### Ollama
 - No API key required
