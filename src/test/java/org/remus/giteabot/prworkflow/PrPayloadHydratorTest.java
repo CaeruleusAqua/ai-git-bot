@@ -1,7 +1,7 @@
 package org.remus.giteabot.prworkflow;
 
 import org.junit.jupiter.api.Test;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.repository.model.PullRequestState;
