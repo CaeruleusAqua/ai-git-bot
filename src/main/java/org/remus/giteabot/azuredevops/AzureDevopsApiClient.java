@@ -6,7 +6,11 @@ import org.remus.giteabot.azuredevops.model.AzureDevopsReview;
 import org.remus.giteabot.azuredevops.model.AzureDevopsReviewComment;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.springframework.core.ParameterizedTypeReference;
@@ -16,10 +20,10 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -609,8 +613,8 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo,
-                                                            Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo,
+                                                          Long pullNumber) {
         AzureDevopsAddress addr = AzureDevopsAddress.parse(owner, repo);
         Scope scope = repositoryScope(addr);
         return call(() -> {
@@ -627,48 +631,66 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
     }
 
     /**
-     * Translates Azure DevOps commit entries into the provider-agnostic shape the only
-     * consumer expects: a {@code sha} and a {@code message}.
-     * <p>
-     * Azure DevOps sends neither. Its commits carry {@code commitId} and {@code comment},
-     * while {@code CommitMessagesEnricher} reads {@code message} (or {@code commit.message})
-     * and {@code sha} (or {@code id}) — so without this translation every commit message
-     * is dropped and the enricher contributes a "Commit messages:" heading with nothing
-     * under it. The native fields are retained alongside the normalized ones, as
-     * {@link #normalizeTreeEntries} does.
+     * Translates Azure DevOps commit entries into {@link PullRequestCommit}s: Azure DevOps
+     * carries the SHA as {@code commitId} and the message as {@code comment}.
      */
-    private static List<Map<String, Object>> normalizeCommitEntries(List<?> commits) {
-        List<Map<String, Object>> normalized = new ArrayList<>();
+    private static List<PullRequestCommit> normalizeCommitEntries(List<?> commits) {
+        List<PullRequestCommit> normalized = new ArrayList<>();
         for (Object entry : commits) {
             if (!(entry instanceof Map<?, ?> commit)) {
                 continue;
             }
-            Map<String, Object> mapped = new LinkedHashMap<>();
-            commit.forEach((key, value) -> mapped.put(String.valueOf(key), value));
-            if (commit.get("commitId") instanceof String commitId) {
-                mapped.put("sha", commitId);
-            }
-            if (commit.get("comment") instanceof String comment) {
-                mapped.put("message", comment);
-            }
-            normalized.add(mapped);
+            normalized.add(new PullRequestCommit(stringOrNull(commit.get("commitId")),
+                    stringOrNull(commit.get("comment"))));
         }
         return normalized;
     }
 
     @Override
-    public Map<String, Object> getPullRequestDetails(String owner, String repo,
-                                                      Long pullNumber) {
+    public Optional<PullRequestDetails> getPullRequestDetails(String owner, String repo,
+                                                               Long pullNumber) {
         AzureDevopsAddress addr = AzureDevopsAddress.parse(owner, repo);
         Scope scope = repositoryScope(addr);
-        return call(() -> restClient.get()
+        Map<String, Object> pr = call(() -> restClient.get()
                 .uri(builder -> builder
                         .path(scope.path() + "/pullRequests/{prId}")
                         .queryParam("api-version", API_VERSION)
                         .build(vars(scope, pullNumber)))
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {}),
-                Map.of(), "fetch PR #{} details in {}", pullNumber, repo);
+                .body(new ParameterizedTypeReference<Map<String, Object>>() {}),
+                null, "fetch PR #{} details in {}", pullNumber, repo);
+        return Optional.ofNullable(pr).map(AzureDevopsApiClient::toPullRequestDetails);
+    }
+
+    /**
+     * Maps an Azure DevOps pull request onto {@link PullRequestDetails}. Azure DevOps
+     * reports the lifecycle as {@code status} ({@code active}, {@code completed},
+     * {@code abandoned}) and the head / base as {@code sourceRefName} /
+     * {@code targetRefName} plus {@code lastMergeSourceCommit} / {@code lastMergeTargetCommit}.
+     */
+    private static PullRequestDetails toPullRequestDetails(Map<String, Object> pr) {
+        PullRequestState state = switch (String.valueOf(pr.get("status"))) {
+            case "active" -> PullRequestState.OPEN;
+            case "completed" -> PullRequestState.MERGED;
+            case "abandoned" -> PullRequestState.CLOSED_WITHOUT_MERGE;
+            default -> null;
+        };
+        return new PullRequestDetails(
+                stringOrNull(pr.get("title")),
+                stringOrNull(pr.get("description")),
+                state,
+                stringOrNull(pr.get("sourceRefName")),
+                commitIdOf(pr.get("lastMergeSourceCommit")),
+                stringOrNull(pr.get("targetRefName")),
+                commitIdOf(pr.get("lastMergeTargetCommit")));
+    }
+
+    private static String commitIdOf(Object commit) {
+        return commit instanceof Map<?, ?> map ? stringOrNull(map.get("commitId")) : null;
+    }
+
+    private static String stringOrNull(Object value) {
+        return value instanceof String string ? string : null;
     }
 
     // ---- Repository operations ----
@@ -695,7 +717,7 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         AzureDevopsAddress addr = AzureDevopsAddress.parse(owner, repo);
         Scope scope = repositoryScope(addr);
         return call(() -> {
@@ -716,20 +738,12 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
     }
 
     /**
-     * Translates Azure DevOps item entries into the provider-agnostic shape every tree
-     * consumer expects: a {@code path} without a leading slash and a {@code type} of
-     * {@code "blob"} or {@code "tree"}.
-     * <p>
-     * Azure DevOps sends neither. Its items carry {@code gitObjectType} / {@code isFolder}
-     * and an absolute {@code path}, and consumers
-     * ({@code RepositoryTreeEnricher}, {@code AgentPromptBuilder#buildTreeContext}) read
-     * {@code entry.getOrDefault("type", "blob")} — so without this translation every
-     * directory is listed as a file and every path is prefixed with {@code '/'}, unlike
-     * the four other providers. The native fields are retained alongside the normalized
-     * ones so nothing is lost.
+     * Translates Azure DevOps item entries into {@link RepositoryTreeEntry}s. Azure DevOps
+     * reports an absolute {@code path} (stripped of its leading slash here, like the other
+     * providers) and marks directories with {@code isFolder} / {@code gitObjectType}.
      */
-    private static List<Map<String, Object>> normalizeTreeEntries(List<?> items) {
-        List<Map<String, Object>> normalized = new ArrayList<>();
+    private static List<RepositoryTreeEntry> normalizeTreeEntries(List<?> items) {
+        List<RepositoryTreeEntry> normalized = new ArrayList<>();
         for (Object entry : items) {
             if (!(entry instanceof Map<?, ?> item)
                     || !(item.get("path") instanceof String rawPath)) {
@@ -742,11 +756,9 @@ public class AzureDevopsApiClient implements RepositoryApiClient {
             }
             boolean folder = Boolean.TRUE.equals(item.get("isFolder"))
                     || "tree".equals(item.get("gitObjectType"));
-            Map<String, Object> mapped = new LinkedHashMap<>();
-            item.forEach((key, value) -> mapped.put(String.valueOf(key), value));
-            mapped.put("path", path);
-            mapped.put("type", folder ? "tree" : "blob");
-            normalized.add(mapped);
+            normalized.add(new RepositoryTreeEntry(path, folder
+                    ? RepositoryTreeEntry.Type.DIRECTORY
+                    : RepositoryTreeEntry.Type.FILE));
         }
         return normalized;
     }

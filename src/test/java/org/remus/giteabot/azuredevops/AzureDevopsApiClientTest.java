@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.config.ReviewConfigProperties;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.remus.giteabot.review.enrichment.CommitMessagesEnricher;
@@ -15,7 +17,6 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -357,9 +358,7 @@ class AzureDevopsApiClientTest {
 
     @Test
     void getRepositoryTree_normalizesPathAndTypeForConsumers() {
-        // RepositoryTreeEnricher and AgentPromptBuilder#buildTreeContext read
-        // entry.getOrDefault("type", "blob") and "path". Azure DevOps sends neither:
-        // its items carry gitObjectType/isFolder and an absolute path.
+        // Azure DevOps items carry gitObjectType/isFolder and an absolute path.
         RestClient.Builder builder = RestClient.builder().baseUrl("https://dev.azure.com");
         MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
         server.expect(method(HttpMethod.GET))
@@ -370,17 +369,13 @@ class AzureDevopsApiClientTest {
                           {"path":"/src/Foo.java","gitObjectType":"blob","objectId":"abc"}
                         ]}""", MediaType.APPLICATION_JSON));
 
-        List<java.util.Map<String, Object>> tree = new AzureDevopsApiClient(builder.build(), creds(), null)
+        List<RepositoryTreeEntry> tree = new AzureDevopsApiClient(builder.build(), creds(), null)
                 .getRepositoryTree("contoso", "MyProject/my-service", "main");
 
         // The scopePath root is dropped; the rest keep their order.
-        assertEquals(2, tree.size());
-        assertEquals("src", tree.get(0).get("path"));
-        assertEquals("tree", tree.get(0).get("type"));
-        assertEquals("src/Foo.java", tree.get(1).get("path"));
-        assertEquals("blob", tree.get(1).get("type"));
-        // Native fields survive alongside the normalized ones.
-        assertEquals("abc", tree.get(1).get("objectId"));
+        assertEquals(List.of(
+                new RepositoryTreeEntry("src", RepositoryTreeEntry.Type.DIRECTORY),
+                new RepositoryTreeEntry("src/Foo.java", RepositoryTreeEntry.Type.FILE)), tree);
         server.verify();
     }
 
@@ -515,15 +510,10 @@ class AzureDevopsApiClientTest {
                            "author":{"name":"Dev"}}
                         ]}""", MediaType.APPLICATION_JSON));
 
-        List<Map<String, Object>> commits = new AzureDevopsApiClient(builder.build(), creds(), null)
+        List<PullRequestCommit> commits = new AzureDevopsApiClient(builder.build(), creds(), null)
                 .getPullRequestCommits("contoso", "MyProject/my-service", 42L);
 
-        assertEquals(1, commits.size());
-        assertEquals("abc1234def5678", commits.get(0).get("sha"));
-        assertEquals("Fix the thing", commits.get(0).get("message"));
-        // The native Azure DevOps fields survive alongside the normalized ones.
-        assertEquals("abc1234def5678", commits.get(0).get("commitId"));
-        assertEquals("Fix the thing", commits.get(0).get("comment"));
+        assertEquals(List.of(new PullRequestCommit("abc1234def5678", "Fix the thing")), commits);
         server.verify();
     }
 
