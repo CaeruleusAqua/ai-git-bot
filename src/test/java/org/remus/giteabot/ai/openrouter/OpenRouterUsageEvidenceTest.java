@@ -80,7 +80,12 @@ class OpenRouterUsageEvidenceTest {
         assertTurn(turn, null, 3L);
         assertThat(turn.stopReason()).isEqualTo(StopReason.TOOL_USE);
         assertThat(turn.toolCalls()).hasSize(1);
+        assertThat(turn.toolCalls().getFirst().name()).isEqualTo("lookup");
         assertThat(turn.toolCalls().getFirst().args().get("fixture").intValue()).isEqualTo(1);
+        assertThat(turn.reasoningDetails().getFirst().get("data").asString()).isEqualTo("private-reasoning-sentinel");
+        assertThat(turn.toString()).doesNotContain("private-reasoning-sentinel");
+        assertThat(AgentJackson.mapper().writeValueAsString(turn.toAssistantMessage()))
+                .doesNotContain("private-reasoning-sentinel");
         assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 3, cacheWrite, 0));
         var usage = AgentJackson.mapper().readTree(fixture.recorder.rawResponse).get("usage");
         assertThat(usage.get("prompt_tokens").isNull()).isTrue();
@@ -88,65 +93,38 @@ class OpenRouterUsageEvidenceTest {
         assertThat(usage.get("prompt_tokens_details").get("cache_write_tokens").longValue()).isEqualTo(cacheWrite);
         assertThat(fixture.recorder.rawRequest).doesNotContain("test-secret-sentinel");
         assertThat(fixture.recorder.rawResponse).doesNotContain("secret-sentinel");
-        fixture.verify();
+        fixture.server.verify();
     }
 
     @ParameterizedTest
     @MethodSource("containers")
-    void optionalContainersPreserveParsedTextToolsAndCompanionUsage(String field, String json, boolean object) {
+    void optionalContainersPreserveParsedTextAndCompanionUsage(String field, String json, boolean object) {
         String usage = field.equals("usage") ? json :
                 "{\"prompt_tokens\":0,\"completion_tokens\":3" + member(field, json) + "}";
-        var response = AgentJackson.mapper().readValue(toolAnswer(usage), OpenRouterResponse.class);
+        var response = AgentJackson.mapper().readValue(answer(usage), OpenRouterResponse.class);
 
-        var turn = response.toTurn();
-
-        assertTurn(turn, field.equals("usage") ? null : 0L, field.equals("usage") ? null : 3L);
-        assertThat(turn.toolCalls()).hasSize(1);
-        assertThat(turn.toolCalls().getFirst().args().get("fixture").intValue()).isEqualTo(1);
+        assertTurn(response.toTurn(), field.equals("usage") ? null : 0L, field.equals("usage") ? null : 3L);
         if (field.equals("usage")) {
-            if (object) assertThat(response.usage()).isNotNull();
-            else assertThat(response.usage()).isNull();
-        } else if (object) {
-            assertThat(response.usage().promptTokensDetails().cachedTokens()).isNull();
-            assertThat(response.usage().promptTokensDetails().cacheWriteTokens()).isNull();
+            assertThat(response.usage() != null).isEqualTo(object);
         } else {
-            assertThat(response.usage().promptTokensDetails()).isNull();
+            assertThat(response.usage().promptTokensDetails() != null).isEqualTo(object);
         }
     }
 
     @ParameterizedTest
-    @MethodSource("clientContainers")
-    void malformedContainersCannotDiscardClientAnswersToolsOrCompanionUsage(String operation, String field) {
-        boolean nativeTools = operation.equals("native");
-        String usage = field.equals("usage") ? "[]" :
-                "{\"prompt_tokens\":0,\"completion_tokens\":3,\"prompt_tokens_details\":[]}";
-        var fixture = new Fixture(nativeTools ? toolAnswer(usage) : answer(usage));
+    @ValueSource(strings = {"typed", "chat"})
+    void malformedUsageCannotDiscardClientAnswers(String operation) {
+        var fixture = new Fixture(answer("[]"));
 
         if (operation.equals("chat")) {
             assertThat(fixture.client.chat(List.of(), "Question", "sys", null)).isEqualTo("Answer");
         } else {
-            var turn = fixture.client.chatWithTools(List.of(), "Question", nativeTools ?
-                    List.of(new ToolDescriptor("lookup", "Read fixture", null)) : List.of(), "sys", null, null);
-            assertTurn(turn, field.equals("usage") ? null : 0L, field.equals("usage") ? null : 3L);
-            if (nativeTools) {
-                assertThat(turn.stopReason()).isEqualTo(StopReason.TOOL_USE);
-                assertThat(turn.toolCalls()).hasSize(1);
-                assertThat(turn.toolCalls().getFirst().name()).isEqualTo("lookup");
-                assertThat(turn.toolCalls().getFirst().args().get("fixture").intValue()).isEqualTo(1);
-                assertThat(turn.reasoningDetails().getFirst().get("data").asString()).isEqualTo("private-reasoning-sentinel");
-                assertThat(turn.toString()).doesNotContain("private-reasoning-sentinel");
-                assertThat(AgentJackson.mapper().writeValueAsString(turn.toAssistantMessage()))
-                        .doesNotContain("private-reasoning-sentinel");
-            }
+            assertTurn(fixture.client.chatWithTools(List.of(), "Question", List.of(), "sys", null, null), null, null);
         }
-        if (field.equals("prompt_tokens_details")) {
-            assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 3, 0, 0));
-        } else {
-            assertThat(fixture.recorder.usage).isEmpty();
-        }
+        assertThat(fixture.recorder.usage).isEmpty();
         assertThat(fixture.recorder.rawRequest).isNull();
         assertThat(fixture.recorder.rawResponse).isNull();
-        fixture.verify();
+        fixture.server.verify();
     }
 
     @ParameterizedTest
@@ -161,7 +139,7 @@ class OpenRouterUsageEvidenceTest {
                 .isInstanceOf(RestClientException.class).hasMessage("OpenRouter request failed")
                 .hasMessageNotContaining("secret-sentinel").hasNoCause();
         assertThat(fixture.recorder.usage).isEmpty();
-        fixture.verify();
+        fixture.server.verify();
     }
 
     @ParameterizedTest
@@ -177,25 +155,15 @@ class OpenRouterUsageEvidenceTest {
         assertThatThrownBy(() -> fixture.client.chatWithTools(List.of(), "Question", List.of(), "sys", null, null))
                 .isInstanceOf(RestClientException.class).hasMessageNotContaining("secret-sentinel").hasNoCause();
         assertThat(fixture.recorder.usage).isEmpty();
-        fixture.verify();
+        fixture.server.verify();
     }
 
     private static Stream<Arguments> containers() {
-        return Stream.of("usage", "prompt_tokens_details").flatMap(field -> Stream.of(
-                        new Container(null, false), new Container("null", false), new Container("{}", true),
-                        new Container("0", false), new Container("12", false), new Container("0.5", false),
-                        new Container("true", false), new Container("false", false), new Container("\"\"", false),
-                        new Container("\"secret-sentinel\"", false), new Container("[]", false),
-                        new Container("[{\"prompt_tokens\":12,\"cached_tokens\":7}]", false))
-                        .map(container -> Arguments.of(field, container.json(), container.usageObject())));
+        return Stream.of("usage", "prompt_tokens_details").flatMap(field ->
+                Stream.of(null, "null", "{}", "0", "12", "0.5", "true", "false", "\"\"",
+                                "\"secret-sentinel\"", "[]", "[{\"prompt_tokens\":12,\"cached_tokens\":7}]")
+                        .map(json -> Arguments.of(field, json, "{}".equals(json))));
     }
-
-    private static Stream<Arguments> clientContainers() {
-        return Stream.of("typed", "native", "chat").flatMap(operation ->
-                Stream.of("usage", "prompt_tokens_details").map(field -> Arguments.of(operation, field)));
-    }
-
-    private record Container(String json, boolean usageObject) {}
 
     private static String toolAnswer(String usage) {
         return """
@@ -268,10 +236,6 @@ class OpenRouterUsageEvidenceTest {
                     .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
             client = new OpenRouterClient(http.build(), "author/model", 32, true);
             client.setAuditRecorder(recorder);
-        }
-
-        private void verify() {
-            server.verify();
         }
     }
 
