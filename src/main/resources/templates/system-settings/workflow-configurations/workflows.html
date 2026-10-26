@@ -119,6 +119,8 @@
                                    type="number" class="form-control"
                                    th:id="'param-' + ${row.workflowKey} + '-' + ${field.name}"
                                    th:name="|params.${row.workflowKey}.${field.name}|"
+                                   th:min="${field.minimum}"
+                                   th:max="${field.maximum}"
                                    th:value="${currentValue}"/>
 
                             <!-- SECRET -->

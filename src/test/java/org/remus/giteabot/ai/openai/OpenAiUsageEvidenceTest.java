@@ -222,7 +222,7 @@ class OpenAiUsageEvidenceTest {
                     .andExpect(jsonPath("$.provider").doesNotExist())
                     .andExpect(jsonPath("$.plugins").doesNotExist())
                     .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
-            client = new OpenAiClient(http.build(), "model", 32, true, OpenAiFlavor.STANDARD);
+            client = new OpenAiClient(http.build(), "model", 32, true, OpenAiFlavor.STANDARD, null);
             client.setAuditRecorder(recorder);
         }
     }
