@@ -20,16 +20,19 @@ An explicit integer zero remains reported independently for input and output.
 
 ## Verification
 
-Public `chatWithTools` (native and text-only) and `chat` HTTP fixtures cover missing,
-null, zero, positive, negative, fractional, boolean, string, object, array and
-overflow values independently for each counter, plus malformed aggregate metadata.
-Every new fixture verifies exactly one HTTP request, existing request dialect and
-auth sentinels. Cache audit payloads distinguish null from zero. OpenRouter error
-redaction and transient reasoning are retained. Regression runs went red before
-the corresponding fixes. `mvn -o '-Dtest=OpenAi*Test,OpenRouter*Test' test` passes
-498 tests (0 failures/errors/skips), including 324 new HTTP cases/requests, offline
-in the existing Docker image/read-only cache with one CPU and 2 GiB. Full-suite,
-PostgreSQL and live-provider runs belong to the integrating session.
+Direct `AgentJackson.mapper()` tests cover missing, null, zero, positive, negative,
+fractional, boolean, string, object, array and overflow values independently for
+each counter, plus malformed aggregate metadata. OpenRouter's `toTurn()` is tested
+directly for counter presence and response preservation.
+
+Small mock-HTTP regression sets cover public `chatWithTools` (native and text-only)
+and `chat`, preserving text, tools and companion usage. Opt-in cache audit payloads
+distinguish null from zero and retain the native Long range. OpenRouter error
+redaction and transient reasoning remain covered; malformed JSON and tools still
+fail. The mock server verifies one expected request without a separate counter.
+
+Run the focused suite with `mvn -o '-Dtest=OpenAi*Test,OpenRouter*Test' test`.
+Full-suite, PostgreSQL and live-provider runs belong to the integrating session.
 
 ## Not accounting qualification
 

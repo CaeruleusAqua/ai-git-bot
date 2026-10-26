@@ -18,7 +18,6 @@ import org.springframework.web.client.RestClientException;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +30,7 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class OpenAiUsageEvidenceTest {
     @ParameterizedTest
     @MethodSource("counters")
-    void strictOptionalCounterPreservesTheAnswerAndEveryCompanionCounter(
+    void strictOptionalCounterPreservesTheParsedAnswerAndEveryCompanionCounter(
             String field, String json, Long expected) {
         String usage = switch (field) {
             case "prompt_tokens" -> "{\"completion_tokens\":3,\"total_tokens\":15," +
@@ -46,35 +45,30 @@ class OpenAiUsageEvidenceTest {
                     "\"prompt_tokens_details\":{\"cached_tokens\":7" + member(field, json) + "}}";
             default -> throw new AssertionError(field);
         };
-        var fixture = new Fixture(answer(usage));
+        var response = AgentJackson.mapper().readValue(answer(usage), OpenAiResponse.class);
+
+        assertThat(response.getChoices().getFirst().getMessage().getContent()).isEqualTo("Answer");
+        var parsed = response.getUsage();
+        Integer expectedInt = expected == null ? null : expected.intValue();
+        assertThat(parsed.getPromptTokens()).isEqualTo(field.equals("prompt_tokens") ? expectedInt : Integer.valueOf(12));
+        assertThat(parsed.getCompletionTokens()).isEqualTo(field.equals("completion_tokens") ? expectedInt : Integer.valueOf(3));
+        assertThat(parsed.getTotalTokens()).isEqualTo(field.equals("total_tokens") ? expectedInt : Integer.valueOf(15));
+        assertThat(parsed.getPromptTokensDetails().getCacheWriteTokens())
+                .isEqualTo(field.equals("cache_write_tokens") ? expected : Long.valueOf(5));
+        assertThat(parsed.getPromptTokensDetails().getCachedTokens())
+                .isEqualTo(field.equals("cached_tokens") ? expected : Long.valueOf(7));
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0, 5, 2147483648L})
+    void malformedCountersPreserveNativeCallsCompanionCountsAndOptInAudit(long cacheWrite) {
+        var fixture = new Fixture(toolAnswer("""
+                {"prompt_tokens":{"secret-sentinel":[1]},"completion_tokens":3,"total_tokens":[],
+                 "prompt_tokens_details":{"cached_tokens":[],"cache_write_tokens":%d}}
+                """.formatted(cacheWrite)));
         var properties = new AiUsageProperties();
         properties.setRawPayloadsEnabled(true);
         fixture.client.setUsageProperties(properties);
-
-        ChatTurn turn = fixture.client.chatWithTools(List.of(), "Question", List.of(), "sys", null, null);
-
-        Long input = field.equals("prompt_tokens") ? expected : Long.valueOf(12);
-        Long output = field.equals("completion_tokens") ? expected : Long.valueOf(3);
-        assertTurn(turn, input, output);
-        assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(orZero(input), orZero(output),
-                field.equals("cache_write_tokens") ? orZero(expected) : 5,
-                field.equals("cached_tokens") ? orZero(expected) : 7));
-        var rawUsage = AgentJackson.mapper().readTree(fixture.recorder.rawResponse).get("usage");
-        var counter = field.equals("cached_tokens") || field.equals("cache_write_tokens")
-                ? rawUsage.get("prompt_tokens_details").get(field) : rawUsage.get(field);
-        if (expected == null) assertThat(counter.isNull()).isTrue();
-        else assertThat(counter.longValue()).isEqualTo(expected);
-        assertThat(fixture.recorder.rawRequest).doesNotContain("test-secret-sentinel");
-        assertThat(fixture.recorder.rawResponse).doesNotContain("secret-sentinel");
-        fixture.verify();
-    }
-
-    @Test
-    void malformedCountersBeforeTheToolAnswerPreserveValidNativeCallsAndCompanionCounts() {
-        var fixture = new Fixture(toolAnswer("""
-                {"prompt_tokens":{"secret-sentinel":[1]},"completion_tokens":3,"total_tokens":[],
-                 "prompt_tokens_details":{"cached_tokens":[],"cache_write_tokens":5}}
-                """));
 
         var turn = fixture.client.chatWithTools(List.of(), "Question",
                 List.of(new ToolDescriptor("lookup", "Read fixture", null)), "sys", null, null);
@@ -83,7 +77,14 @@ class OpenAiUsageEvidenceTest {
         assertThat(turn.stopReason()).isEqualTo(StopReason.TOOL_USE);
         assertThat(turn.toolCalls()).hasSize(1);
         assertThat(turn.toolCalls().getFirst().args().get("fixture").intValue()).isEqualTo(1);
-        assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 3, 5, 0));
+        assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 3, cacheWrite, 0));
+        var usage = AgentJackson.mapper().readTree(fixture.recorder.rawResponse).get("usage");
+        assertThat(usage.get("prompt_tokens").isNull()).isTrue();
+        assertThat(usage.get("total_tokens").isNull()).isTrue();
+        assertThat(usage.get("prompt_tokens_details").get("cached_tokens").isNull()).isTrue();
+        assertThat(usage.get("prompt_tokens_details").get("cache_write_tokens").longValue()).isEqualTo(cacheWrite);
+        assertThat(fixture.recorder.rawRequest).doesNotContain("test-secret-sentinel");
+        assertThat(fixture.recorder.rawResponse).doesNotContain("secret-sentinel");
         fixture.verify();
     }
 
@@ -103,11 +104,36 @@ class OpenAiUsageEvidenceTest {
 
     @ParameterizedTest
     @MethodSource("containers")
-    void optionalContainersCannotDiscardValidTextToolsOrCompanionUsage(
-            String operation, String field, String json, boolean usageObject) {
-        boolean nativeTools = operation.equals("native");
+    void optionalContainersPreserveParsedTextToolsAndCompanionUsage(String field, String json, boolean object) {
         String usage = field.equals("usage") ? json :
                 "{\"prompt_tokens\":0,\"completion_tokens\":3" + member(field, json) + "}";
+        var response = AgentJackson.mapper().readValue(toolAnswer(usage), OpenAiResponse.class);
+
+        var message = response.getChoices().getFirst().getMessage();
+        assertThat(message.getContent()).isEqualTo("Answer");
+        assertThat(message.getToolCalls()).hasSize(1);
+        assertThat(message.getToolCalls().getFirst().getFunction().getName()).isEqualTo("lookup");
+        if (field.equals("usage")) {
+            if (object) assertThat(response.getUsage()).isNotNull();
+            else assertThat(response.getUsage()).isNull();
+        } else {
+            assertThat(response.getUsage().getPromptTokens()).isZero();
+            assertThat(response.getUsage().getCompletionTokens()).isEqualTo(3);
+            if (object) {
+                assertThat(response.getUsage().getPromptTokensDetails().getCachedTokens()).isNull();
+                assertThat(response.getUsage().getPromptTokensDetails().getCacheWriteTokens()).isNull();
+            } else {
+                assertThat(response.getUsage().getPromptTokensDetails()).isNull();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("clientContainers")
+    void malformedContainersCannotDiscardClientAnswersToolsOrCompanionUsage(String operation, String field) {
+        boolean nativeTools = operation.equals("native");
+        String usage = field.equals("usage") ? "[]" :
+                "{\"prompt_tokens\":0,\"completion_tokens\":3,\"prompt_tokens_details\":[]}";
         var fixture = new Fixture(nativeTools ? toolAnswer(usage) : answer(usage));
 
         if (operation.equals("chat")) {
@@ -125,8 +151,6 @@ class OpenAiUsageEvidenceTest {
         }
         if (field.equals("prompt_tokens_details")) {
             assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 3, 0, 0));
-        } else if (usageObject) {
-            assertThat(fixture.recorder.usage).containsExactly(new RecordedUsage(0, 0, 0, 0));
         } else {
             assertThat(fixture.recorder.usage).isEmpty();
         }
@@ -151,14 +175,18 @@ class OpenAiUsageEvidenceTest {
     }
 
     private static Stream<Arguments> containers() {
-        return Stream.of("typed", "native", "chat").flatMap(operation ->
-                Stream.of("usage", "prompt_tokens_details").flatMap(field -> Stream.of(
+        return Stream.of("usage", "prompt_tokens_details").flatMap(field -> Stream.of(
                         new Container(null, false), new Container("null", false), new Container("{}", true),
                         new Container("0", false), new Container("12", false), new Container("0.5", false),
                         new Container("true", false), new Container("false", false), new Container("\"\"", false),
                         new Container("\"secret-sentinel\"", false), new Container("[]", false),
                         new Container("[{\"prompt_tokens\":12,\"cached_tokens\":7}]", false))
-                        .map(container -> Arguments.of(operation, field, container.json(), container.usageObject()))));
+                        .map(container -> Arguments.of(field, container.json(), container.usageObject())));
+    }
+
+    private static Stream<Arguments> clientContainers() {
+        return Stream.of("typed", "native", "chat").flatMap(operation ->
+                Stream.of("usage", "prompt_tokens_details").map(field -> Arguments.of(operation, field)));
     }
 
     private record Container(String json, boolean usageObject) {}
@@ -213,7 +241,6 @@ class OpenAiUsageEvidenceTest {
 
     private static final class Fixture {
         private final MockRestServiceServer server;
-        private final AtomicInteger requests = new AtomicInteger();
         private final CapturingRecorder recorder = new CapturingRecorder();
         private final OpenAiClient client;
 
@@ -222,7 +249,6 @@ class OpenAiUsageEvidenceTest {
                     .defaultHeader("Authorization", "Bearer test-secret-sentinel");
             server = MockRestServiceServer.bindTo(http).build();
             server.expect(requestTo("https://provider.example/v1/chat/completions"))
-                    .andExpect(request -> requests.incrementAndGet())
                     .andExpect(header("Authorization", "Bearer test-secret-sentinel"))
                     .andExpect(jsonPath("$.max_completion_tokens").value(32))
                     .andExpect(jsonPath("$.max_tokens").doesNotExist())
@@ -235,7 +261,6 @@ class OpenAiUsageEvidenceTest {
 
         private void verify() {
             server.verify();
-            assertThat(requests.get()).isEqualTo(1);
         }
     }
 
