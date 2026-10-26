@@ -201,6 +201,12 @@ default; requires a Claude 5.x model (`claude-fable-5`, `claude-opus-5`,
 | `ANTHROPIC_EXTENDED_THINKING_ENABLED` | `false` | Set to `true` to enable adaptive extended thinking for the Anthropic provider. |
 | `ANTHROPIC_EXTENDED_THINKING_EFFORT` | `high` | How often and how deeply the model thinks: `low`, `medium`, `high`, `xhigh`, or `max`. Higher efforts need larger max tokens. |
 
+### OpenAI-compatible request switches (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_CHAT_TEMPLATE_KWARGS` |  | JSON object forwarded verbatim as `chat_template_kwargs` on every request of the **openai** provider (vLLM, llama.cpp's server, gateways). The server hands it to the model's chat template, so it overrides that server's own `--default-chat-template-kwargs` for this bot only. Keys and value types belong to the served model's template, e.g. `{"enable_thinking": true, "reasoning_effort": "low"}` (Qwen-style string effort), `{"reasoning_effort": 2}` (numeric effort) or `{"enable_thinking": false}`. Blank sends nothing and keeps the server default; malformed JSON fails at startup. |
+
 ### Security / Web UI Login (Optional)
 
 | Variable | Default | Description |
