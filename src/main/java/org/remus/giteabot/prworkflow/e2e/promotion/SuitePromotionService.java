@@ -3,7 +3,8 @@ package org.remus.giteabot.prworkflow.e2e.promotion;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.prworkflow.PrWorkflowRun;
@@ -72,11 +73,21 @@ public class SuitePromotionService {
     private static final String GIT_AUTHOR_EMAIL = "ai-git-bot@local";
 
     private final WorkspaceService workspaceService;
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final PrWorkflowRunRepository runRepository;
 
     public Outcome promote(Bot bot, PrWorkflowRun run, PrTestSuite suite,
                            String repoOwner, String repoName, String featureBranch) {
+        try {
+            return promoteInternal(bot, run, suite, repoOwner, repoName, featureBranch);
+        } catch (RuntimeException e) {
+            log.error("M7 promotion failed unexpectedly for {}/{}", repoOwner, repoName, e);
+            return Outcome.failure("Unexpected promotion failure: " + e.getMessage());
+        }
+    }
+
+    private Outcome promoteInternal(Bot bot, PrWorkflowRun run, PrTestSuite suite,
+                                    String repoOwner, String repoName, String featureBranch) {
         if (suite == null || suite.getCases() == null || suite.getCases().isEmpty()) {
             return Outcome.skipped("No generated test cases to promote.");
         }
@@ -90,12 +101,17 @@ public class SuitePromotionService {
 
         RepositoryApiClient client;
         try {
-            client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         } catch (RuntimeException e) {
             return Outcome.failure("Failed to obtain repository client: " + e.getMessage());
         }
 
         long prNumber = suite.getPrNumber();
+        if (mode == SuiteLifecycleMode.OFFER_AS_PR
+                && workspaceService.isAuthoritativePullRequestFromFork(
+                        client, repoOwner, repoName, featureBranch, prNumber)) {
+            return Outcome.failure("offer-as-pr is not supported for fork pull requests; no branch was pushed.");
+        }
         String baseBranch = switch (mode) {
             case PROMOTE_ON_MERGE -> client.getDefaultBranch(repoOwner, repoName);
             case OFFER_AS_PR, COMMIT_TO_PR -> featureBranch;
@@ -121,16 +137,26 @@ public class SuitePromotionService {
             case EPHEMERAL        -> throw new IllegalStateException("EPHEMERAL rejected above");
         };
 
-        WorkspaceResult ws = workspaceService.prepareWorkspace(repoOwner, repoName, baseBranch,
-                client.getCloneUrl(), client.getToken(), null);
+        WorkspaceResult ws = mode == SuiteLifecycleMode.COMMIT_TO_PR
+                ? workspaceService.preparePullRequestWorkspace(
+                        client, repoOwner, repoName, baseBranch, prNumber,
+                        PullRequestWorkspaceMode.PUSH_BACK)
+                : workspaceService.prepareWorkspace(
+                        client, repoOwner, repoName, baseBranch,
+                        mode == SuiteLifecycleMode.PROMOTE_ON_MERGE ? null : prNumber);
         if (!ws.success()) {
             return Outcome.failure("Workspace preparation failed: " + ws.error());
         }
         Path workspace = ws.workspacePath();
         try {
-            List<String> writtenPaths = writeCases(workspace, targetDir, suite.getCases());
+            final List<String> writtenPaths;
+            try {
+                writtenPaths = writeCases(workspace, targetDir, suite.getCases());
+            } catch (IOException e) {
+                return Outcome.failure("Failed to write E2E test cases: " + e.getMessage());
+            }
             if (writtenPaths.isEmpty()) {
-                return Outcome.skipped("No files written.");
+                return Outcome.failure("Failed to write E2E test cases: no files were written.");
             }
 
             boolean pushed = workspaceService.commitAndPush(workspace, workBranch,
@@ -172,14 +198,10 @@ public class SuitePromotionService {
         }
     }
 
-    private List<String> writeCases(Path workspace, String targetDir, List<PrTestCase> cases) {
+    private List<String> writeCases(Path workspace, String targetDir,
+                                    List<PrTestCase> cases) throws IOException {
         Path baseDir = workspace.resolve(targetDir);
-        try {
-            Files.createDirectories(baseDir);
-        } catch (IOException e) {
-            log.warn("Could not create target dir {}: {}", baseDir, e.getMessage());
-            return List.of();
-        }
+        Files.createDirectories(baseDir);
 
         Set<String> used = new HashSet<>();
         List<String> written = new ArrayList<>();
@@ -188,14 +210,10 @@ public class SuitePromotionService {
             String chosen = resolveConflict(baseDir, original, used);
             used.add(chosen);
             Path destination = baseDir.resolve(chosen);
-            try {
-                Files.createDirectories(destination.getParent());
-                Files.writeString(destination,
-                        tc.getContent() == null ? "" : tc.getContent());
-                written.add(targetDir + "/" + chosen);
-            } catch (IOException e) {
-                log.warn("Failed to write test case {}: {}", destination, e.getMessage());
-            }
+            Files.createDirectories(destination.getParent());
+            Files.writeString(destination,
+                    tc.getContent() == null ? "" : tc.getContent());
+            written.add(targetDir + "/" + chosen);
         }
         return written;
     }
@@ -323,4 +341,3 @@ public class SuitePromotionService {
 
     }
 }
-

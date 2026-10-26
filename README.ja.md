@@ -35,7 +35,7 @@
 | **OpenAI** (+ OpenAI 互換 API) | **GitHub** / **GitHub Enterprise** |
 | **Google AI / Gemini** | **GitLab** (gitlab.com & セルフマネージド) |
 | **Ollama** (ローカル LLM) | **Bitbucket Cloud** |
-| **llama.cpp** (ローカル GGUF モデル) | |
+| **llama.cpp** (ローカル GGUF モデル) | **Azure DevOps**（Services & Server） |
 
 ほとんどの AI コーディングツールとは異なり、AI-Git-Bot は特定の Git プラットフォームや AI プロバイダに縛られません。
 
@@ -147,6 +147,7 @@ AI-Git-Bot は開発者がすでに作業している場所に組み込まれて
 - Gitea
 - GitLab
 - Bitbucket Cloud
+- Azure DevOps
 
 1. レビューを割り当てる
 2. イシューを委任する
@@ -515,6 +516,7 @@ docker compose up --build -d
 
 * GitLab
 * Bitbucket Cloud
+* Azure DevOps
 
 ### 実験的ワークフロー
 
@@ -528,7 +530,7 @@ docker compose up --build -d
 
 ## 技術的特徴
 
-- 🔒 AES-256-GCM シークレット暗号化
+- 🔒 `APP_ENCRYPTION_KEY` 設定時の AES-256-GCM シークレット暗号化
 - 🤖 マルチプロバイダ AI サポート
 - 🏢 マルチプラットフォーム Git サポート
 - 🧠 ローカル LLM サポート
@@ -536,6 +538,7 @@ docker compose up --build -d
 - 🧪 システムテスト済みワークフロー
 - 🐳 Docker ファーストデプロイメント
 - 🌍 エンドツーエンド セルフホスト可能
+- ♻️ AI プロバイダーが過負荷（HTTP 503）を報告した際のバックオフ付き自動リトライ — 影響を受ける PR や Issue には次回試行時刻が通知されます
 
 ---
 
@@ -544,7 +547,7 @@ docker compose up --build -d
 * ⭐ 100 以上の GitHub スター
 * 🚀 15 以上のリリース
 * 🐳 Docker イメージ利用可能
-* 🌍 GitHub、Gitea、GitLab、Bitbucket のユーザー
+* 🌍 GitHub、Gitea、GitLab、Bitbucket、Azure DevOps のユーザー
 
 ## 始め方
 

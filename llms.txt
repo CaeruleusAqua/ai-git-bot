@@ -2,7 +2,7 @@
 
 > Lightweight, self-hostable AI gateway that connects Git platforms with AI providers for reviewer-triggered pull-request reviews, interactive PR conversations, AI unit-test authoring, autonomous issue implementation, technical-writing issue refinement, i18n coverage, README sync, and signed outgoing webhooks.
 
-AI-Git-Bot is a Java/Spring Boot web application for teams that want centralized, self-hosted AI automation across Gitea, GitHub, GitHub Enterprise, GitLab, and Bitbucket Cloud. It supports cloud AI providers and local LLM runtimes, stores configuration centrally, and posts results back to the Git platform as reviews, comments, issue drafts, or pull requests.
+AI-Git-Bot is a Java/Spring Boot web application for teams that want centralized, self-hosted AI automation across Gitea, GitHub, GitHub Enterprise, GitLab, Bitbucket Cloud, and Azure DevOps. It supports cloud AI providers and local LLM runtimes, stores configuration centrally, and posts results back to the Git platform as reviews, comments, issue drafts, or pull requests.
 
 Primary repository: https://github.com/tmseidel/ai-git-bot
 Docker image: https://hub.docker.com/r/tmseidel/ai-git-bot
@@ -25,11 +25,11 @@ License: MIT
 - Optional per-bot user whitelist to restrict who may trigger AI-spending interactions.
 - Built-in Prometheus metrics via `/actuator/prometheus`.
 - Signed, durable, retried outgoing webhooks for workflow-run and issue-assignment events.
-- Self-hosted deployment with Docker Compose and encrypted secrets.
+- Self-hosted deployment with Docker Compose and AES-256-GCM secret encryption when `APP_ENCRYPTION_KEY` is configured.
 
 ## Keywords
 
-ai code review, code review bot, pull request automation, AI unit tests, unit test author, white-box test generation, coding agent, issue implementation agent, technical writer agent, AI issue triage, i18n coverage, README sync, self-hosted AI, Git automation, Gitea bot, GitHub bot, GitHub Enterprise bot, GitLab bot, Bitbucket bot, Anthropic Claude, OpenAI, Google Gemini, Ollama, llama.cpp, local LLM, MCP, Model Context Protocol, Spring Boot, Java 21, Docker, PostgreSQL, Prometheus metrics, outgoing webhooks
+ai code review, code review bot, pull request automation, AI unit tests, unit test author, white-box test generation, coding agent, issue implementation agent, technical writer agent, AI issue triage, i18n coverage, README sync, self-hosted AI, Git automation, Gitea bot, GitHub bot, GitHub Enterprise bot, GitLab bot, Bitbucket bot, Azure DevOps bot, Anthropic Claude, OpenAI, Google Gemini, Ollama, llama.cpp, local LLM, MCP, Model Context Protocol, Spring Boot, Java 21, Docker, PostgreSQL, Prometheus metrics, outgoing webhooks
 
 ## Essential documentation
 
@@ -55,6 +55,7 @@ ai code review, code review bot, pull request automation, AI unit tests, unit te
 - [Context Window Management](doc/CONTEXT_WINDOW_MANAGEMENT.md): strategy for managing long agent-session contexts.
 - [Outgoing Webhooks](doc/OUTGOING_WEBHOOKS.md): signed, durable, retried event notifications to external systems.
 - [Deployment](doc/DEPLOYMENT.md): Docker Compose deployment, environment variables, and production setup.
+- [Secret References](doc/SECRET_REFERENCES.md): `${type:key}` references that keep credentials out of configuration, the `env` source and its whitelist, and how to add further secret sources.
 - [Local Development](doc/LOCAL_DEVELOPMENT.md): build, test, and project structure for contributors.
 - [Architecture](doc/ARCHITECTURE.md): components, request flows, persistence, webhook routing, and system diagrams.
 - [Security Policy](SECURITY.md): vulnerability reporting and operator security guidance.
@@ -69,14 +70,15 @@ ai code review, code review bot, pull request automation, AI unit tests, unit te
 - [Gitea Setup](doc/GITEA_SETUP.md): bot user, permissions, token, and webhook setup for Gitea.
 - [GitHub Setup](doc/GITHUB_SETUP.md): bot user, PAT permissions, and webhook setup for GitHub.
 - [GitLab Setup](doc/GITLAB_SETUP.md): bot user, token, project access, and webhook setup for GitLab.
-- [Bitbucket Setup](doc/BITBUCKET_SETUP.md): Bitbucket Cloud app password and webhook configuration.
+- [Bitbucket Setup](doc/BITBUCKET_SETUP.md): Bitbucket Cloud API token (email + token) and webhook configuration.
+- [Azure DevOps Setup](doc/AZURE_DEVOPS_SETUP.md): Personal Access Token, the organization/project/repository address format, and Service Hook configuration for Azure DevOps.
 - [Ollama](doc/OLLAMA.md): local LLM setup through Ollama.
 - [llama.cpp](doc/LLAMACPP.md): local llama.cpp setup and grammar support.
 
 ## Important source areas
 
 - `src/main/java/org/remus/giteabot/admin/`: admin UI, bots, integrations, and services.
-- `src/main/java/org/remus/giteabot/ai/`: AI provider abstraction and provider clients.
+- `src/main/java/org/remus/giteabot/ai/`: AI provider abstraction and provider clients, including automatic backoff retries of provider-overload (HTTP 503/529) responses.
 - `src/main/java/org/remus/giteabot/agent/`: agent tools, tool catalog, prompt building, and execution.
 - `src/main/java/org/remus/giteabot/issueworkflow/`: issue-assigned workflow orchestration and coding/writer implementations.
 - `src/main/java/org/remus/giteabot/prworkflow/`: PR workflow orchestration, registry, runs, and shared configuration.
@@ -87,6 +89,7 @@ ai code review, code review bot, pull request automation, AI unit tests, unit te
 - `src/main/java/org/remus/giteabot/prworkflow/readmesync/`: README sync workflow.
 - `src/main/java/org/remus/giteabot/prworkflow/i18n/`: i18n coverage workflow.
 - `src/main/java/org/remus/giteabot/prworkflow/deployment/`: deployment strategies (STATIC, WEBHOOK, MCP, CI_ACTION) and callbacks.
+- `src/main/java/org/remus/giteabot/notification/`: repository-side notifications for workflow runs (provider-overload retry notices, comment acknowledgement).
 - `src/main/java/org/remus/giteabot/repository/`: Git provider abstractions and API clients.
 - `src/main/java/org/remus/giteabot/review/`: legacy pull-request review orchestration (migrating into prworkflow).
 - `src/main/java/org/remus/giteabot/session/`: conversation/session persistence.

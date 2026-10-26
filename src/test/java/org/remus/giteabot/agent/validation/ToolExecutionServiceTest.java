@@ -23,7 +23,8 @@ class ToolExecutionServiceTest {
     void setUp() {
         AgentConfigProperties config = new AgentConfigProperties();
         service = new ToolExecutionService(config,
-                new org.remus.giteabot.agent.tools.ToolCatalog(config));
+                new org.remus.giteabot.agent.tools.ToolCatalog(config),
+                new WorkspaceService(null, 60));
     }
 
     @Test
@@ -66,6 +67,23 @@ class ToolExecutionServiceTest {
         assertThat(result.output()).contains("2 | line 2");
         assertThat(result.output()).contains("3 | line 3");
         assertThat(result.output()).doesNotContain("1 | line 1");
+    }
+
+    @Test
+    void executeContextTool_cat_treatsABlankSlotAsAnUnsuppliedLineArgument() throws IOException {
+        Path file = tempDir.resolve("src/Main.java");
+        Files.createDirectories(file.getParent());
+        Files.writeString(file, """
+                line 1
+                line 2
+                line 3
+                """);
+
+        // {"path": …, "endLine": 3} arrives with the startLine slot blank rather than shifted into it.
+        ToolResult result = service.executeContextTool(tempDir, "cat", List.of("src/Main.java", "", "3"));
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.output()).contains("1 | line 1").contains("3 | line 3");
     }
 
     @Test

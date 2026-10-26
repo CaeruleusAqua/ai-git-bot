@@ -19,6 +19,7 @@ calling a custom webhook. It works against:
 | Gitea (≥ 1.21) | Gitea Actions | same shape under `/api/v1/...` |
 | GitLab | GitLab CI | `POST /projects/{path}/trigger/pipeline` |
 | Bitbucket Cloud | Bitbucket Pipelines | `POST /2.0/repositories/{owner}/{repo}/pipelines/` |
+| Azure DevOps | Azure Pipelines | Not supported — use the `WEBHOOK`, `STATIC` or `MCP` strategy |
 
 The bot never needs a new outbound webhook endpoint, a separate secret store
 or a second auth dance — every call uses the same `GitIntegration` token the
@@ -79,7 +80,8 @@ pure failure-detector.
 
 ## Deployment-target schema
 
-`deployment_targets.config_json` (encrypted at rest):
+`deployment_targets.config_json` (encrypted at rest when
+`APP_ENCRYPTION_KEY` is configured):
 
 ```jsonc
 {
@@ -421,5 +423,4 @@ Deployment-target config:
   — stakeholder rationale (Sam the SRE).
 * [`agentic-workflows/INTERNALS.md` § M6](./agentic-workflows/INTERNALS.md)
   — implementation plan & acceptance criteria.
-
 

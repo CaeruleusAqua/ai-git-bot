@@ -3,6 +3,8 @@ package org.remus.giteabot.admin;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
+import org.remus.giteabot.repository.GitTransport;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryType;
 
@@ -18,6 +20,16 @@ public class GitIntegration {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Version
+    @Column(nullable = false)
+    private Long lockVersion;
+
+    @Column(nullable = false)
+    private boolean deletionPending;
+
+    @Column(nullable = false)
+    private boolean sshCleanupVerified;
+
     @Column(nullable = false, unique = true)
     private String name;
 
@@ -29,14 +41,42 @@ public class GitIntegration {
     private String url;
 
     /**
-     * Username for authentication (required for Bitbucket Cloud with App Passwords).
-     * For other providers, this field may be optional or unused.
+     * A string used to identify the user for the provider.
+     * For most providers, this is the username used with the API token for REST API calls and git operations.
+     * Bitbucket Cloud: the Atlassian account e-mail used with the API token for REST API calls.
      */
-    @Column
+    @Column(nullable = false)
     private String username;
 
-    @Column
+    @Column(length = 1000)
+    @ToString.Exclude
     private String token;
+
+    @Column(nullable = false, length = 16)
+    @Enumerated(EnumType.STRING)
+    private GitTransport transport = GitTransport.HTTP;
+
+    @Column(columnDefinition = "TEXT")
+    @ToString.Exclude
+    private String sshPrivateKey;
+
+    @Column(columnDefinition = "TEXT")
+    @ToString.Exclude
+    private String sshKnownHosts;
+
+    @Column
+    private Long sshRemoteKeyId;
+
+    @Column
+    private Long sshRemoteKeyOwnerId;
+
+    @Column
+    private String sshRemoteKeyTitle;
+
+    /** Includes incomplete registration markers so ambiguous failures remain recoverable. */
+    public boolean hasManagedSshKeyTracking() {
+        return sshRemoteKeyId != null || sshRemoteKeyOwnerId != null || sshRemoteKeyTitle != null;
+    }
 
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)

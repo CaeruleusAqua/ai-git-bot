@@ -11,6 +11,7 @@ This guide covers deploying the AI-Git-Bot Gateway using Docker Compose.
   - GitHub / GitHub Enterprise: See [GitHub Setup](GITHUB_SETUP.md)
   - GitLab / GitLab CE/EE: See [GitLab Setup](GITLAB_SETUP.md)
   - Bitbucket Cloud: See [Bitbucket Setup](BITBUCKET_SETUP.md)
+  - Azure DevOps: See [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md)
 - API credentials for your chosen AI provider (Anthropic, OpenAI) or a local Ollama/llama.cpp instance
 
 ## Quick Start
@@ -27,7 +28,7 @@ Then:
 1. Navigate to `http://localhost:8080` to complete initial setup
 2. Create your admin account
 3. Configure AI and Git integrations via the web UI
-4. Create a bot and configure webhooks in your Git provider (Gitea, GitHub, GitLab, or Bitbucket)
+4. Create a bot and configure webhooks in your Git provider (Gitea, GitHub, GitLab, Bitbucket, or Azure DevOps)
 
 See the [User Guide](USER_GUIDE.md) for detailed instructions.
 
@@ -77,14 +78,33 @@ volumes:
 
 ## Environment Variables
 
+### Security (Recommended)
+
+| Variable | Description |
+|----------|-------------|
+| `APP_ENCRYPTION_KEY` | Encryption key for sensitive data (API keys, tokens, SSH private keys). Without it, other credentials are stored in plain text and SSH private keys are rejected. |
+
 ### Required
 
 | Variable | Description |
 |----------|-------------|
-| `APP_ENCRYPTION_KEY` | Encryption key for sensitive data (API keys, tokens). Set to a fixed value for persistence across restarts. If not set, a random key is generated (data won't survive restarts). |
 | `DATABASE_URL` | JDBC connection URL (default: `jdbc:postgresql://db:5432/giteabot`) |
 | `DATABASE_USERNAME` | Database username (default: `giteabot`) |
 | `DATABASE_PASSWORD` | Database password |
+
+### Secret References (Optional)
+
+Configuration fields that support [secret references](SECRET_REFERENCES.md) can pull values from the environment with `${env:NAME}` instead of holding the credential itself. Only explicitly whitelisted variables are readable:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GITEABOT_SECRET_ENV_WHITELIST` | _(empty)_ | Comma-separated names of environment variables that `${env:NAME}` references may read, e.g. `MY_API_TOKEN,CI_DEPLOY_KEY`. Names are matched verbatim (case-sensitive). Empty means no environment variable is readable. |
+
+Whitelisting a name only permits it to be read — the variable itself still has to reach the process. In Docker, add it to the service's `environment:` block next to `GITEABOT_SECRET_ENV_WHITELIST`; Compose does not forward arbitrary host variables into the container.
+
+> **The application refuses to start** if the whitelist names a variable it reads for its own configuration (`GITEABOT_*`, `SPRING_*`, `DATABASE_*`, `APP_ENCRYPTION_KEY`). See [Reserved names](SECRET_REFERENCES.md#reserved-names).
+
+See [Secret References](SECRET_REFERENCES.md) for the syntax, resolution behavior and the available secret sources.
 
 ### Agent Configuration (Optional)
 
@@ -125,6 +145,7 @@ See [Agent Documentation](AGENT.md) for full details.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GITEABOT_WORKSPACES_DIR` |  | Optional host-visible root for private agent workspace parents. |
+| `GITEABOT_WORKSPACES_CLONE_TIMEOUT_SECONDS` | `300` | Budget (seconds) for one clone, PR-head fetch or checkout while preparing an agent workspace. Raise it for very large repositories: a shallow clone of a repo with tens of thousands of files can take minutes on a slow link, and an exhausted budget surfaces as a skipped workflow. |
 
 ### Review Context (Optional)
 
@@ -180,6 +201,12 @@ default; requires a Claude 5.x model (`claude-fable-5`, `claude-opus-5`,
 | `ANTHROPIC_EXTENDED_THINKING_ENABLED` | `false` | Set to `true` to enable adaptive extended thinking for the Anthropic provider. |
 | `ANTHROPIC_EXTENDED_THINKING_EFFORT` | `high` | How often and how deeply the model thinks: `low`, `medium`, `high`, `xhigh`, or `max`. Higher efforts need larger max tokens. |
 
+### OpenAI-compatible request switches (Optional)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_CHAT_TEMPLATE_KWARGS` |  | JSON object forwarded verbatim as `chat_template_kwargs` on every request of the **openai** provider (vLLM, llama.cpp's server, gateways). The server hands it to the model's chat template, so it overrides that server's own `--default-chat-template-kwargs` for this bot only. Keys and value types belong to the served model's template, e.g. `{"enable_thinking": true, "reasoning_effort": "low"}` (Qwen-style string effort), `{"reasoning_effort": 2}` (numeric effort) or `{"enable_thinking": false}`. Blank sends nothing and keeps the server default; malformed JSON fails at startup. |
+
 ### Security / Web UI Login (Optional)
 
 | Variable | Default | Description |
@@ -215,6 +242,18 @@ default; requires a Claude 5.x model (`claude-fable-5`, `claude-opus-5`,
 | `JPA_DDL_AUTO` | `validate` | Hibernate DDL auto mode. |
 | `FLYWAY_ENABLED` | `true` | Enable Flyway database migrations. |
 
+#### OpenRouter settings upgrade (V56)
+
+The H2 and PostgreSQL `V56__openrouter_settings.sql` migrations deliberately use `ADD COLUMN IF NOT EXISTS` to preserve settings when some OpenRouter columns already exist. This supports partial-column upgrades and SQL replay; it does **not** detect or repair schema drift. Flyway checksum validation does not validate existing column definitions.
+
+If these columns were added manually, verify the following definitions on `ai_integrations` before upgrading. All three columns must be **NOT NULL**; reconcile mismatches explicitly after backing up the database rather than relying on the existence guards.
+
+| Column | Type | Default |
+|--------|------|---------|
+| `openrouter_region` | `VARCHAR(16)` | `'GLOBAL'` |
+| `openrouter_data_collection` | `VARCHAR(16)` | `'DENY'` |
+| `openrouter_zdr` | `BOOLEAN` | `FALSE` |
+
 ### HTTP Client Timeouts (Optional)
 
 These timeouts apply to all outbound HTTP clients, including AI providers and Git host APIs:
@@ -238,14 +277,15 @@ All AI provider and Git configuration is managed through the web interface:
 1. **AI Integrations**: Create connections to AI providers (Anthropic, OpenAI, Ollama, llama.cpp)
    - Provider-specific default API URLs are pre-filled
    - Suggested models are available via dropdown
-   - API keys are encrypted at rest
+   - API keys are encrypted at rest when `APP_ENCRYPTION_KEY` is configured
 
 2. **Git Integrations**: Create connections to Git hosting platforms
    - **Gitea**: Self-hosted Gitea instances — see [Gitea Setup](GITEA_SETUP.md)
    - **GitHub**: github.com or GitHub Enterprise Server — see [GitHub Setup](GITHUB_SETUP.md)
    - **GitLab**: gitlab.com or self-managed GitLab — see [GitLab Setup](GITLAB_SETUP.md)
    - **Bitbucket Cloud**: bitbucket.org — see [Bitbucket Setup](BITBUCKET_SETUP.md)
-   - Tokens are encrypted at rest
+   - **Azure DevOps**: dev.azure.com or Azure DevOps Server (collection in the URL is optional) — see [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md)
+   - Tokens are encrypted at rest when `APP_ENCRYPTION_KEY` is configured
 
 3. **Bots**: Create bots that combine an AI integration with a Git integration
    - Each bot gets a unique webhook URL
@@ -278,8 +318,59 @@ The Dockerfile uses a **multi-stage build**:
 Key features:
 - Maven dependency layer caching for fast rebuilds
 - Non-root `appuser` for security
+- A pool of lower-privileged accounts (`execute-code-10001` … `10016`) the
+  `execute-code` program runs as — one per execution, so it can read neither
+  `appuser`'s files nor the JVM's start-time environment, and cannot reach a
+  concurrent run, which one sandbox account for all of them would allow
+- No capability on any binary, the `java` binary included
 - Health check via `/actuator/health` (interval: 30s, start period: 30s)
 - JVM tuning: `UseContainerSupport` and `MaxRAMPercentage=75.0`
+
+The image runs `docker/install-execute-code-sandbox.sh` at build time. It creates
+the pool accounts, writes the pool file the JVM allocates slots from
+(`/etc/execute-code/sandbox-slots`), and writes a single sudo rule —
+`appuser ALL=(execute-code-10001,…) NOPASSWD: ALL`, with no `(root)` and no
+`(ALL)` runas, so the service can become a sandbox slot and nothing else —
+checked with `visudo` before it is installed. sudo is the only switch that can be
+restricted to named targets: a copy of `setpriv` carrying `CAP_SETUID` is one
+`--reuid=0` away from root for whoever can exec it, and `appuser` is the account
+that runs repository-supplied build scripts and plugins.
+
+Nothing carries a capability, `java` in particular. A binary with file
+capabilities runs in secure-execution mode (`AT_SECURE`), where the loader ignores
+`$ORIGIN` in `RUNPATH` and `LD_LIBRARY_PATH`, so the JDK launcher stops finding
+`libjli.so` and the image does not start. None is needed either: the timeout's
+process-group kill cannot reach a program that has a uid of its own — sudo hands it
+a pty, hence a session of its own — so the run is stopped the way the rule allows,
+as the slot and by uid (`sudo -u <slot> kill -KILL -- -1`).
+
+The pool path and the sudo path are the defaults in `application.properties`
+(`agent.code-execution.sandbox-slots` / `-sudo-binary`, overridable through
+`AGENT_CODE_EXECUTION_SANDBOX_SLOTS` / `AGENT_CODE_EXECUTION_SUDO` and wired into
+`docker-compose.yml`), so the image needs no environment variable to be sandboxed.
+A pool that is missing or unusable — no sudo, a slot sudo will not switch to —
+makes `execute-code` fail closed rather than running the program as `appuser`; set
+`AGENT_CODE_EXECUTION_SANDBOX_SLOTS=` to opt out explicitly instead.
+
+A deployment that hardens its container with `security_opt: no-new-privileges`
+stops `execute-code` from working at all: the entire switch is `sudo`, which is a
+`setuid` root binary, and `no-new-privileges` makes the kernel refuse to grant it
+that privilege, so the invocation fails. The failure is fail-closed — the run
+reports a sandbox failure and no program runs — so either drop that flag or leave
+`execute-code` unselected on such a deployment. The shipped `docker-compose.yml`
+does not set it.
+
+A run outside the image — a local `mvn spring-boot:run`, say — provisions the same
+thing with the image's own script:
+
+```bash
+sudo ./docker/install-execute-code-sandbox.sh "$(id -un)"
+```
+
+It needs `sudo` installed, and the JVM has to be a member of every slot's group,
+so start it in a fresh session (`sudo -u`, a new login; a running shell keeps the
+groups it started with). The workspace is handed over to the slot with `chgrp`,
+which is a membership check for exactly that reason.
 
 ### Architectures
 
@@ -320,8 +411,8 @@ each architecture on a native host.
 - Schema is automatically managed by Hibernate (`ddl-auto=update`)
 - The database stores:
   - Admin users
-  - AI integrations (with encrypted API keys)
-  - Git integrations (with encrypted tokens)
+  - AI integrations (API keys are encrypted when `APP_ENCRYPTION_KEY` is configured)
+  - Git integrations (tokens are encrypted when `APP_ENCRYPTION_KEY` is configured)
   - Bots
   - Review sessions and conversation history
 
@@ -360,6 +451,7 @@ Included metrics:
 | `giteabot_ai_usage_output_tokens{integration}` | gauge | Total output tokens per AI integration |
 | `giteabot_ai_errors` | gauge | Total AI provider errors |
 | `giteabot_audit_tool_calls` | gauge | Total tool calls recorded in the audit trail |
+| `giteabot_agent_sessions{status}` | gauge | Coding-agent sessions per status — terminal statuses (`answered`, `failed`, `completed`, …) only grow, so alert on `answered` to catch runs that answered instead of changing code |
 | `prworkflow.run_total` | counter | PR workflow runs by workflow and status |
 | `prworkflow.run_duration_seconds` | timer | PR workflow run durations |
 | `agent.tool_calls_total{provider}` | counter | Individual tool-call invocations per provider |

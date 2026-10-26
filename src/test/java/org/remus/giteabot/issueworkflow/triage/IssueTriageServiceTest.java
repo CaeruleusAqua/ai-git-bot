@@ -9,7 +9,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.GitIntegration;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
@@ -23,10 +24,11 @@ import org.remus.giteabot.ai.StopReason;
 import org.remus.giteabot.ai.ToolCall;
 import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.systemsettings.BotToolSelectionService;
 import org.remus.giteabot.systemsettings.McpToolSelectionService;
 import tools.jackson.databind.JsonNode;
@@ -71,7 +73,7 @@ class IssueTriageServiceTest {
     @Mock
     private AiClientFactory aiClientFactory;
     @Mock
-    private GiteaClientFactory giteaClientFactory;
+    private RepositoryApiClientFactory repositoryApiClientFactory;
     @Mock
     private AgentSessionService sessionService;
     @Mock
@@ -95,18 +97,18 @@ class IssueTriageServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new IssueTriageService(aiClientFactory, giteaClientFactory, sessionService,
+        service = new IssueTriageService(aiClientFactory, repositoryApiClientFactory, sessionService,
                 toolExecutionService, new ToolCatalog(new AgentConfigProperties()), workspaceService,
                 mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService,
-                new AgentConfigProperties());
+                new AgentConfigProperties(), null);
         lenient().when(aiClientFactory.getClient(any())).thenReturn(aiClient);
-        lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repoClient);
-        lenient().when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(),
-                any(), any(), any()))
+        lenient().when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repoClient);
+        lenient().when(workspaceService.prepareWorkspace(eq(repoClient), anyString(), anyString(),
+                anyString(), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/triage-ws")));
         lenient().when(repoClient.getDefaultBranch("owner", "repo")).thenReturn("main");
         lenient().when(repoClient.getRepositoryTree("owner", "repo", "main"))
-                .thenReturn(List.of(Map.of("type", "blob", "path", "src/App.java")));
+                .thenReturn(List.of(new RepositoryTreeEntry("src/App.java", RepositoryTreeEntry.Type.FILE)));
         lenient().when(sessionService.toAiMessages(any())).thenReturn(List.of());
         lenient().when(mcpOrchestrationService.discoverTools(any())).thenReturn(McpToolCatalog.empty());
         lenient().when(mcpToolSelectionService.filterCatalogForPrompt(any(), any()))
@@ -118,7 +120,9 @@ class IssueTriageServiceTest {
 
         bot = new Bot();
         bot.setName("Triage Bot");
-        bot.setUsername("triage-bot");
+        GitIntegration gitIntegration = new GitIntegration();
+        gitIntegration.setUsername("triage-bot");
+        bot.setGitIntegration(gitIntegration);
 
         WebhookPayload.Owner owner = new WebhookPayload.Owner();
         owner.setLogin("owner");
@@ -244,15 +248,15 @@ class IssueTriageServiceTest {
     @Test
     void jsonMode_contextRoundThenTerminalJson_assigns() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("{\"requestTools\":[{\"id\":\"1\",\"tool\":\"rg\",\"args\":[\"submit\"]}]}")
-                .thenReturn("{\"assignment\":\"Bob\",\"reason\":\"Backend API change\"}");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("{\"requestTools\":[{\"id\":\"1\",\"tool\":\"rg\",\"args\":[\"submit\"]}]}"))
+                .thenReturn(ChatTurn.text("{\"assignment\":\"Bob\",\"reason\":\"Backend API change\"}"));
         when(toolExecutionService.executeContextTool(any(), eq("rg"), anyList()))
                 .thenReturn(new ToolResult(true, 0, "src/api/SubmitEndpoint.java", ""));
 
         service.triage(bot, payload, PARAMS);
 
-        verify(aiClient, times(2)).chat(anyList(), anyString(), anyString(), isNull(), anyInt());
+        verify(aiClient, times(2)).chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt());
         verify(toolExecutionService).executeContextTool(any(), eq("rg"), anyList());
         verify(repoClient).assignIssue("owner", "repo", 42L, "Bob");
     }
@@ -260,8 +264,8 @@ class IssueTriageServiceTest {
     @Test
     void jsonMode_none_postsReasonWithoutAssigning() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("{\"assignment\":\"none\",\"reason\":\"Cannot determine the domain\"}");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("{\"assignment\":\"none\",\"reason\":\"Cannot determine the domain\"}"));
 
         service.triage(bot, payload, PARAMS);
 
@@ -273,8 +277,8 @@ class IssueTriageServiceTest {
     @Test
     void jsonMode_unparseableResponse_isRejectedWithErrorComment() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("I have no idea what to do here.");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("I have no idea what to do here."));
 
         assertThrows(TriageRoutingException.class, () -> service.triage(bot, payload, PARAMS));
 
@@ -288,8 +292,8 @@ class IssueTriageServiceTest {
     @Test
     void selfAssignment_isRejectedToPreventLoops() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("{\"assignment\":\"triage-bot\",\"reason\":\"I should do it myself\"}");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("{\"assignment\":\"triage-bot\",\"reason\":\"I should do it myself\"}"));
         Map<String, Object> params = Map.of(
                 "systemPrompt", "ROUTING PROMPT", "assignees", "Alice,triage-bot");
 
@@ -300,8 +304,8 @@ class IssueTriageServiceTest {
     @Test
     void multiLineReason_isRejected() {
         when(aiClient.supportsNativeTools()).thenReturn(false);
-        when(aiClient.chat(anyList(), anyString(), anyString(), isNull(), anyInt()))
-                .thenReturn("{\"assignment\":\"Alice\",\"reason\":\"line one\\nline two\"}");
+        when(aiClient.chatWithTools(anyList(), anyString(), eq(List.of()), anyString(), isNull(), anyInt()))
+                .thenReturn(ChatTurn.text("{\"assignment\":\"Alice\",\"reason\":\"line one\\nline two\"}"));
 
         assertThrows(TriageRoutingException.class, () -> service.triage(bot, payload, PARAMS));
         verify(repoClient, never()).assignIssue(anyString(), anyString(), any(), anyString());
@@ -327,8 +331,8 @@ class IssueTriageServiceTest {
 
     @Test
     void workspacePreparationFails_postsErrorCommentAndFails() {
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(),
-                any(), any(), any()))
+        when(workspaceService.prepareWorkspace(eq(repoClient), anyString(), anyString(),
+                anyString(), any()))
                 .thenReturn(WorkspaceResult.failure("disk full"));
 
         assertThrows(TriageRoutingException.class, () -> service.triage(bot, payload, PARAMS));

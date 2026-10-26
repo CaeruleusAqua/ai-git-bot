@@ -1,5 +1,6 @@
 package org.remus.giteabot.admin;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -13,13 +14,15 @@ import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
+import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.config.PromptService;
 import org.remus.giteabot.config.ReviewChunkingProperties;
 import org.remus.giteabot.config.ReviewConfigProperties;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
+import org.remus.giteabot.repository.Reactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.session.SessionService;
 import org.remus.giteabot.systemsettings.McpConfiguration;
@@ -31,6 +34,7 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.mockito.ArgumentCaptor;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
@@ -40,6 +44,7 @@ import org.remus.giteabot.prworkflow.review.ReviewWorkflow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -48,6 +53,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
@@ -59,7 +65,7 @@ import static org.mockito.Mockito.when;
 class BotWebhookServiceTest {
 
     @Mock private AiClientFactory aiClientFactory;
-    @Mock private GiteaClientFactory giteaClientFactory;
+    @Mock private RepositoryApiClientFactory repositoryApiClientFactory;
     @Mock private PromptService promptService;
     @Mock private SessionService sessionService;
     @Mock private AgentConfigProperties agentConfig;
@@ -83,6 +89,8 @@ class BotWebhookServiceTest {
     @Mock private org.remus.giteabot.prworkflow.config.WorkflowSelectionService workflowSelectionService;
     @Mock private ReviewChunkingProperties chunkingProperties;
     @Mock private org.remus.giteabot.eventhook.EventHookPublisher eventHookPublisher;
+    @Mock private org.remus.giteabot.notification.WorkflowRetryNotices retryNotices;
+    @Mock private org.remus.giteabot.notification.IssueCommentAcknowledgement commentAcknowledgement;
 
     private BotWebhookService botWebhookService;
     private org.remus.giteabot.prworkflow.config.WorkflowConfiguration codingIssueConfiguration;
@@ -91,6 +99,9 @@ class BotWebhookServiceTest {
 
     @BeforeEach
     void setUp() {
+        // This legacy-only fixture keeps its String scripts through the default typed fallback.
+        lenient().when(aiClient.chatWithTools(any(), any(), eq(java.util.List.of()), any(), any(), any()))
+                .thenCallRealMethod();
         // Real catalog – classification taxonomy is no longer mocked through TES.
         org.remus.giteabot.agent.tools.ToolCatalog toolCatalog =
                 new org.remus.giteabot.agent.tools.ToolCatalog(new AgentConfigProperties());
@@ -99,9 +110,9 @@ class BotWebhookServiceTest {
         // configuration. Workflows and factory are real; the collaborators
         // underneath stay mocked.
         AgentServiceFactory agentServiceFactory = new AgentServiceFactory(aiClientFactory,
-                giteaClientFactory, promptService, agentConfig, agentSessionService,
+                repositoryApiClientFactory, promptService, agentConfig, agentSessionService,
                 toolExecutionService, toolCatalog, workspaceService,
-                mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService);
+                mcpOrchestrationService, mcpToolSelectionService, botToolSelectionService, null);
         org.remus.giteabot.issueworkflow.IssueWorkflowRegistry issueWorkflowRegistry =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowRegistry(java.util.List.of(
                         new org.remus.giteabot.issueworkflow.coding.CodingIssueWorkflow(agentServiceFactory),
@@ -109,8 +120,8 @@ class BotWebhookServiceTest {
         org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator issueWorkflowOrchestrator =
                 new org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator(
                         issueWorkflowRegistry, workflowSelectionService, botService, eventHookPublisher,
-                        giteaClientFactory);
-        botWebhookService = new BotWebhookService(giteaClientFactory,
+                        retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
+        botWebhookService = new BotWebhookService(repositoryApiClientFactory,
                 agentSessionService, botService,
                 prWorkflowOrchestrator, e2eTestPrCloseHandler,
                 e2eTestSlashCommandHandler, unitTestSlashCommandHandler,
@@ -138,7 +149,7 @@ class BotWebhookServiceTest {
         lenient().when(chunkingProperties.getMaxDiffChunks()).thenReturn(8);
         lenient().when(chunkingProperties.getRetryTruncatedChunkChars()).thenReturn(60_000);
         var reviewWorkflow = new org.remus.giteabot.prworkflow.review.ReviewWorkflow(
-                codeReviewServiceFactory, giteaClientFactory, workflowSelectionService,
+                codeReviewServiceFactory, repositoryApiClientFactory, workflowSelectionService,
                 chunkingProperties);
         lenient().when(prWorkflowOrchestrator.run(
                         any(Bot.class), any(WebhookPayload.class), eq("review"), anyMap()))
@@ -162,7 +173,7 @@ class BotWebhookServiceTest {
                     Bot b = invocation.getArgument(0);
                     return new org.remus.giteabot.review.CodeReviewService(
                             repositoryApiClient, aiClient, sessionService,
-                            b.getUsername(), new ReviewConfigProperties(),
+                            b.getGitIntegration().getUsername(), new ReviewConfigProperties(),
                             "system-prompt:" + b.getSystemPrompt().getId(),
                             b.getSystemPrompt().getReviewSystemPrompt(),
                             120000, 8, 60000, "");
@@ -173,7 +184,7 @@ class BotWebhookServiceTest {
         budget.setMaxTokensPerCall(4096);
         lenient().when(agentConfig.getBudget()).thenReturn(budget);
         lenient().when(agentConfig.getCritic()).thenReturn(new AgentConfigProperties.CriticConfig());
-        lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        lenient().when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
     }
 
     // ---- isBotUser tests ----
@@ -201,17 +212,6 @@ class BotWebhookServiceTest {
     }
 
     @Test
-    void isBotUser_nullUsername_returnsFalse() {
-        Bot bot = createBot("test-bot", null);
-        WebhookPayload payload = new WebhookPayload();
-        WebhookPayload.Owner sender = new WebhookPayload.Owner();
-        sender.setLogin("human_user");
-        payload.setSender(sender);
-
-        assertFalse(botWebhookService.isBotUser(bot, payload));
-    }
-
-    @Test
     void isBotUser_commentUserMatchesBotUsername_returnsTrue() {
         Bot bot = createBot("test-bot", "ai_bot");
         WebhookPayload payload = new WebhookPayload();
@@ -230,12 +230,6 @@ class BotWebhookServiceTest {
     void getBotAlias_returnsMentionFormat() {
         Bot bot = createBot("test-bot", "ai_bot");
         assertEquals("@ai_bot", botWebhookService.getBotAlias(bot));
-    }
-
-    @Test
-    void getBotAlias_nullUsername_returnsEmpty() {
-        Bot bot = createBot("test-bot", null);
-        assertEquals("", botWebhookService.getBotAlias(bot));
     }
 
     @Test
@@ -276,7 +270,31 @@ class BotWebhookServiceTest {
         payload.setComment(comment);
 
         assertTrue(botWebhookService.isReviewAgainRequest(payload, "@ai_bot"));
-        assertTrue(botWebhookService.isReviewAgainRequestFromPullRequestAuthor(payload, "@ai_bot"));
+        assertTrue(botWebhookService.isPullRequestAuthor(payload));
+    }
+
+    @Test
+    void isReviewAgainRequest_ignoresReviewKeywordInBotAlias() {
+        WebhookPayload payload = new WebhookPayload();
+        WebhookPayload.Comment comment = new WebhookPayload.Comment();
+        comment.setBody("@AI_Review_Bot can you repeat that explanation?");
+        payload.setComment(comment);
+
+        assertFalse(botWebhookService.isReviewAgainRequest(payload, "@AI_Review_Bot"));
+    }
+
+    @Test
+    void isReviewAgainRequest_usernameAliasNeedsReviewKeywordOutsideAlias() {
+        // GitLab aliases are "@" + bot username; "review" inside the username no longer counts
+        WebhookPayload payload = new WebhookPayload();
+        WebhookPayload.Comment comment = new WebhookPayload.Comment();
+        comment.setBody("@reviewbot again");
+        payload.setComment(comment);
+
+        assertFalse(botWebhookService.isReviewAgainRequest(payload, "@reviewbot"));
+
+        comment.setBody("@reviewbot please review this again");
+        assertTrue(botWebhookService.isReviewAgainRequest(payload, "@reviewbot"));
     }
 
     // ---- handlePrComment routing tests ----
@@ -289,7 +307,7 @@ class BotWebhookServiceTest {
         botWebhookService.reviewPullRequest(bot, new WebhookPayload());
 
         verify(aiClientFactory, never()).getClient(any());
-        verify(giteaClientFactory, never()).getApiClient(any());
+        verify(repositoryApiClientFactory, never()).getApiClient(any());
     }
 
     @Test
@@ -300,7 +318,213 @@ class BotWebhookServiceTest {
         botWebhookService.handlePrClosed(bot, new WebhookPayload());
 
         verify(aiClientFactory, never()).getClient(any());
-        verify(giteaClientFactory, never()).getApiClient(any());
+        verify(repositoryApiClientFactory, never()).getApiClient(any());
+    }
+
+    @Test
+    void reviewPullRequest_opened_addsEyesReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithNoEnabledWorkflowsDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        bot.setWorkflowConfiguration(emptyPrConfiguration);
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithEnabledWorkflowsReacts() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_reviewRequested_addsEyesReactionToPullRequest() {
+        Bot bot = createBotWithWorkflows("review", "review_bot", java.util.List.of("review"));
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("review_requested");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient).addPullRequestReaction(
+                "Test", "my-repo", 42L, Reactions.EYES);
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedWithoutRepositoryOwnerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.getRepository().setOwner(null);
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedFromDisallowedCallerDoesNotReact() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of("allowed_user"));
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClientFactory, never()).getApiClient(any());
+        verify(prWorkflowOrchestrator, never()).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_reopened_doesNotAddReactionToPullRequest() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        payload.setAction("reopened");
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(repositoryApiClient, never()).addPullRequestReaction(any(), any(), any(), any());
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    @Test
+    void reviewPullRequest_openedReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("review", "review_bot");
+        WebhookPayload payload = openedPrPayload();
+        when(botService.getAllowedUsernames(bot)).thenReturn(Set.of());
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addPullRequestReaction(any(), any(), any(), any());
+
+        botWebhookService.reviewPullRequest(bot, payload);
+
+        verify(prWorkflowOrchestrator).runAll(bot, payload);
+    }
+
+    /**
+     * Branch/ref allowlist gate on PR workflows (Issue #374). Verifies the
+     * decision made in {@code BotWebhookService#reviewPullRequest} before the
+     * orchestrator runs: an empty/null and a {@code *} filter are no-ops (the
+     * workflow proceeds, matching the pre-filter behaviour), a matching ref
+     * proceeds, and a non-matching ref short-circuits — the orchestrator and
+     * the AI/git clients are never reached, so no workflow runs and no PR
+     * comment is posted.
+     */
+    @Nested
+    class BranchFilterGate {
+
+        private WebhookPayload prPayloadWithBase(String baseRef) {
+            WebhookPayload payload = new WebhookPayload();
+            WebhookPayload.PullRequest pr = new WebhookPayload.PullRequest();
+            WebhookPayload.Head base = new WebhookPayload.Head();
+            base.setRef(baseRef);
+            pr.setBase(base);
+            payload.setPullRequest(pr);
+            return payload;
+        }
+
+        private WebhookPayload prPayloadNoBase() {
+            WebhookPayload payload = new WebhookPayload();
+            payload.setPullRequest(new WebhookPayload.PullRequest());
+            return payload;
+        }
+
+        @Test
+        void emptyFilter_proceeds() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("");
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("develop"));
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void nullFilter_proceeds() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter(null);
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("develop"));
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void wildcardFilter_proceeds() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("*");
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("releases/1.2"));
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void matchingTargetBranch_proceeds() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("releases/*");
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("releases/1.2"));
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void fullRefFilter_matchesShortTargetBranch_proceeds() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("refs/heads/develop");
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("develop"));
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void nonMatchingTargetBranch_skipsWorkflowAndClients() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("releases/*");
+            botWebhookService.reviewPullRequest(bot, prPayloadWithBase("main"));
+            verify(prWorkflowOrchestrator, never()).runAll(any(Bot.class), any(WebhookPayload.class));
+            verify(aiClientFactory, never()).getClient(any());
+            verify(repositoryApiClientFactory, never()).getApiClient(any());
+        }
+
+        @Test
+        void nonMatchingFilter_noBaseRef_skipsWorkflow() {
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("develop");
+            botWebhookService.reviewPullRequest(bot, prPayloadNoBase());
+            verify(prWorkflowOrchestrator, never()).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
+
+        @Test
+        void baseRefPreferredOverHeadRef() {
+            // The filter applies to the PR target branch: a PR from feature/x
+            // INTO releases/1.2 matches 'releases/*' even though the head ref
+            // does not.
+            Bot bot = createBot("b", "ai_bot");
+            bot.setBranchFilter("releases/*");
+            WebhookPayload payload = prPayloadWithBase("releases/1.2");
+            WebhookPayload.Head head = new WebhookPayload.Head();
+            head.setRef("feature/x");
+            payload.getPullRequest().setHead(head);
+            botWebhookService.reviewPullRequest(bot, payload);
+            verify(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+        }
     }
 
     @Test
@@ -310,7 +534,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -318,7 +542,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -330,9 +555,36 @@ class BotWebhookServiceTest {
 
         botWebhookService.handleIssueAssigned(bot, payload);
 
+        verify(repositoryApiClient).addIssueReaction("Test", "my-repo", 12L, Reactions.EYES);
         verify(repositoryApiClient).createIssue(eq("Test"), eq("my-repo"),
                 eq("AI Created Issue: Vague issue"), org.mockito.ArgumentMatchers.contains("Originates from #12"));
         verify(agentSessionService).setGeneratedIssueNumber(session, 99L);
+    }
+
+    @Test
+    void writerBot_issueAssignmentReactionFailureDoesNotBlockWorkflow() {
+        Bot bot = createBot("writer", "writer_bot");
+        makeWriterBot(bot);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+        doThrow(new RuntimeException("reaction api down"))
+                .when(repositoryApiClient).addIssueReaction(any(), any(), any(), any());
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient).addIssueReaction(
+                "Test", "my-repo", 12L, Reactions.EYES);
+        verify(repositoryApiClient).getIssueDetails("Test", "my-repo", 12L);
+    }
+
+    @Test
+    void issueAssignmentWithNoConfiguredWorkflowDoesNotReact() {
+        Bot bot = createBot("writer", "writer_bot");
+        bot.setIssueWorkflowConfiguration(null);
+        WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
+
+        botWebhookService.handleIssueAssigned(bot, payload);
+
+        verify(repositoryApiClient, never()).addIssueReaction(any(), any(), any(), any());
     }
 
     @Test
@@ -342,7 +594,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -350,7 +602,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -377,7 +630,7 @@ class BotWebhookServiceTest {
         makeWriterBot(bot);
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -389,7 +642,7 @@ class BotWebhookServiceTest {
 
         botWebhookService.handleIssueAssigned(bot, payload);
 
-        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any(), any());
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
         verify(repositoryApiClient, never()).createIssue(any(), any(), any(), any());
     }
 
@@ -400,7 +653,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -416,7 +669,7 @@ class BotWebhookServiceTest {
 
         verify(agentSessionService).setStatus(session, AgentSession.AgentSessionStatus.UPDATING);
         verify(agentSessionService).setStatus(session, AgentSession.AgentSessionStatus.FAILED);
-        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any(), any());
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -429,7 +682,7 @@ class BotWebhookServiceTest {
         session.setSessionType(AgentSession.AgentSessionType.WRITER);
         session.setIssueAuthorUsername("tom");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.of(session));
         when(agentSessionService.claimSessionForUpdate("Test", "my-repo", 12L,
@@ -437,7 +690,7 @@ class BotWebhookServiceTest {
 
         botWebhookService.handleIssueComment(bot, payload);
 
-        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any(), any());
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
         verify(repositoryApiClient, never()).createIssue(any(), any(), any(), any());
     }
 
@@ -449,7 +702,7 @@ class BotWebhookServiceTest {
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
         Path workspace = Path.of("/tmp/writer-test-workspace");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -457,7 +710,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(workspace));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -490,7 +744,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession codingSession = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L))
                 .thenReturn(Optional.of(codingSession));
@@ -510,7 +764,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -518,7 +772,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -543,7 +798,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -551,7 +806,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -572,7 +828,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -580,7 +836,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -607,7 +864,7 @@ class BotWebhookServiceTest {
                 {"qualityAssessment":"Needs context","requestTools":[{"id":"1","tool":"cat","args":["README.md"]}],"readyToCreate":true}
                 """;
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -615,7 +872,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(workspace));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -647,7 +905,7 @@ class BotWebhookServiceTest {
                 {"qualityAssessment":"Ready","revisedIssueDraft":"## Goal\\nDo something testable","assumptions":[],"openQuestions":[],"readyToCreate":true}
                 """;
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -655,7 +913,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(workspace));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -684,7 +943,7 @@ class BotWebhookServiceTest {
         session.setSessionType(AgentSession.AgentSessionType.WRITER);
         session.setIssueAuthorUsername("tom");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.of(session));
         when(agentSessionService.claimSessionForUpdate("Test", "my-repo", 12L,
@@ -693,7 +952,8 @@ class BotWebhookServiceTest {
         // same session so subsequent state reads are preserved.
         when(agentSessionService.compactContextWindow(any())).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
         when(aiClient.chat(any(), any(), startsWith("Writer prompt"), any(), eq(4096)))
@@ -721,7 +981,7 @@ class BotWebhookServiceTest {
                         java.util.Map.of(), "mcp:github:search")
         ));
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(mcpOrchestrationService.discoverTools(mcpConfiguration)).thenReturn(discovered);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
@@ -747,13 +1007,13 @@ class BotWebhookServiceTest {
             prCommentPayload = buildPrCommentPayload(OWNER, REPO, PR_NUMBER, COMMENT_ID,
                     "@claude_bot please do something");
             // Both factories return the shared repository client mock
-            lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+            lenient().when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
             lenient().when(aiClientFactory.getClient(any())).thenReturn(null); // not reached in these tests
         }
 
         /** For tests where the agent path is taken, stub workspace to fail quickly. */
         private void stubAgentPath(AgentSession session) {
-            lenient().when(workspaceService.prepareWorkspace(any(), any(), any(), any(), any(), any()))
+            lenient().when(workspaceService.prepareWorkspace(any(), any(), any(), any(), any()))
                     .thenReturn(org.remus.giteabot.agent.validation.WorkspaceResult.failure("routing test"));
         }
 
@@ -969,8 +1229,44 @@ class BotWebhookServiceTest {
             // Code-review path MUST NOT be entered
             verify(sessionService, never()).getOrCreateSession(any(), any(), any(), any());
             // Unrecognised-command reply MUST be posted
-            verify(repositoryApiClient).postIssueComment(eq(OWNER), eq(REPO), eq(PR_NUMBER),
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER),
                     org.mockito.ArgumentMatchers.contains("did not understand"));
+        }
+
+        @Test
+        void unrecognisedCommandReply_usesProviderMentionNameOverBotUsername() {
+            when(agentSessionService.getSessionByIssue(OWNER, REPO, PR_NUMBER))
+                    .thenReturn(Optional.empty());
+            when(agentSessionService.getSessionByPr(OWNER, REPO, PR_NUMBER))
+                    .thenReturn(Optional.empty());
+            when(repositoryApiClient.getBotMentionName()).thenReturn(Optional.of("AI Bot"));
+
+            Bot bot = createBotWithWorkflows("e2e-bot", "claude_bot",
+                    java.util.List.of("e2e-test"));
+
+            botWebhookService.handlePrComment(bot, prCommentPayload);
+
+            org.mockito.ArgumentCaptor<String> body = org.mockito.ArgumentCaptor.forClass(String.class);
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
+            assertThat(body.getValue()).contains("`@AI Bot rerun-tests`").doesNotContain("@claude_bot");
+        }
+
+        @Test
+        void unrecognisedCommandReply_providerMentionLookupFails_stillPostsWithNeutralName() {
+            when(agentSessionService.getSessionByIssue(OWNER, REPO, PR_NUMBER))
+                    .thenReturn(Optional.empty());
+            when(agentSessionService.getSessionByPr(OWNER, REPO, PR_NUMBER))
+                    .thenReturn(Optional.empty());
+            when(repositoryApiClient.getBotMentionName()).thenThrow(new IllegalStateException("401"));
+
+            Bot bot = createBotWithWorkflows("e2e-bot", "claude_bot",
+                    java.util.List.of("e2e-test"));
+
+            botWebhookService.handlePrComment(bot, prCommentPayload);
+
+            org.mockito.ArgumentCaptor<String> body = org.mockito.ArgumentCaptor.forClass(String.class);
+            verify(repositoryApiClient).postPullRequestComment(eq(OWNER), eq(REPO), eq(PR_NUMBER), body.capture());
+            assertThat(body.getValue()).contains("`@bot rerun-tests`").doesNotContain("@claude_bot");
         }
 
         @Test
@@ -988,7 +1284,7 @@ class BotWebhookServiceTest {
             botWebhookService.handlePrComment(bot, prCommentPayload);
 
             verify(sessionService).getOrCreateSession(OWNER, REPO, PR_NUMBER, "system-prompt:1");
-            verify(repositoryApiClient, never()).postIssueComment(any(), any(), any(),
+            verify(repositoryApiClient, never()).postPullRequestComment(any(), any(), any(),
                     org.mockito.ArgumentMatchers.contains("did not understand"));
         }
     }
@@ -1208,7 +1504,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -1216,7 +1512,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -1247,7 +1544,7 @@ class BotWebhookServiceTest {
         makeWriterBot(bot);
         WebhookPayload payload = buildIssuePayload("Test", "my-repo", 12L, "Vague issue", "Do something");
 
-        when(giteaClientFactory.getApiClient(any())).thenThrow(new RuntimeException("gitea down"));
+        when(repositoryApiClientFactory.getApiClient(any())).thenThrow(new RuntimeException("gitea down"));
 
         botWebhookService.handleIssueAssigned(bot, payload);
 
@@ -1288,7 +1585,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssueCreationPayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -1296,7 +1593,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -1334,7 +1632,7 @@ class BotWebhookServiceTest {
         WebhookPayload payload = buildIssueCreationPayload("Test", "my-repo", 12L, "Vague issue", "Do something");
         AgentSession session = new AgentSession("Test", "my-repo", 12L, "Vague issue");
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
         when(aiClientFactory.getClient(any())).thenReturn(aiClient);
         when(agentSessionService.getSessionByIssue("Test", "my-repo", 12L)).thenReturn(Optional.empty());
         when(repositoryApiClient.getIssueDetails("Test", "my-repo", 12L))
@@ -1342,7 +1640,8 @@ class BotWebhookServiceTest {
         when(agentSessionService.createSession("Test", "my-repo", 12L, "Vague issue",
                 AgentSession.AgentSessionType.WRITER, "tom")).thenReturn(session);
         when(repositoryApiClient.getDefaultBranch("Test", "my-repo")).thenReturn("main");
-        when(workspaceService.prepareWorkspace(eq("Test"), eq("my-repo"), eq("main"), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(
+                eq(repositoryApiClient), eq("Test"), eq("my-repo"), eq("main"), any()))
                 .thenReturn(WorkspaceResult.success(Path.of("/tmp/writer-test-workspace")));
         when(repositoryApiClient.getRepositoryTree("Test", "my-repo", "main")).thenReturn(java.util.List.of());
         when(agentSessionService.toAiMessages(session)).thenReturn(java.util.List.of());
@@ -1382,10 +1681,81 @@ class BotWebhookServiceTest {
         verify(eventHookPublisher, never()).publish(any(), any(), any(), any(), any(), any(), anyMap());
     }
 
+    /**
+     * The audit session id is thread-local state on a worker that serves many webhook
+     * tasks in a row: it must cover the whole task and be gone before the worker takes
+     * the next one. The bounded provider-retry backoff keeps a task alive for minutes,
+     * which makes a leftover session id far likelier to be inherited by unrelated later
+     * work — every entrypoint that sets it therefore clears it in a {@code finally}.
+     */
+    @Nested
+    class AuditSessionLifecycle {
+
+        @AfterEach
+        void clearAuditContext() {
+            AiAuditContext.clear();
+        }
+
+        @Test
+        void reviewPullRequest_tagsTheRunWithTheSessionAndClearsItAfterwards() {
+            Bot bot = createBot("review-bot", "claude_bot");
+            WebhookPayload payload = buildPrCommentPayload("Test", "my-repo", 140L, 9L, "please review");
+            AtomicReference<String> duringRun = new AtomicReference<>();
+            doAnswer(invocation -> {
+                duringRun.set(AiAuditContext.getSessionId());
+                return java.util.List.of();
+            }).when(prWorkflowOrchestrator).runAll(any(Bot.class), any(WebhookPayload.class));
+
+            botWebhookService.reviewPullRequest(bot, payload);
+
+            assertEquals("Test/my-repo#140", duringRun.get());
+            assertNull(AiAuditContext.getSessionId(), "the audit session must not outlive the webhook task");
+        }
+
+        @Test
+        void handleIssueComment_clearsTheSessionAfterwards() {
+            Bot bot = createBot("coder", "coder_bot");
+            org.remus.giteabot.prworkflow.config.WorkflowConfiguration emptyIssueConfiguration =
+                    namedConfiguration(104L, "empty-issue-cfg");
+            bot.setIssueWorkflowConfiguration(emptyIssueConfiguration);
+            when(workflowSelectionService.enabledWorkflowKeys(104L)).thenReturn(java.util.List.of());
+            WebhookPayload payload = buildIssueCommentPayload("Test", "my-repo", 12L,
+                    "Implement feature", "Body", "tom", "Please continue");
+
+            botWebhookService.handleIssueComment(bot, payload);
+
+            assertNull(AiAuditContext.getSessionId(), "the audit session must not outlive the webhook task");
+        }
+
+        @Test
+        void handleIssueCreated_earlyReturnStillClearsTheSession() {
+            Bot bot = createBot("writer", "writer_bot");
+            bot.setRunOnIssueCreation(false);
+            WebhookPayload payload = buildIssueCreationPayload("Test", "my-repo", 12L,
+                    "Vague issue", "Body");
+
+            botWebhookService.handleIssueCreated(bot, payload);
+
+            assertNull(AiAuditContext.getSessionId(), "an early return must not leave the session behind");
+        }
+
+        @Test
+        void handlePrComment_earlyReturnStillClearsTheSession() {
+            Bot bot = createBotWithWorkflows("writer", "writer_bot", java.util.List.of());
+            WebhookPayload payload = buildPrCommentPayload("Test", "my-repo", 140L, 9L, "hello bot");
+
+            botWebhookService.handlePrComment(bot, payload);
+
+            assertNull(AiAuditContext.getSessionId(), "an early return must not leave the session behind");
+        }
+    }
+
     private Bot createBot(String name, String username) {
         Bot bot = new Bot();
         bot.setName(name);
-        bot.setUsername(username);
+        GitIntegration gitIntegration = new GitIntegration();
+        gitIntegration.setUsername(username);
+        bot.setGitIntegration(gitIntegration);
         SystemPrompt systemPrompt = new SystemPrompt();
         systemPrompt.setId(1L);
         systemPrompt.setReviewSystemPrompt("Review prompt");
@@ -1395,6 +1765,21 @@ class BotWebhookServiceTest {
         bot.setSystemPrompt(systemPrompt);
         bot.setIssueWorkflowConfiguration(codingIssueConfiguration);
         return bot;
+    }
+
+    private static WebhookPayload openedPrPayload() {
+        WebhookPayload payload = new WebhookPayload();
+        payload.setAction("opened");
+        WebhookPayload.Repository repository = new WebhookPayload.Repository();
+        repository.setName("my-repo");
+        WebhookPayload.Owner owner = new WebhookPayload.Owner();
+        owner.setLogin("Test");
+        repository.setOwner(owner);
+        payload.setRepository(repository);
+        WebhookPayload.PullRequest pullRequest = new WebhookPayload.PullRequest();
+        pullRequest.setNumber(42L);
+        payload.setPullRequest(pullRequest);
+        return payload;
     }
 
     /**

@@ -2,7 +2,7 @@ package org.remus.giteabot.prworkflow.agentreview;
 
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflow;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
@@ -70,6 +70,11 @@ public class AgentReviewWorkflow implements PrWorkflow {
                         WorkflowParamField.ParamType.INTEGER, false,
                         String.valueOf(DEFAULT_MAX_TOOL_ROUNDS),
                         "Upper bound on how many explore/answer rounds the agent may take."),
+                new WorkflowParamField(AgentReviewParam.ENABLE_PROGRESS_COMMENTS,
+                        "Show review progress",
+                        WorkflowParamField.ParamType.BOOLEAN, false,
+                        "false",
+                        "Creates one progress comment and updates it during review or clarification."),
                 new WorkflowParamField(AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION,
                         "Enable formal review decision",
                         WorkflowParamField.ParamType.BOOLEAN, false,
@@ -109,6 +114,7 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         Map<String, Object> params = resolveParams(bot);
         int maxToolRounds = intParam(params, AgentReviewParam.MAX_TOOL_ROUNDS, DEFAULT_MAX_TOOL_ROUNDS);
+        boolean enableProgressComments = boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false);
         boolean enableFormalDecision = boolParam(params, AgentReviewParam.ENABLE_FORMAL_REVIEW_DECISION, false);
         String decisionPrompt = strParam(params, AgentReviewParam.FORMAL_REVIEW_DECISION_PROMPT,
                 DEFAULT_FORMAL_REVIEW_DECISION_PROMPT);
@@ -119,16 +125,17 @@ public class AgentReviewWorkflow implements PrWorkflow {
 
         context.requireActive("before running agentic review");
 
-        boolean reviewed = serviceFactory.create(bot)
+        AgentReviewService.ReviewResult reviewed = serviceFactory.create(bot)
                 .reviewPullRequest(payload, maxToolRounds, enableFormalDecision, decisionPrompt, thresholds,
-                        context.runId(), context.auditToolCallConsumer());
+                        context.runId(), context.auditToolCallConsumer(), enableProgressComments);
 
-        context.appendStep("agentic-review",
-                reviewed ? "Posted agentic review for PR" : "Skipped — no diff or no review produced");
-
-        return reviewed
-                ? WorkflowResult.success("Agentic review posted")
-                : WorkflowResult.skipped("No diff or no review produced");
+        WorkflowResult result = switch (reviewed) {
+            case POSTED -> WorkflowResult.success("Agentic review posted");
+            case NO_DIFF -> WorkflowResult.skipped("No diff to review");
+            case FAILED -> WorkflowResult.failed("Agentic review failed; no complete review was produced");
+        };
+        context.appendStep("agentic-review", result.summary());
+        return result;
     }
 
     private WorkflowResult doClarification(PrWorkflowContext context, String userQuestion) {
@@ -138,15 +145,17 @@ public class AgentReviewWorkflow implements PrWorkflow {
         Map<String, Object> params = resolveParams(bot);
         int maxToolRounds = intParam(params, AgentReviewParam.MAX_TOOL_ROUNDS, DEFAULT_MAX_TOOL_ROUNDS);
 
-        boolean answered = serviceFactory.create(bot)
-                .answerClarification(context.payload(), userQuestion, maxToolRounds);
+        AgentReviewService.ReviewResult answered = serviceFactory.create(bot)
+                .answerClarification(context.payload(), userQuestion, maxToolRounds,
+                        boolParam(params, AgentReviewParam.ENABLE_PROGRESS_COMMENTS, false));
 
-        context.appendStep("agentic-clarification",
-                answered ? "Posted clarification response" : "Failed to produce clarification");
-
-        return answered
-                ? WorkflowResult.success("Clarification posted")
-                : WorkflowResult.skipped("No clarification produced");
+        WorkflowResult result = switch (answered) {
+            case POSTED -> WorkflowResult.success("Clarification posted");
+            case NO_DIFF -> WorkflowResult.skipped("No diff to answer clarification");
+            case FAILED -> WorkflowResult.failed("No clarification produced");
+        };
+        context.appendStep("agentic-clarification", result.summary());
+        return result;
     }
 
     private Map<String, Object> resolveParams(Bot bot) {

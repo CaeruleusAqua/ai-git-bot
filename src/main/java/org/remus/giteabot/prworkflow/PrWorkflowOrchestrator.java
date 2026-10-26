@@ -2,15 +2,18 @@ package org.remus.giteabot.prworkflow;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.agent.loop.AgentRunContext;
+import org.remus.giteabot.ai.AiRetryContext;
 import org.remus.giteabot.audit.ActorType;
 import org.remus.giteabot.audit.AuditEventType;
 import org.remus.giteabot.audit.PrAuditEvent;
 import org.remus.giteabot.audit.PrAuditEventService;
 import org.remus.giteabot.eventhook.EventHookEventType;
 import org.remus.giteabot.eventhook.EventHookPublisher;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.notification.WorkflowRetryNotices;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 import org.remus.giteabot.prworkflow.review.ReviewWorkflow;
 import org.springframework.stereotype.Service;
@@ -35,16 +38,12 @@ public class PrWorkflowOrchestrator {
     private final WorkflowSelectionService workflowSelectionService;
     private final PrAuditEventService auditService;
     private final EventHookPublisher eventHookPublisher;
+    private final WorkflowRetryNotices retryNotices;
+    private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     public List<PrWorkflowRun> runAll(Bot bot, WebhookPayload payload) {
         if (bot == null) throw new IllegalArgumentException("bot must not be null");
-        List<String> workflowKeys;
-        if (bot.getWorkflowConfiguration() != null) {
-            workflowKeys = workflowSelectionService.enabledWorkflowKeys(
-                    bot.getWorkflowConfiguration().getId());
-        } else {
-            workflowKeys = List.of(ReviewWorkflow.KEY);
-        }
+        List<String> workflowKeys = enabledWorkflowKeys(bot, workflowSelectionService);
         if (workflowKeys.isEmpty()) {
             log.debug("[Bot '{}'] No workflows enabled", bot.getName());
             return List.of();
@@ -62,6 +61,17 @@ public class PrWorkflowOrchestrator {
             }
         }
         return runs;
+    }
+
+    /**
+     * Returns the PR workflow keys {@link #runAll} executes for {@code bot}: the enabled keys of
+     * its workflow configuration, or just the review workflow when it has none.
+     */
+    public static List<String> enabledWorkflowKeys(Bot bot, WorkflowSelectionService workflowSelectionService) {
+        if (bot.getWorkflowConfiguration() == null) {
+            return List.of(ReviewWorkflow.KEY);
+        }
+        return workflowSelectionService.enabledWorkflowKeys(bot.getWorkflowConfiguration().getId());
     }
 
     public PrWorkflowRun run(Bot bot, WebhookPayload payload, String workflowKey) {
@@ -82,6 +92,18 @@ public class PrWorkflowOrchestrator {
                     + "owner=" + owner + ", repo=" + repoName + ", pr=" + prNumber + ")");
         }
 
+        // The integration's slot is taken *before* the run row exists: a job queued
+        // behind the limit must not be reported as RUNNING (UI, audit log, outgoing
+        // webhooks), must not have the waiting time counted into its duration, and —
+        // having no run row yet — cannot be started after the operator cancelled it.
+        return concurrencyLimiter.withPermit(bot.getAiIntegration(),
+                () -> runWithPermit(bot, payload, workflow, hints, owner, repoName, prNumber));
+    }
+
+    /** The run itself, executed while holding the AI integration's slot. */
+    private PrWorkflowRun runWithPermit(Bot bot, WebhookPayload payload, PrWorkflow workflow,
+                                        Map<String, String> hints, String owner, String repoName,
+                                        Long prNumber) {
         PrWorkflowRun run = lockManager.withLock(bot.getId(), owner, repoName, prNumber, workflow.key(),
                 () -> runService.start(bot.getId(), owner, repoName, prNumber, workflow.key()));
         log.debug("[Workflow '{}'] Started run id={}", workflow.key(), run.getId());
@@ -131,6 +153,7 @@ public class PrWorkflowOrchestrator {
                 toolCallConsumer);
 
         try {
+            retryNotices.installForPullRequest(bot, workflow.key(), owner, repoName, prNumber);
             WorkflowResult result = workflow.run(context);
             if (result == null) {
                 throw new IllegalStateException("PrWorkflow '" + workflow.key() + "' returned null");
@@ -233,6 +256,8 @@ public class PrWorkflowOrchestrator {
             publishRunEvent(EventHookEventType.PR_WORKFLOW_FAILED, bot, owner, repoName, prNumber, failedData);
             log.error("[Workflow '{}'] Run id={} FAILED", workflow.key(), run.getId(), e);
             throw e;
+        } finally {
+            AiRetryContext.clear();
         }
     }
 

@@ -4,12 +4,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.session.PendingMessage;
 import org.remus.giteabot.agent.shared.AgentMetricsHolder;
+import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.ToolDescriptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -27,10 +32,11 @@ import java.util.Locale;
  * {@link ToolingMode#NATIVE} <em>and</em> the resolved
  * {@link AiClient#supportsNativeTools()} returns {@code true} <em>and</em>
  * the strategy supplies non-empty {@link AgentStrategy#toolDescriptors()},
- * the loop calls {@link AiClient#chatWithTools chatWithTools} and forwards
- * the structured {@link ChatTurn} to
- * {@link AgentStrategy#step(AgentRunContext, ChatTurn, int)}. Otherwise the
- * loop transparently falls back to the legacy text path.</p>
+ * the loop forwards the structured {@link ChatTurn} to
+ * {@link AgentStrategy#step(AgentRunContext, ChatTurn, int)}. Otherwise it calls
+ * the same {@link AiClient#chatWithTools chatWithTools} API with no descriptors
+ * and forwards the turn to {@link AgentStrategy#stepLegacy}, preserving
+ * completion metadata for the legacy text protocol.</p>
  */
 @Slf4j
 public final class AgentLoop {
@@ -70,6 +76,7 @@ public final class AgentLoop {
         List<PendingMessage> pending = new ArrayList<>();
         pending.add(new PendingMessage("user", initialUserMessage));
         String currentMessage = initialUserMessage;
+        AiMessage closingReminder = null;
 
         ToolingMode resolvedMode = resolveMode(strategy);
         ctx.setToolingMode(resolvedMode);
@@ -79,16 +86,33 @@ public final class AgentLoop {
                 ctx.issueNumber(), providerTag, resolvedMode, tools.size());
 
         for (int round = 1; round <= budget.maxRounds(); round++) {
-            log.debug("AgentLoop round {}/{} for issue #{}: calling AI (history={} msgs, prompt={} chars, mode={})",
+            if (ctx.progressConsumer() != null) {
+                ctx.progressConsumer().accept(new AgentRunContext.ProgressUpdate(
+                        round, "Waiting for model", 0));
+            }
+            // The closing rounds keep their descriptors: empty the list and every client
+            // falls back to its plain-text message shape, which cannot carry the tool
+            // exchanges those rounds replay (see the writer's wrap-up round).
+            log.debug("AgentLoop round {}/{} for issue #{}: calling AI (history={} msgs, prompt={} chars, mode={}, tools={})",
                     round, budget.maxRounds(), ctx.issueNumber(), history.size(),
-                    currentMessage == null ? 0 : currentMessage.length(), resolvedMode);
+                    currentMessage == null ? 0 : currentMessage.length(), resolvedMode, tools.size());
 
             AgentMetricsHolder.recordToolCallMode(modeTag(resolvedMode), providerTag);
 
+            if (closingReminder == null) {
+                String reminder = strategy.roundBudgetReminder(budget.maxRounds() - round + 1, resolvedMode);
+                if (reminder != null && !reminder.isBlank()) {
+                    closingReminder = AiMessage.builder().role("user").content(reminder).build();
+                    pending.add(new PendingMessage("user", reminder));
+                }
+            }
+            if (closingReminder != null && !history.contains(closingReminder)) {
+                history.add(closingReminder);
+            }
             long started = System.nanoTime();
             ChatTurn turn;
             try {
-                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, resolvedMode);
+                turn = callAiWithRetry(history, currentMessage, tools, systemPrompt, round, closingReminder);
             } finally {
                 AgentMetricsHolder.recordLatency(modeTag(resolvedMode), providerTag,
                         Duration.ofNanos(System.nanoTime() - started));
@@ -99,7 +123,9 @@ public final class AgentLoop {
                     round, budget.maxRounds(), ctx.issueNumber(),
                     aiResponse == null ? 0 : aiResponse.length(),
                     turn.toolCalls().size(), turn.stopReason());
-            pending.add(new PendingMessage("assistant", aiResponse));
+            pending.add(new PendingMessage("assistant", aiResponse,
+                    turn.toolCalls().isEmpty() ? null
+                            : new PendingMessage.ToolPayload(turn.toolCalls(), null)));
 
             // Track token usage (accumulated in-memory on the session; persisted by
             // flushRound) and trigger tool-message truncation when the context
@@ -138,8 +164,7 @@ public final class AgentLoop {
                 // Include toolResult (not just content) and tool descriptors
                 // in the estimation — these are part of every API call.
                 int historyChars = history.stream()
-                        .mapToInt(m -> (m.getContent() == null ? 0 : m.getContent().length())
-                                + (m.getToolResult() == null ? 0 : m.getToolResult().length()))
+                        .mapToInt(HistoryCompactor::messageChars)
                         .sum();
                 int systemPromptChars = systemPrompt != null ? systemPrompt.length() : 0;
                 int currentMessageChars = currentMessage != null ? currentMessage.length() : 0;
@@ -160,7 +185,9 @@ public final class AgentLoop {
             StepDecision decision;
             long stepStartNanos = System.nanoTime();
             try {
-                decision = strategy.step(ctx, turn, round);
+                decision = resolvedMode == ToolingMode.NATIVE
+                        ? strategy.step(ctx, turn, round)
+                        : strategy.stepLegacy(ctx, turn, round);
             } catch (RuntimeException e) {
                 log.error("AgentLoop round {}/{} for issue #{}: strategy.step threw {}: {}",
                         round, budget.maxRounds(), ctx.issueNumber(),
@@ -171,8 +198,8 @@ public final class AgentLoop {
             if (ctx.auditToolCallConsumer() != null
                     && decision instanceof StepDecision.ContinueWithToolResults(
                             List<StepDecision.ToolCallResult> results, String follow)) {
-                Long inTokens = turn.inputTokens() > 0 ? turn.inputTokens() : null;
-                Long outTokens = turn.outputTokens() > 0 ? turn.outputTokens() : null;
+                Long inTokens = turn.inputTokensReported() ? turn.inputTokens() : null;
+                Long outTokens = turn.outputTokensReported() ? turn.outputTokens() : null;
                 var toolCalls = turn.toolCalls();
                 for (int i = 0; i < Math.min(results.size(), toolCalls.size()); i++) {
                     var tc = toolCalls.get(i);
@@ -204,11 +231,7 @@ public final class AgentLoop {
             if (currentMessage != null && !currentMessage.isEmpty()) {
                 history.add(AiMessage.builder().role("user").content(currentMessage).build());
             }
-            history.add(AiMessage.builder()
-                    .role("assistant")
-                    .content(aiResponse)
-                    .toolCalls(turn.toolCalls().isEmpty() ? null : turn.toolCalls())
-                    .build());
+            history.add(turn.toAssistantMessage());
 
             if (decision instanceof StepDecision.ContinueWithToolResults(
                     List<StepDecision.ToolCallResult> results, String follow
@@ -221,10 +244,12 @@ public final class AgentLoop {
                             .toolCallId(r.toolCallId())
                             .toolResult(r.resultText())
                             .build());
-                    // Persist a textual marker in the session log so post-hoc review still shows
-                    // the tool flow. Full structured replay is intentionally out of scope here.
+                    // The row keeps a textual marker for post-hoc review and carries the
+                    // native call id, so a follow-up run can rebuild the pair for the
+                    // provider instead of replaying an orphaned tool message.
                     pending.add(new PendingMessage("tool",
-                            "[" + r.toolCallId() + "] " + r.resultText()));
+                            "[" + r.toolCallId() + "] " + r.resultText(),
+                            new PendingMessage.ToolPayload(null, r.toolCallId())));
                 }
                 currentMessage = (follow == null || follow.isEmpty()) ? "" : follow;
                 if (!currentMessage.isEmpty()) {
@@ -300,11 +325,10 @@ public final class AgentLoop {
         return mode == ToolingMode.NATIVE ? "native" : "legacy";
     }
 
-    /** Sums content + toolResult character counts for all history messages. */
+    /** Sums visible content, tool results and opaque reasoning for all history messages. */
     private static int historyMessageChars(List<AiMessage> history) {
         return history.stream()
-                .mapToInt(m -> (m.getContent() == null ? 0 : m.getContent().length())
-                        + (m.getToolResult() == null ? 0 : m.getToolResult().length()))
+                .mapToInt(HistoryCompactor::messageChars)
                 .sum();
     }
 
@@ -327,44 +351,103 @@ public final class AgentLoop {
     }
 
     /**
-     * Calls the AI with retry-and-compact logic for "prompt too long" errors.
+     * Calls the AI with a bounded retry for recoverable provider failures.
      * When the provider rejects the request because the prompt exceeds its
      * context window, this method aggressively compacts the in-memory history
      * (keeping only the last 2 compaction units) and retries once.
+     * Transient network failures are also retried once without modifying the
+     * conversation: socket write failures (broken pipe, connection reset,
+     * connection aborted) and streaming transport failures wrapped in
+     * {@link ResourceAccessException} (read timeout, mid-stream connection
+     * drop, malformed stream line — see {@link
+     * org.remus.giteabot.ai.StreamingLineReader}), and HTTP 408 request timeouts.
      *
-     * <p>If the second attempt also fails with a prompt-too-long error, the
-     * exception is re-thrown to the caller.</p>
+     * <p>All other failures, and any failure on the second attempt, are
+     * re-thrown to the caller.</p>
      *
      * @return the {@link ChatTurn} from the successful AI call
-     * @throws HttpClientErrorException if the retry also fails
+     * @throws RuntimeException if the failure is not retryable or the retry fails
      */
     private ChatTurn callAiWithRetry(List<AiMessage> history, String currentMessage,
-                                     List<ToolDescriptor> tools, String systemPrompt,
-                                     ToolingMode resolvedMode) {
-        int maxRetries = 2;
-        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+                                     List<ToolDescriptor> tools, String systemPrompt, int round,
+                                     AiMessage closingReminder) {
+        int maxAttempts = 2;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                if (resolvedMode == ToolingMode.NATIVE) {
-                    return aiClient.chatWithTools(history, currentMessage, tools, systemPrompt,
-                            null, budget.maxTokensPerCall());
-                } else {
-                    String text = aiClient.chat(history, currentMessage, systemPrompt,
-                            null, budget.maxTokensPerCall());
-                    return ChatTurn.text(text);
-                }
-            } catch (HttpClientErrorException e) {
-                if (!aiClient.isPromptTooLongError(e) || attempt == maxRetries) {
+                AiAuditContext.setRound(round);
+                return aiClient.chatWithTools(history, currentMessage, tools, systemPrompt,
+                        null, budget.maxTokensPerCall());
+            } catch (RuntimeException e) {
+                boolean promptTooLong = e instanceof HttpClientErrorException clientError
+                        && clientError.getStatusCode().value() != HttpStatus.REQUEST_TIMEOUT.value()
+                        && aiClient.isPromptTooLongError(clientError);
+                boolean transientNetworkFailure = isTransientNetworkFailure(e);
+
+                if (attempt == maxAttempts || (!promptTooLong && !transientNetworkFailure)) {
                     throw e;
                 }
-                log.warn("AgentLoop: AI call failed with prompt-too-long error on attempt {}/{}. "
-                        + "Aggressively compacting history and retrying. Error: {}",
-                        attempt, maxRetries, e.getMessage());
-                // Aggressive compaction: keep only the last 2 compaction units
-                compactor.compactAggressively(history);
+
+                if (promptTooLong) {
+                    log.warn("AgentLoop: AI call failed with prompt-too-long error on attempt {}/{}. "
+                            + "Aggressively compacting history and retrying. Error: {}",
+                            attempt, maxAttempts, e.getMessage());
+                    // Aggressive compaction: keep only the last 2 compaction units
+                    compactor.compactAggressively(history);
+                    if (closingReminder != null && !history.contains(closingReminder)) {
+                        history.add(closingReminder);
+                    }
+                } else {
+                    log.warn("AgentLoop: AI call failed with a transient network error on attempt {}/{}. "
+                            + "Retrying without changing history. Error: {}",
+                            attempt, maxAttempts, e.getMessage());
+                }
+            } finally {
+                AiAuditContext.clearRound();
             }
         }
         // Unreachable, but keeps the compiler happy
         throw new IllegalStateException("callAiWithRetry: exceeded max retries");
     }
-}
 
+    static boolean isTransientNetworkFailure(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            // Streaming transport failures surface as ResourceAccessException
+            // (read timeout / mid-stream drop / malformed line — see
+            // StreamingLineReader); a retry is the intended recovery, so treat
+            // the whole family as transient rather than matching the message.
+            switch (current) {
+                case HttpClientErrorException clientError
+                        when clientError.getStatusCode().value() == HttpStatus.REQUEST_TIMEOUT.value() -> {
+                    return true;
+                }
+                case ResourceAccessException resourceAccessException -> {
+                    return true;
+                }
+                case SocketTimeoutException socketTimeoutException -> {
+                    return true;
+                }
+                case SocketException socketException -> {
+                    String message = current.getMessage();
+                    if (message != null) {
+                        String normalized = message.toLowerCase(Locale.ROOT);
+                        if (normalized.contains("broken pipe")
+                                || normalized.contains("connection reset")
+                                || normalized.contains("connection aborted")) {
+                            return true;
+                        }
+                    }
+                }
+                default -> {
+                }
+            }
+
+            Throwable cause = current.getCause();
+            if (cause == current) {
+                break;
+            }
+            current = cause;
+        }
+        return false;
+    }
+}

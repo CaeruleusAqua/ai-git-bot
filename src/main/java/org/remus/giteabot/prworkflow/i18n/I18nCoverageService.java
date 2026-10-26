@@ -2,13 +2,16 @@ package org.remus.giteabot.prworkflow.i18n;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.remus.giteabot.agent.shared.BranchRefs;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.prworkflow.PrPayloadHydrator;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowCancelledException;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -18,7 +21,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Core business logic of the i18n-coverage workflow. Not a Spring singleton —
@@ -56,6 +58,8 @@ public class I18nCoverageService {
     private final SystemPrompt systemPrompt;
     private final WorkspaceService workspaceService;
     private final I18nCoverageAgent agent;
+    /** Builds the run's tool surface (own tools + the bot's selected read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     /** Inputs resolved from the workflow params by {@link I18nCoverageWorkflow}. */
     public record Request(PrWorkflowContext context,
@@ -80,7 +84,7 @@ public class I18nCoverageService {
         WebhookPayload payload = context.payload();
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
-        long prNumber = resolvePrNumber(payload);
+        long prNumber = PrPayloadHydrator.resolvePrNumberOrZero(payload);
         String prTitle = payload.getPullRequest() == null ? null : payload.getPullRequest().getTitle();
         String prBody = payload.getPullRequest() == null ? null : payload.getPullRequest().getBody();
 
@@ -90,7 +94,7 @@ public class I18nCoverageService {
             return Result.skipped("No include patterns configured");
         }
 
-        String headBranch = resolveHeadBranch(payload, owner, repo, prNumber);
+        String headBranch = PrPayloadHydrator.resolveHeadBranch(repositoryClient, payload, owner, repo, prNumber);
         if (headBranch == null) {
             // Never fall back to the default branch: this workflow clones the head
             // branch and (in commit/offer modes) pushes to it.
@@ -104,10 +108,20 @@ public class I18nCoverageService {
 
         Path workspace = null;
         try {
+            if (request.lifecycleMode() == SuiteLifecycleMode.OFFER_AS_PR
+                    && workspaceService.isAuthoritativePullRequestFromFork(
+                            repositoryClient, owner, repo, headBranch, prNumber)) {
+                postComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderFailed(prNumber,
+                        "offer-as-pr is not supported for fork pull requests; no branch was pushed."));
+                return Result.failed("offer-as-pr is not supported for fork pull requests");
+            }
             context.requireActive("before preparing i18n-coverage workspace");
-            WorkspaceResult ws = workspaceService.prepareWorkspace(
-                    owner, repo, headBranch,
-                    repositoryClient.getCloneUrl(), repositoryClient.getToken(), prNumber);
+            WorkspaceResult ws = request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR
+                    ? workspaceService.preparePullRequestWorkspace(
+                            repositoryClient, owner, repo, headBranch, prNumber,
+                            PullRequestWorkspaceMode.PUSH_BACK)
+                    : workspaceService.prepareWorkspace(
+                            repositoryClient, owner, repo, headBranch, prNumber);
             if (!ws.success()) {
                 postComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderFailed(prNumber,
                         "failed to prepare workspace: " + ws.error()));
@@ -142,10 +156,12 @@ public class I18nCoverageService {
                     new I18nCoverageToolContext(workspace, request.includePatterns());
             String diff = repositoryClient.getPullRequestDiff(owner, repo, prNumber);
             String kickoff = buildKickoffMessage(workspace, request, prTitle, prBody, diff, report);
+            WorkflowToolSurface surface = surfaceFactory.create(request.context().bot(), repositoryClient,
+                    I18nCoverageAgent.WORKFLOW_TOOLS, owner, repo, prNumber, workspace);
 
             context.requireActive("before running i18n-coverage agent");
             I18nCoverageAgent.Result authored = agent.generate(
-                    aiClient, toolContext, kickoff, systemPrompt,
+                    aiClient, surface, toolContext, kickoff, systemPrompt,
                     request.includePatterns(), request.baselineLocale(), request.maxToolRounds());
 
             if (!toolContext.touchedAnything()) {
@@ -215,22 +231,25 @@ public class I18nCoverageService {
                 context.appendStep("i18n-coverage-commit", "commit/push failed for branch " + workBranch);
                 return Result.failed("git commit/push failed");
             }
-            String target = "(follow-up PR against `" + headBranch + "`)";
-            Long followUp = null;
+            Long followUp;
             try {
                 followUp = repositoryClient.createPullRequest(owner, repo,
                         "Sync translation coverage for PR #" + prNumber,
                         "Automated i18n coverage sync for PR #" + prNumber + ".", workBranch, headBranch);
             } catch (RuntimeException e) {
                 log.warn("i18n-coverage: createPullRequest failed for PR #{}: {}", prNumber, e.getMessage());
+                context.appendStep("i18n-coverage-commit", "follow-up PR creation failed: " + e.getMessage());
+                return Result.failed("follow-up PR creation failed");
             }
-            if (followUp != null) {
-                target = "(follow-up PR #" + followUp + " against `" + headBranch + "`)";
+            if (followUp == null) {
+                context.appendStep("i18n-coverage-commit", "follow-up PR creation returned no PR number");
+                return Result.failed("follow-up PR creation failed");
             }
+            String target = "(follow-up PR #" + followUp + " against `" + headBranch + "`)";
             postReviewComment(owner, repo, prNumber, I18nCoverageSummaryRenderer.renderCompletion(
                     prNumber, toolContext, report, true, target, null));
             context.appendStep("i18n-coverage-commit",
-                    "offer-as-pr — pushed " + workBranch + (followUp == null ? "" : (", opened PR #" + followUp)));
+                    "offer-as-pr — pushed " + workBranch + ", opened PR #" + followUp);
             return Result.success(toolContext.changeCount() + " translation change(s) offered as a follow-up PR");
         }
 
@@ -367,50 +386,6 @@ public class I18nCoverageService {
             sb.append("    (could not read file: ").append(e.getMessage()).append(")\n");
             return budget;
         }
-    }
-
-    /**
-     * Resolves the PR head branch to clone/commit against. Prefers the webhook
-     * payload; when the head ref is missing it re-fetches it from the provider
-     * API. Returns {@code null} when the head branch cannot be determined —
-     * callers MUST skip rather than substitute the repository default branch.
-     */
-    private String resolveHeadBranch(WebhookPayload payload, String owner, String repo, long prNumber) {
-        if (payload.getPullRequest() != null && payload.getPullRequest().getHead() != null
-                && payload.getPullRequest().getHead().getRef() != null
-                && !payload.getPullRequest().getHead().getRef().isBlank()) {
-            return BranchRefs.normalize(payload.getPullRequest().getHead().getRef());
-        }
-        return fetchHeadBranchFromApi(owner, repo, prNumber);
-    }
-
-    @SuppressWarnings("unchecked")
-    private String fetchHeadBranchFromApi(String owner, String repo, long prNumber) {
-        if (prNumber <= 0) {
-            return null;
-        }
-        try {
-            Map<String, Object> pr = repositoryClient.getPullRequestDetails(owner, repo, prNumber);
-            if (pr != null && pr.get("head") instanceof Map<?, ?> head
-                    && ((Map<String, Object>) head).get("ref") instanceof String ref
-                    && !ref.isBlank()) {
-                return BranchRefs.normalize(ref);
-            }
-        } catch (RuntimeException e) {
-            log.debug("i18n-coverage: getPullRequestDetails failed for {}/{}#{}: {}",
-                    owner, repo, prNumber, e.getMessage());
-        }
-        return null;
-    }
-
-    private long resolvePrNumber(WebhookPayload payload) {
-        if (payload.getPullRequest() != null && payload.getPullRequest().getNumber() != null) {
-            return payload.getPullRequest().getNumber();
-        }
-        if (payload.getIssue() != null && payload.getIssue().getNumber() != null) {
-            return payload.getIssue().getNumber();
-        }
-        return payload.getNumber() == null ? 0L : payload.getNumber();
     }
 
     private void postComment(String owner, String repo, long prNumber, String body) {

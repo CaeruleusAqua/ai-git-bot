@@ -2,11 +2,15 @@ package org.remus.giteabot.prworkflow.unittest;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.prworkflow.PrPayloadHydrator;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurface;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.prworkflow.unittest.agents.UnitTestAuthorAgent;
 import org.remus.giteabot.prworkflow.unittest.coverage.CoverageResult;
@@ -54,6 +58,8 @@ public class UnitTestService {
     private final UnitTestAuthorAgent authorAgent;
     private final UnitTestRunner runner;
     private final UnitTestSuiteRepository suiteRepository;
+    /** Builds the run's tool surface (own tools + the bot's selected read-only catalogue tools). */
+    private final WorkflowToolSurfaceFactory surfaceFactory;
 
     /** Inputs resolved from the workflow params by {@link UnitTestWorkflow}. */
     public record Request(PrWorkflowContext context,
@@ -77,7 +83,7 @@ public class UnitTestService {
         WebhookPayload payload = context.payload();
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
-        long prNumber = resolvePrNumber(payload);
+        long prNumber = PrPayloadHydrator.resolvePrNumberOrZero(payload);
         String prTitle = payload.getPullRequest() == null ? null : payload.getPullRequest().getTitle();
         String prBody = payload.getPullRequest() == null ? null : payload.getPullRequest().getBody();
 
@@ -88,7 +94,7 @@ public class UnitTestService {
             return Result.skipped("No diff");
         }
 
-        String headBranch = resolveHeadBranch(payload, owner, repo, prNumber);
+        String headBranch = PrPayloadHydrator.resolveHeadBranch(repositoryClient, payload, owner, repo, prNumber);
         if (headBranch == null) {
             // Never fall back to the default branch: this workflow clones the head
             // branch and (in commit-to-pr mode) pushes generated tests to it.
@@ -106,9 +112,12 @@ public class UnitTestService {
         Path workspace = null;
         try {
             context.requireActive("before preparing unit-test workspace");
-            WorkspaceResult ws = workspaceService.prepareWorkspace(
-                    owner, repo, headBranch,
-                    repositoryClient.getCloneUrl(), repositoryClient.getToken(), null);
+            WorkspaceResult ws = request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR
+                    ? workspaceService.preparePullRequestWorkspace(
+                            repositoryClient, owner, repo, headBranch, prNumber,
+                            PullRequestWorkspaceMode.PUSH_BACK)
+                    : workspaceService.prepareWorkspace(
+                            repositoryClient, owner, repo, headBranch, prNumber);
             if (!ws.success()) {
                 postComment(owner, repo, prNumber,
                         UnitTestSummaryRenderer.renderFailed(prNumber,
@@ -145,10 +154,12 @@ public class UnitTestService {
 
             String kickoff = buildKickoffMessage(owner, repo, headRef, framework, prTitle, prBody, diff);
             UnitTestToolContext toolContext = new UnitTestToolContext(suite, workspace, framework);
+            WorkflowToolSurface surface = surfaceFactory.create(context.bot(), repositoryClient,
+                    UnitTestAuthorAgent.WORKFLOW_TOOLS, owner, repo, prNumber, workspace);
 
             context.requireActive("before running unit-test author agent");
             UnitTestAuthorAgent.Result authored = authorAgent.write(
-                    aiClient, toolContext, kickoff, systemPrompt, request.maxTestCases());
+                    aiClient, surface, toolContext, kickoff, systemPrompt, request.maxTestCases());
 
             if (!authored.wroteAnything()) {
                 postComment(owner, repo, prNumber,
@@ -163,29 +174,36 @@ public class UnitTestService {
             // them: at this point the working tree only contains the new test
             // files, so the commit stays clean (no build artefacts).
             boolean committed = false;
-            if (request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR
-                    && workspaceService.hasUncommittedChanges(workspace)) {
-                context.requireActive("before committing generated unit tests");
-                // Pre-commit guard (defence-in-depth behind the write-time guard):
-                // re-verify every changed file is an allowed test location for the
-                // framework. If anything outside a test location was touched we
-                // must not push it — the workflow's "production code is never
-                // touched" guarantee takes precedence over committing the tests.
-                java.util.List<String> offending = workspaceService.listChangedFiles(workspace).stream()
-                        .filter(p -> !UnitTestPathGuard.isAllowedTestPath(framework, p))
-                        .toList();
-                if (!offending.isEmpty()) {
-                    log.warn("Aborting unit-test commit for PR #{}: changed files outside allowed "
-                            + "test locations for {}: {}", prNumber, framework.key(), offending);
-                    context.appendStep("unit-test-commit",
-                            "Commit aborted — non-test files changed: " + offending);
+            boolean commitFailed = false;
+            if (request.lifecycleMode() == SuiteLifecycleMode.COMMIT_TO_PR) {
+                if (!workspaceService.hasUncommittedChanges(workspace)) {
+                    context.appendStep("unit-test-commit", "Commit failed — no workspace changes found");
+                    commitFailed = true;
                 } else {
-                    committed = workspaceService.commitAndPush(workspace, headBranch,
-                            "test: add AI-generated unit tests for PR #" + prNumber,
-                            GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, false);
-                    context.appendStep("unit-test-commit",
-                            committed ? "Committed generated tests to " + headBranch
-                                    : "Commit skipped / failed");
+                    context.requireActive("before committing generated unit tests");
+                    // Pre-commit guard (defence-in-depth behind the write-time guard):
+                    // re-verify every changed file is an allowed test location for the
+                    // framework. If anything outside a test location was touched we
+                    // must not push it — the workflow's "production code is never
+                    // touched" guarantee takes precedence over committing the tests.
+                    java.util.List<String> offending = workspaceService.listChangedFiles(workspace).stream()
+                            .filter(p -> !UnitTestPathGuard.isAllowedTestPath(framework, p))
+                            .toList();
+                    if (!offending.isEmpty()) {
+                        log.warn("Aborting unit-test commit for PR #{}: changed files outside allowed "
+                                + "test locations for {}: {}", prNumber, framework.key(), offending);
+                        context.appendStep("unit-test-commit",
+                                "Commit aborted — non-test files changed: " + offending);
+                        commitFailed = true;
+                    } else {
+                        committed = workspaceService.commitAndPush(workspace, headBranch,
+                                "test: add AI-generated unit tests for PR #" + prNumber,
+                                GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, false);
+                        context.appendStep("unit-test-commit",
+                                committed ? "Committed generated tests to " + headBranch
+                                        : "Commit skipped / failed");
+                        commitFailed = !committed;
+                    }
                 }
             }
 
@@ -197,6 +215,10 @@ public class UnitTestService {
             UnitTestSuite withCases = suiteRepository.findByIdWithCases(suite.getId()).orElse(suite);
             String comment = UnitTestSummaryRenderer.render(withCases, outcome, CoverageResult.unknown());
             postReviewComment(owner, repo, prNumber, comment);
+
+            if (commitFailed) {
+                return Result.failed("Generated tests could not be committed to the PR branch");
+            }
 
             return switch (outcome.status()) {
                 case PASSED -> Result.success(
@@ -316,58 +338,11 @@ public class UnitTestService {
         return files;
     }
 
-    /**
-     * Resolves the PR head branch to clone/commit against. Prefers the webhook
-     * payload; when the head ref is missing (notably {@code issue_comment}-style
-     * events with no {@code pull_request.head} block) it authoritatively
-     * re-fetches it from the provider API. Returns {@code null} when it cannot be
-     * determined — callers MUST skip rather than substitute the repository default
-     * branch, because this workflow commits and pushes to the resolved branch.
-     */
-    private String resolveHeadBranch(WebhookPayload payload, String owner, String repo, long prNumber) {
-        if (payload.getPullRequest() != null && payload.getPullRequest().getHead() != null
-                && payload.getPullRequest().getHead().getRef() != null
-                && !payload.getPullRequest().getHead().getRef().isBlank()) {
-            return org.remus.giteabot.agent.shared.BranchRefs.normalize(
-                    payload.getPullRequest().getHead().getRef());
-        }
-        return fetchHeadBranchFromApi(owner, repo, prNumber);
-    }
-
-    @SuppressWarnings("unchecked")
-    private String fetchHeadBranchFromApi(String owner, String repo, long prNumber) {
-        if (prNumber <= 0) {
-            return null;
-        }
-        try {
-            java.util.Map<String, Object> pr = repositoryClient.getPullRequestDetails(owner, repo, prNumber);
-            if (pr != null && pr.get("head") instanceof java.util.Map<?, ?> head
-                    && ((java.util.Map<String, Object>) head).get("ref") instanceof String ref
-                    && !ref.isBlank()) {
-                return org.remus.giteabot.agent.shared.BranchRefs.normalize(ref);
-            }
-        } catch (RuntimeException e) {
-            log.debug("unit-test: getPullRequestDetails failed for {}/{}#{}: {}",
-                    owner, repo, prNumber, e.getMessage());
-        }
-        return null;
-    }
-
     private String headSha(WebhookPayload payload) {
         if (payload.getPullRequest() == null || payload.getPullRequest().getHead() == null) {
             return null;
         }
         return payload.getPullRequest().getHead().getSha();
-    }
-
-    private long resolvePrNumber(WebhookPayload payload) {
-        if (payload.getPullRequest() != null && payload.getPullRequest().getNumber() != null) {
-            return payload.getPullRequest().getNumber();
-        }
-        if (payload.getIssue() != null && payload.getIssue().getNumber() != null) {
-            return payload.getIssue().getNumber();
-        }
-        return payload.getNumber() == null ? 0L : payload.getNumber();
     }
 
     private void postComment(String owner, String repo, long prNumber, String body) {
@@ -386,8 +361,6 @@ public class UnitTestService {
         }
     }
 }
-
-
 
 
 

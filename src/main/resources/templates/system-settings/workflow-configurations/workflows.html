@@ -28,8 +28,6 @@
             .workflow-toggle.collapsed .section-chevron { transform: rotate(-90deg); }
         </style>
 
-        <div th:if="${error}" class="alert alert-danger" th:text="${error}"></div>
-
         <p class="text-secondary" th:text="${workflowSelectionHelpText}"></p>
 
         <form th:action="@{${workflowConfigBaseUrl + '/' + workflowConfiguration.id + '/workflows/save'}}"
@@ -121,6 +119,8 @@
                                    type="number" class="form-control"
                                    th:id="'param-' + ${row.workflowKey} + '-' + ${field.name}"
                                    th:name="|params.${row.workflowKey}.${field.name}|"
+                                   th:min="${field.minimum}"
+                                   th:max="${field.maximum}"
                                    th:value="${currentValue}"/>
 
                             <!-- SECRET -->

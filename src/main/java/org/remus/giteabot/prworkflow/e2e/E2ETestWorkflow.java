@@ -2,8 +2,9 @@ package org.remus.giteabot.prworkflow.e2e;
 
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.prworkflow.PrPayloadHydrator;
 import org.remus.giteabot.prworkflow.PrWorkflow;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
@@ -81,7 +82,7 @@ public class E2ETestWorkflow implements PrWorkflow {
     private final PrTestWorkspaceManager workspaceManager;
     private final TestSuiteRunnerRegistry runnerRegistry;
     private final WorkflowSelectionService selectionService;
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final SuitePromotionService suitePromotionService;
     private final PrWorkflowRunRepository runRepository;
 
@@ -97,7 +98,7 @@ public class E2ETestWorkflow implements PrWorkflow {
                            PrTestWorkspaceManager workspaceManager,
                            TestSuiteRunnerRegistry runnerRegistry,
                            @Lazy WorkflowSelectionService selectionService,
-                           GiteaClientFactory giteaClientFactory,
+                           RepositoryApiClientFactory repositoryApiClientFactory,
                            SuitePromotionService suitePromotionService,
                            PrWorkflowRunRepository runRepository) {
         this.deploymentOrchestrator = deploymentOrchestrator;
@@ -105,7 +106,7 @@ public class E2ETestWorkflow implements PrWorkflow {
         this.workspaceManager = workspaceManager;
         this.runnerRegistry = runnerRegistry;
         this.selectionService = selectionService;
-        this.giteaClientFactory = giteaClientFactory;
+        this.repositoryApiClientFactory = repositoryApiClientFactory;
         this.suitePromotionService = suitePromotionService;
         this.runRepository = runRepository;
     }
@@ -190,7 +191,7 @@ public class E2ETestWorkflow implements PrWorkflow {
     public WorkflowResult run(PrWorkflowContext context) {
         Bot bot = context.bot();
         WebhookPayload payload = context.payload();
-        long prNumber = resolvePrNumber(payload);
+        long prNumber = PrPayloadHydrator.resolvePrNumberOrZero(payload);
 
         Map<String, Object> params = bot.getWorkflowConfiguration() == null
                 ? Map.of()
@@ -337,10 +338,12 @@ public class E2ETestWorkflow implements PrWorkflow {
         int promotionThreshold = clamp(
                 intParam(params, E2eTestParam.PROMOTION_THRESHOLD_PERCENT, DEFAULT_PROMOTION_THRESHOLD_PERCENT),
                 0, 100);
+        SuitePromotionService.Outcome promotion = null;
         if (meetsPromotionThreshold(outcome, promotionThreshold)
                 && (lifecycleMode == SuiteLifecycleMode.OFFER_AS_PR
                     || lifecycleMode == SuiteLifecycleMode.COMMIT_TO_PR)) {
-            promoteIfRequested(bot, payload, suite, context, lifecycleMode, outcome, promotionThreshold);
+            promotion = promoteIfRequested(
+                    bot, payload, suite, context, lifecycleMode, outcome, promotionThreshold);
         } else if (outcome.status() == TestSuiteOutcomeStatus.FAILED
                 && (lifecycleMode == SuiteLifecycleMode.OFFER_AS_PR
                     || lifecycleMode == SuiteLifecycleMode.COMMIT_TO_PR)) {
@@ -348,6 +351,10 @@ public class E2ETestWorkflow implements PrWorkflow {
             context.appendStep("e2e-promotion",
                     lifecycleMode.key() + " — skipped: pass-rate " + passRate
                             + "% below threshold " + promotionThreshold + "%");
+        }
+
+        if (promotion != null && promotion.kind() == SuitePromotionService.Outcome.Kind.FAILED) {
+            return WorkflowResult.failed("Suite promotion failed: " + promotion.message());
         }
 
         return mapOutcome(outcome);
@@ -395,19 +402,19 @@ public class E2ETestWorkflow implements PrWorkflow {
 
     /**
      * M7 entry point invoked immediately after a successful run for the
-     * "promote now" lifecycle modes. Best-effort: failures are logged +
-     * surfaced as a PR comment but never alter the workflow's terminal
-     * status.
+     * "promote now" lifecycle modes. Promotion failures are returned to the
+     * caller so a requested write cannot finish with a successful workflow.
      */
-    private void promoteIfRequested(Bot bot, WebhookPayload payload, PrTestSuite suite,
-                                    PrWorkflowContext context, SuiteLifecycleMode mode,
-                                    TestSuiteOutcome outcome, int thresholdPercent) {
+    private SuitePromotionService.Outcome promoteIfRequested(
+            Bot bot, WebhookPayload payload, PrTestSuite suite,
+            PrWorkflowContext context, SuiteLifecycleMode mode,
+            TestSuiteOutcome outcome, int thresholdPercent) {
         if (payload.getRepository() == null
                 || payload.getRepository().getOwner() == null
                 || payload.getPullRequest() == null
                 || payload.getPullRequest().getHead() == null) {
             log.warn("[Workflow '{}'] Cannot promote — payload missing repo / PR head", KEY);
-            return;
+            return SuitePromotionService.Outcome.failure("payload missing repository or pull-request head");
         }
         String owner = payload.getRepository().getOwner().getLogin();
         String repoName = payload.getRepository().getName();
@@ -415,7 +422,7 @@ public class E2ETestWorkflow implements PrWorkflow {
         PrWorkflowRun run = runRepository.findById(context.runId()).orElse(null);
         if (run == null) {
             log.warn("[Workflow '{}'] Cannot promote — run id {} not found", KEY, context.runId());
-            return;
+            return SuitePromotionService.Outcome.failure("workflow run was not found");
         }
         int passRate = passRatePercent(outcome.attempted(), outcome.failed());
         log.info("[Workflow '{}'] Promoting suite id={} mode={} status={} passRate={}% threshold={}%",
@@ -426,6 +433,7 @@ public class E2ETestWorkflow implements PrWorkflow {
                 out.message() == null ? "" : (": " + out.message())));
         postPrComment(bot, payload, suite.getPrNumber(),
                 E2eTestSummaryRenderer.renderPromotion(mode, out));
+        return out;
     }
 
     private WorkflowResult mapOutcome(TestSuiteOutcome outcome) {
@@ -442,7 +450,7 @@ public class E2ETestWorkflow implements PrWorkflow {
             return;
         }
         try {
-            RepositoryApiClient client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
             String owner = payload.getRepository().getOwner() == null
                     ? null : payload.getRepository().getOwner().getLogin();
             String repoName = payload.getRepository().getName();
@@ -458,7 +466,7 @@ public class E2ETestWorkflow implements PrWorkflow {
             return;
         }
         try {
-            RepositoryApiClient client = giteaClientFactory.getApiClient(bot.getGitIntegration());
+            RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
             String owner = payload.getRepository().getOwner() == null
                     ? null : payload.getRepository().getOwner().getLogin();
             String repoName = payload.getRepository().getName();
@@ -532,27 +540,7 @@ public class E2ETestWorkflow implements PrWorkflow {
         }
         return payload.getPullRequest().getHead().getSha();
     }
-
-    /**
-     * Resolves the pull-request number using the same fallback chain as
-     * {@code PrWorkflowOrchestrator.resolvePrNumber}: PR object first,
-     * then issue (for GitHub {@code issue_comment} events that lack the
-     * pull-request block), then the top-level {@code number} field.
-     */
-    private long resolvePrNumber(WebhookPayload payload) {
-        if (payload.getPullRequest() != null && payload.getPullRequest().getNumber() != null) {
-            return payload.getPullRequest().getNumber();
-        }
-        if (payload.getIssue() != null && payload.getIssue().getNumber() != null) {
-            return payload.getIssue().getNumber();
-        }
-        if (payload.getNumber() != null) {
-            return payload.getNumber();
-        }
-        return 0L;
-    }
 }
-
 
 
 

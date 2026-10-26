@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.ai.ToolDescriptor;
 import org.remus.giteabot.config.AgentConfigProperties;
 import org.remus.giteabot.mcp.McpOrchestrationService;
 import org.remus.giteabot.mcp.McpToolCatalog;
@@ -29,6 +30,45 @@ import static org.mockito.Mockito.when;
  */
 class AgentToolRouterWhitelistTest {
 
+    @Test
+    void reviewDeniesMutationsUnknownToolsAndUnselectedMcpBeforeDispatch() {
+        ToolExecutionService executor = mock(ToolExecutionService.class);
+        McpOrchestrationService mcp = mock(McpOrchestrationService.class);
+        var router = newRouter(executor, Set.of("cat", "branch-switcher", "write-file", "unknown"),
+                McpToolCatalog.empty(), mcp);
+        for (String tool : List.of("branch-switcher", "write-file", "unknown", "server.delete")) {
+            assertThat(router.execute(AgentToolRouter.Mode.REVIEW, ctx(tool, List.of())).success()).isFalse();
+        }
+        org.mockito.Mockito.verifyNoInteractions(executor, mcp);
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(),
+                Set.of("cat", "branch-switcher", "write-file"))).extracting(ToolDescriptor::name).containsExactly("cat");
+        assertThat(catalog.nativeDescriptors(ToolCatalog.Role.REVIEW, McpToolCatalog.empty(), null)).isEmpty();
+    }
+
+    @Test
+    void reviewAllowsConfiguredReadOnlyTool() {
+        ToolExecutionService executor = mock(ToolExecutionService.class);
+        when(executor.executeContextTool(any(), any(), any())).thenReturn(new ToolResult(true, 0, "read", ""));
+        var router = newRouter(executor, Set.of("cat"), McpToolCatalog.empty(), null);
+        assertThat(router.execute(AgentToolRouter.Mode.REVIEW, ctx("cat", List.of("README.md"))).success()).isTrue();
+        verify(executor).executeContextTool(any(), eqStr("cat"), eqArgs("README.md"));
+    }
+
+    @Test
+    void reviewAllowsOnlyTheExplicitlySelectedQualifiedMcpName() {
+        var executor = mock(ToolExecutionService.class);
+        var orchestration = mock(McpOrchestrationService.class);
+        var selected = new McpToolCatalog(List.of(new McpToolDefinition(
+                "srv", "read", "Read", "read", Map.of(), "srv.read")));
+        when(orchestration.isMcpTool(any(), any())).thenReturn(true);
+        when(orchestration.executeTool(any(), any(), any(), any())).thenReturn(new ToolResult(true, 0, "read", ""));
+        var router = newRouter(executor, Set.of(), selected, orchestration);
+        assertThat(router.execute(AgentToolRouter.Mode.REVIEW, ctx("read", List.of())).success()).isFalse();
+        assertThat(router.execute(AgentToolRouter.Mode.REVIEW, ctx("srv.read", List.of())).success()).isTrue();
+        verify(orchestration).executeTool(any(), any(), eqStr("srv.read"), any());
+        org.mockito.Mockito.verifyNoInteractions(executor);
+    }
+
     private final AgentConfigProperties agentConfig = new AgentConfigProperties();
     private final ToolCatalog catalog = new ToolCatalog(agentConfig);
 
@@ -36,7 +76,7 @@ class AgentToolRouterWhitelistTest {
                                       McpToolCatalog mcpCatalog,
                                       McpOrchestrationService mcpOrchestration) {
         return new AgentToolRouter(tes, catalog, mcpOrchestration, null,
-                mcpCatalog, mock(RepositoryApiClient.class), allowed);
+                mcpCatalog, mock(RepositoryApiClient.class), allowed, null);
     }
 
     private static ToolCallContext ctx(String tool, List<String> args) {
@@ -115,6 +155,26 @@ class AgentToolRouterWhitelistTest {
         assertThat(res.error()).contains("not enabled for this bot");
     }
 
+    /**
+     * The advertised surface and the dispatch gate have to agree: a review run that lists tools it
+     * would then refuse only makes the model ask for what it cannot have.
+     */
+    @Test
+    void availableTools_reviewSharesTheReadOnlyGate() {
+        AgentToolRouter router = newRouter(mock(ToolExecutionService.class),
+                Set.of("cat", "execute-code", "write-file", "branch-switcher", "mvn"),
+                McpToolCatalog.empty(), null);
+
+        assertThat(router.availableTools(AgentToolRouter.Mode.REVIEW))
+                .extracting(ToolDescriptor::name)
+                .contains("cat")
+                .doesNotContain("write-file", "branch-switcher", "mvn");
+
+        assertThat(router.availableTools(AgentToolRouter.Mode.CODING))
+                .extracting(ToolDescriptor::name)
+                .contains("execute-code", "write-file", "branch-switcher", "mvn");
+    }
+
     // Mockito argThat helpers kept inline to avoid an extra import.
     private static String eqStr(String expected) {
         return org.mockito.ArgumentMatchers.argThat(expected::equals);
@@ -126,6 +186,4 @@ class AgentToolRouterWhitelistTest {
         return org.mockito.ArgumentMatchers.argThat(actual -> actual != null && actual.equals(exp));
     }
 }
-
-
 

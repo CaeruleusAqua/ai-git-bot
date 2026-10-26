@@ -2,12 +2,16 @@ package org.remus.giteabot.issueworkflow;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotService;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.ai.AiRetryContext;
 import org.remus.giteabot.eventhook.EventHookEventType;
 import org.remus.giteabot.eventhook.EventHookPublisher;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.notification.IssueCommentAcknowledgement;
+import org.remus.giteabot.notification.WorkflowRetryNotices;
+import org.remus.giteabot.prworkflow.WorkflowCancelledException;
 import org.remus.giteabot.prworkflow.config.WorkflowConfiguration;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 import org.springframework.stereotype.Service;
@@ -50,7 +54,9 @@ public class IssueWorkflowOrchestrator {
     private final WorkflowSelectionService workflowSelectionService;
     private final BotService botService;
     private final EventHookPublisher eventHookPublisher;
-    private final GiteaClientFactory giteaClientFactory;
+    private final WorkflowRetryNotices retryNotices;
+    private final IssueCommentAcknowledgement commentAcknowledgement;
+    private final AiIntegrationConcurrencyLimiter concurrencyLimiter;
 
     /**
      * Runs every issue workflow enabled on the bot's issue-assigned
@@ -59,19 +65,42 @@ public class IssueWorkflowOrchestrator {
      * does not prevent the remaining ones from running.
      */
     public void runAssigned(Bot bot, WebhookPayload payload) {
+        IssueRef issue = issueRef(payload);
         for (IssueWorkflow workflow : resolveWorkflows(bot)) {
             try {
-                publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
-                workflow.onIssueAssigned(context(bot, payload, workflow.key()));
+                retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
+                // The slot is taken before the STARTED event goes out, so a job that has
+                // to wait behind the limit is not reported as started.
+                concurrencyLimiter.runWithPermit(bot.getAiIntegration(), () -> {
+                    publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_STARTED, bot, payload, null, true);
+                    workflow.onIssueAssigned(context(bot, payload, workflow.key()));
+                });
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_COMPLETED, bot, payload, null, false);
+            } catch (WorkflowCancelledException cancelled) {
+                log.info("[Bot '{}'] Issue workflow '{}' cancelled: {}",
+                        bot.getName(), workflow.key(), cancelled.getMessage());
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue assignment: {}",
                         bot.getName(), workflow.key(), e.getMessage(), e);
                 botService.recordError(bot, e.getMessage());
                 publishIssueEvent(EventHookEventType.ISSUE_ASSIGNMENT_FAILED, bot, payload,
                         e.getMessage(), false);
+            } finally {
+                AiRetryContext.clear();
             }
         }
+    }
+
+    /**
+     * Returns the issue workflow keys enabled for {@code bot}, or an empty
+     * list when the bot has no issue-assigned workflow configuration.
+     */
+    public static List<String> enabledWorkflowKeys(Bot bot,
+                                                    WorkflowSelectionService workflowSelectionService) {
+        WorkflowConfiguration configuration = bot.getIssueWorkflowConfiguration();
+        return configuration == null
+                ? List.of()
+                : workflowSelectionService.enabledWorkflowKeys(configuration.getId());
     }
 
     /**
@@ -89,37 +118,39 @@ public class IssueWorkflowOrchestrator {
         }
         // Acknowledge immediately with 👀 so the operator knows the bot saw
         // the comment — the same pattern the slash-command handlers use.
-        acknowledgeComment(bot, payload);
+        commentAcknowledgement.acknowledge(bot, payload);
+        IssueRef issue = issueRef(payload);
         for (IssueWorkflow workflow : workflows) {
             try {
-                workflow.onIssueComment(context(bot, payload, workflow.key()));
+                // Installed inside the guarded region (see runAssigned): clearing it in the
+                // finally below is what keeps the notice off the next task on this thread.
+                retryNotices.installForIssue(bot, workflow.key(), issue.owner(), issue.repo(), issue.number());
+                concurrencyLimiter.runWithPermit(bot.getAiIntegration(),
+                        () -> workflow.onIssueComment(context(bot, payload, workflow.key())));
+            } catch (WorkflowCancelledException cancelled) {
+                log.info("[Bot '{}'] Issue workflow '{}' cancelled: {}",
+                        bot.getName(), workflow.key(), cancelled.getMessage());
             } catch (Exception e) {
                 log.error("[Bot '{}'] Issue workflow '{}' failed on issue comment: {}",
                         bot.getName(), workflow.key(), e.getMessage(), e);
                 botService.recordError(bot, e.getMessage());
+            } finally {
+                AiRetryContext.clear();
             }
         }
     }
 
     /**
-     * Best-effort 👀 reaction on the triggering comment. Failures (missing
-     * permission, provider quirks) are logged and never affect the workflow.
+     * Repository coordinates of the issue this payload refers to. Individual
+     * fields stay {@code null} when the payload does not carry them; the
+     * retry-notice component ignores an incomplete target.
      */
-    private void acknowledgeComment(Bot bot, WebhookPayload payload) {
-        if (payload.getComment() == null || payload.getComment().getId() == null) {
-            return;
-        }
-        Long commentId = payload.getComment().getId();
-        try {
-            String owner = payload.getRepository() != null && payload.getRepository().getOwner() != null
-                    ? payload.getRepository().getOwner().getLogin() : null;
-            String repo = payload.getRepository() != null ? payload.getRepository().getName() : null;
-            giteaClientFactory.getApiClient(bot.getGitIntegration())
-                    .addReaction(owner, repo, commentId, "eyes");
-        } catch (Exception e) {
-            log.warn("[Bot '{}'] Failed to add 👀 reaction to comment #{}: {}",
-                    bot.getName(), commentId, e.getMessage());
-        }
+    private static IssueRef issueRef(WebhookPayload payload) {
+        return new IssueRef(
+                payload.getRepository() != null && payload.getRepository().getOwner() != null
+                        ? payload.getRepository().getOwner().getLogin() : null,
+                payload.getRepository() != null ? payload.getRepository().getName() : null,
+                payload.getIssue() != null ? payload.getIssue().getNumber() : null);
     }
 
     /**
@@ -135,7 +166,7 @@ public class IssueWorkflowOrchestrator {
                     bot.getName());
             return List.of();
         }
-        List<String> keys = workflowSelectionService.enabledWorkflowKeys(configuration.getId());
+        List<String> keys = enabledWorkflowKeys(bot, workflowSelectionService);
         if (keys.isEmpty()) {
             log.debug("[Bot '{}'] Issue-assigned configuration '{}' enables no workflows",
                     bot.getName(), configuration.getName());
@@ -183,5 +214,9 @@ public class IssueWorkflowOrchestrator {
             data.put("error", error);
         }
         eventHookPublisher.publish(type, bot, owner, repo, null, issueNumber, data);
+    }
+
+    /** Repository coordinates of a webhook payload's issue; any field may be {@code null}. */
+    private record IssueRef(String owner, String repo, Long number) {
     }
 }

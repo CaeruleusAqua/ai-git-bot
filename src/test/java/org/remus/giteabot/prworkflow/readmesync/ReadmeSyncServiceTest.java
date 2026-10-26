@@ -2,18 +2,24 @@ package org.remus.giteabot.prworkflow.readmesync;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.model.PullRequestDetails;
 import org.remus.giteabot.systemsettings.SystemPrompt;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,7 +53,8 @@ class ReadmeSyncServiceTest {
         agent = mock(ReadmeSyncAgent.class);
         AiClient aiClient = mock(AiClient.class);
         SystemPrompt systemPrompt = new SystemPrompt();
-        service = new ReadmeSyncService(repoClient, aiClient, systemPrompt, workspaceService, agent);
+        service = new ReadmeSyncService(repoClient, aiClient, systemPrompt, workspaceService, agent,
+                mock(WorkflowToolSurfaceFactory.class));
 
         when(repoClient.getPullRequestDiff(anyString(), anyString(), anyLong()))
                 .thenReturn("diff --git a/x b/x\n+change");
@@ -76,7 +83,7 @@ class ReadmeSyncServiceTest {
 
     @Test
     void missingHeadRef_andApiCannotResolve_skipsWithoutCommitting() {
-        when(repoClient.getPullRequestDetails("acme", "my-repo", 42L)).thenReturn(Map.of());
+        when(repoClient.getPullRequestDetails("acme", "my-repo", 42L)).thenReturn(Optional.empty());
 
         ReadmeSyncService.Result result = service.run(
                 request(payloadWithoutHeadRef(), SuiteLifecycleMode.COMMIT_TO_PR));
@@ -84,7 +91,10 @@ class ReadmeSyncServiceTest {
         assertThat(result.status()).isEqualTo(ReadmeSyncService.Result.Status.SKIPPED);
         // The critical guarantee: no clone and no push to any (default) branch.
         verify(workspaceService, never()).prepareWorkspace(
-                anyString(), anyString(), anyString(), any(), any(), anyLong());
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).preparePullRequestWorkspace(
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK));
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
         // And it must never substitute the default branch.
@@ -94,17 +104,20 @@ class ReadmeSyncServiceTest {
     @Test
     void missingHeadRef_butApiResolvesIt_clonesThatBranch() {
         when(repoClient.getPullRequestDetails("acme", "my-repo", 42L))
-                .thenReturn(Map.of("head", Map.of("ref", "feature/login")));
+                .thenReturn(Optional.of(new PullRequestDetails(null, null, null, "feature/login", null, null, null)));
         // Fail the workspace prep so the run stops right after resolution — we only
         // assert which branch it tried to clone.
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(), any(), any(), anyLong()))
+        when(workspaceService.preparePullRequestWorkspace(
+                eq(repoClient), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK)))
                 .thenReturn(WorkspaceResult.failure("stop here"));
 
         service.run(request(payloadWithoutHeadRef(), SuiteLifecycleMode.COMMIT_TO_PR));
 
         ArgumentCaptor<String> branch = ArgumentCaptor.forClass(String.class);
-        verify(workspaceService).prepareWorkspace(
-                eq("acme"), eq("my-repo"), branch.capture(), any(), any(), eq(42L));
+        verify(workspaceService).preparePullRequestWorkspace(
+                eq(repoClient), eq("acme"), eq("my-repo"), branch.capture(), eq(42L),
+                eq(PullRequestWorkspaceMode.PUSH_BACK));
         assertThat(branch.getValue()).isEqualTo("feature/login");
         verify(repoClient, never()).getDefaultBranch(anyString(), anyString());
     }
@@ -115,15 +128,67 @@ class ReadmeSyncServiceTest {
         WebhookPayload.Head head = new WebhookPayload.Head();
         head.setRef("feature/from-payload");
         payload.getPullRequest().setHead(head);
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(), any(), any(), anyLong()))
+        when(workspaceService.preparePullRequestWorkspace(
+                eq(repoClient), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK)))
                 .thenReturn(WorkspaceResult.failure("stop here"));
 
         service.run(request(payload, SuiteLifecycleMode.COMMIT_TO_PR));
 
         ArgumentCaptor<String> branch = ArgumentCaptor.forClass(String.class);
-        verify(workspaceService).prepareWorkspace(
-                eq("acme"), eq("my-repo"), branch.capture(), any(), any(), eq(42L));
+        verify(workspaceService).preparePullRequestWorkspace(
+                eq(repoClient), eq("acme"), eq("my-repo"), branch.capture(), eq(42L),
+                eq(PullRequestWorkspaceMode.PUSH_BACK));
         assertThat(branch.getValue()).isEqualTo("feature/from-payload");
         verify(repoClient, never()).getPullRequestDetails(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void offerAsPr_onAuthoritativeFork_failsBeforePreparingWorkspace() {
+        WebhookPayload payload = payloadWithoutHeadRef();
+        WebhookPayload.Head head = new WebhookPayload.Head();
+        head.setRef("main");
+        payload.getPullRequest().setHead(head);
+        when(workspaceService.isAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L)).thenReturn(true);
+
+        ReadmeSyncService.Result result = service.run(
+                request(payload, SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(ReadmeSyncService.Result.Status.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void offerAsPr_followUpCreationFailure_isWorkflowFailure(@TempDir Path workspace) throws Exception {
+        when(repoClient.isPullRequestOpen("acme", "my-repo", 42L)).thenReturn(true);
+        Files.writeString(workspace.resolve("README.md"), "before");
+        WebhookPayload payload = payloadWithoutHeadRef();
+        WebhookPayload.Head head = new WebhookPayload.Head();
+        head.setRef("feature/docs");
+        payload.getPullRequest().setHead(head);
+        when(workspaceService.prepareWorkspace(
+                repoClient, "acme", "my-repo", "feature/docs", 42L))
+                .thenReturn(WorkspaceResult.success(workspace));
+        when(agent.write(any(), any(), any(), anyString(), any(), org.mockito.ArgumentMatchers.anyInt()))
+                .thenAnswer(invocation -> {
+                    ReadmeSyncToolContext toolContext = invocation.getArgument(2);
+                    Files.writeString(workspace.resolve("README.md"), "after");
+                    toolContext.recordUpdated("README.md");
+                    return new ReadmeSyncAgent.Result(1, "updated", false);
+                });
+        when(workspaceService.listChangedFiles(workspace)).thenReturn(List.of("README.md"));
+        when(workspaceService.commitAndPush(eq(workspace), anyString(), anyString(),
+                anyString(), anyString(), eq(true), any(Runnable.class))).thenReturn(true);
+        when(repoClient.createPullRequest(eq("acme"), eq("my-repo"), anyString(), anyString(),
+                anyString(), eq("feature/docs"))).thenReturn(null);
+
+        ReadmeSyncService.Result result = service.run(
+                request(payload, SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(ReadmeSyncService.Result.Status.FAILED);
+        assertThat(result.summary()).contains("follow-up PR creation failed");
     }
 }

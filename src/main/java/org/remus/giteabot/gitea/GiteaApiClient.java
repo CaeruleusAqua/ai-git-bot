@@ -1,15 +1,23 @@
 package org.remus.giteabot.gitea;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.gitea.model.GiteaCommit;
+import org.remus.giteabot.gitea.model.GiteaPullRequest;
 import org.remus.giteabot.gitea.model.GiteaReview;
 import org.remus.giteabot.gitea.model.GiteaReviewComment;
+import org.remus.giteabot.gitea.model.GiteaTree;
 import org.remus.giteabot.repository.ArtifactCommentRenderer;
 import org.remus.giteabot.repository.ArtifactUploadSupport;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.repository.SshEndpoint;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
+import org.remus.giteabot.repository.model.PullRequestCommit;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.springframework.core.ParameterizedTypeReference;
@@ -21,9 +29,11 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
-import java.util.Base64;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Gitea-specific implementation of {@link RepositoryApiClient}.
@@ -49,6 +59,194 @@ public class GiteaApiClient implements RepositoryApiClient {
     @Override
     public RepositoryCredentials getCredentials() {
         return credentials;
+    }
+
+    @Override
+    public boolean requiresAuthoritativePullRequestHead() {
+        return true;
+    }
+
+    @Override
+    public PullRequestHead getPullRequestHead(String owner, String repo, Long pullNumber,
+                                              String expectedBranch) {
+        GiteaPullRequest pr = fetchPullRequest(owner, repo, pullNumber);
+        GiteaPullRequest.GiteaBranch head = pr != null ? pr.getHead() : null;
+        if (head == null) {
+            throw new IllegalStateException("Gitea pull request did not provide a head object");
+        }
+        String branch = requiredString(head.getRef(), "Gitea pull request head ref is missing");
+        String expected = normalizeBranch(expectedBranch);
+        String actual = normalizeBranch(branch);
+        if (expected == null || !Objects.equals(actual, expected)) {
+            throw new IllegalStateException("Gitea pull request head branch '" + actual
+                    + "' does not match expected branch '" + expected + "'");
+        }
+        GiteaPullRequest.GiteaRepository repository = head.getRepo();
+        if (repository == null) {
+            throw new IllegalStateException("Gitea pull request head repository is missing");
+        }
+        String repositoryName = nonBlank(repository.getName());
+        String sourceOwner = repository.getOwner() != null ? nonBlank(repository.getOwner().getLogin()) : null;
+        String fullName = nonBlank(repository.getFullName());
+        if ((sourceOwner == null || repositoryName == null) && fullName != null) {
+            int separator = fullName.indexOf('/');
+            if (separator > 0 && separator < fullName.length() - 1) {
+                sourceOwner = sourceOwner == null ? fullName.substring(0, separator) : sourceOwner;
+                repositoryName = repositoryName == null ? fullName.substring(separator + 1) : repositoryName;
+            }
+        }
+        if (sourceOwner == null || repositoryName == null) {
+            throw new IllegalStateException("Gitea pull request head repository coordinates are incomplete");
+        }
+        return new PullRequestHead(sourceOwner, repositoryName, actual, nonBlank(head.getSha()));
+    }
+
+    private String requiredString(String value, String message) {
+        String resolved = nonBlank(value);
+        if (resolved == null) {
+            throw new IllegalStateException(message);
+        }
+        return resolved;
+    }
+
+    private String nonBlank(String value) {
+        return value != null && !value.isBlank() ? value : null;
+    }
+
+    private String normalizeBranch(String branch) {
+        if (branch == null || branch.isBlank()) {
+            return null;
+        }
+        return branch.startsWith("refs/heads/")
+                ? branch.substring("refs/heads/".length())
+                : branch;
+    }
+
+    @Override
+    public String getRepositoryRemote(String owner, String repo) {
+        if (!credentials.usesSsh()) {
+            return RepositoryApiClient.super.getRepositoryRemote(owner, repo);
+        }
+        Map<String, Object> repoInfo = giteaRestClient.get()
+                .uri("/api/v1/repos/{owner}/{repo}", owner, repo)
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        return validateSshUrl(repoInfo == null ? null : repoInfo.get("ssh_url"),
+                "Gitea did not provide an SSH clone URL for " + owner + "/" + repo);
+    }
+
+    /** Returns an SSH clone URL from a repository visible to the authenticated user. */
+    public String getAnySshCloneUrl() {
+        Map<String, Object> searchResult = giteaRestClient.get()
+                .uri(uriBuilder -> uriBuilder.path("/api/v1/repos/search")
+                        .queryParam("limit", 1).queryParam("private", true).build())
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        Object data = searchResult == null ? null : searchResult.get("data");
+        if (data instanceof List<?> repositories && !repositories.isEmpty()
+                && repositories.getFirst() instanceof Map<?, ?> repository) {
+            return validateSshUrl(repository.get("ssh_url"),
+                    "Gitea did not provide an SSH URL for a visible repository");
+        }
+        throw new IllegalStateException("Gitea did not provide an SSH URL for a visible repository");
+    }
+
+    /** Returns the immutable ID of the user authenticated by this client's token. */
+    public long getCurrentUserId() {
+        Map<String, Object> user = giteaRestClient.get().uri("/api/v1/user")
+                .retrieve().body(new ParameterizedTypeReference<>() {});
+        Object id = user == null ? null : user.get("id");
+        if (id instanceof Number userId && userId.longValue() > 0) {
+            return userId.longValue();
+        }
+        throw new IllegalStateException("Gitea did not provide the authenticated user's ID");
+    }
+
+    /** Returns all SSH key IDs with the exact title, across paginated user keys. */
+    public List<Long> getSshKeyIdsByTitle(String title) {
+        return getSshKeyIds(title);
+    }
+
+    /** Returns all SSH key IDs owned by the authenticated user. */
+    public List<Long> getSshKeyIds() {
+        return getSshKeyIds(null);
+    }
+
+    private List<Long> getSshKeyIds(String title) {
+        List<Long> ids = new ArrayList<>();
+        for (int page = 1; ; page++) {
+            int currentPage = page;
+            List<Map<String, Object>> keys = giteaRestClient.get()
+                    .uri(uriBuilder -> uriBuilder.path("/api/v1/user/keys")
+                            .queryParam("page", currentPage).queryParam("limit", 50).build())
+                    .retrieve().body(new ParameterizedTypeReference<>() {});
+            if (keys == null) {
+                throw new IllegalStateException("Gitea did not return its SSH key list");
+            }
+            if (keys.isEmpty()) {
+                return ids;
+            }
+            for (Map<String, Object> key : keys) {
+                if (!(key.get("id") instanceof Number id) || id.longValue() <= 0
+                        || !(key.get("title") instanceof String)) {
+                    throw new IllegalStateException("Gitea returned an invalid SSH key entry");
+                }
+                if (title == null || title.equals(key.get("title"))) {
+                    ids.add(id.longValue());
+                }
+            }
+        }
+    }
+
+    /** Registers a writable SSH public key for the authenticated Gitea user. */
+    public long createSshKey(String title, String publicKey) {
+        Map<String, Object> response = giteaRestClient.post().uri("/api/v1/user/keys")
+                .body(Map.of("title", title, "key", publicKey, "read_only", false))
+                .retrieve().body(new ParameterizedTypeReference<>() {});
+        Object id = response == null ? null : response.get("id");
+        if (id instanceof Number number && number.longValue() > 0) {
+            return number.longValue();
+        }
+        throw new IllegalStateException("Gitea did not return an ID for the registered SSH key");
+    }
+
+    /** Deletes an SSH public key owned by the authenticated Gitea user. */
+    public void deleteSshKey(long id) {
+        giteaRestClient.delete().uri("/api/v1/user/keys/{id}", id).retrieve().toBodilessEntity();
+    }
+
+    @Override
+    public Optional<PullRequestDetails> getPullRequestDetails(String owner, String repo, Long pullNumber) {
+        return Optional.ofNullable(fetchPullRequest(owner, repo, pullNumber))
+                .map(GiteaPullRequest::toPullRequestDetails);
+    }
+
+    private GiteaPullRequest fetchPullRequest(String owner, String repo, Long pullNumber) {
+        log.info("Fetching pull-request #{} details in {}/{}", pullNumber, owner, repo);
+        return giteaRestClient.get()
+                .uri("/api/v1/repos/{owner}/{repo}/pulls/{index}", owner, repo, pullNumber)
+                .retrieve()
+                .body(GiteaPullRequest.class);
+    }
+
+    private String validateSshUrl(Object sshUrl, String missingMessage) {
+        if (!(sshUrl instanceof String url) || url.isBlank()) {
+            throw new IllegalStateException(missingMessage);
+        }
+        SshEndpoint endpoint;
+        try {
+            endpoint = SshEndpoint.parse(url);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("Gitea returned an invalid SSH clone URL", e);
+        }
+        SshEndpoint.fromKnownHosts(credentials.sshKnownHosts()).ifPresent(expected -> {
+            if (!expected.matches(endpoint)) {
+                throw new IllegalStateException("Gitea SSH clone URL endpoint " + endpoint.host() + ":"
+                        + endpoint.port() + " does not match known_hosts endpoint "
+                        + expected.host() + ":" + expected.port());
+            }
+        });
+        return url;
     }
 
     @Override
@@ -113,14 +311,25 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        giteaRestClient.post()
-                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, pullNumber)
-                .body(new CommentRequest(body))
-                .retrieve()
-                .toBodilessEntity();
+        Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
         log.info("Comment posted successfully");
+        return RepositoryApiClient.commentId(response);
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        giteaRestClient.patch()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/comments/{id}", owner, repo, commentId)
+                .body(new CommentRequest(body))
+                .retrieve().toBodilessEntity();
+    }
+
+    private RestClient.ResponseSpec commentCreationRequest(String owner, String repo, Long number, String body) {
+        return giteaRestClient.post()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, number)
+                .body(new CommentRequest(body)).retrieve();
     }
 
     /**
@@ -208,11 +417,7 @@ public class GiteaApiClient implements RepositoryApiClient {
     @Override
     public void postIssueComment(String owner, String repo, Long issueNumber, String body) {
         log.info("Posting comment on issue #{} in {}/{}", issueNumber, owner, repo);
-        giteaRestClient.post()
-                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/comments", owner, repo, issueNumber)
-                .body(new CommentRequest(body))
-                .retrieve()
-                .toBodilessEntity();
+        commentCreationRequest(owner, repo, issueNumber, body).toBodilessEntity();
         log.info("Comment posted successfully");
     }
 
@@ -270,6 +475,26 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' reaction to PR #{} in {}/{}", reaction, pullNumber, owner, repo);
+        postIssueResourceReaction(owner, repo, pullNumber, reaction);
+    }
+
+    @Override
+    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        log.info("Adding '{}' reaction to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+        postIssueResourceReaction(owner, repo, issueNumber, reaction);
+    }
+
+    private void postIssueResourceReaction(String owner, String repo, Long issueNumber, String reaction) {
+        giteaRestClient.post()
+                .uri("/api/v1/repos/{owner}/{repo}/issues/{index}/reactions", owner, repo, issueNumber)
+                .body(new ReactionRequest(reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
     public void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                         String filePath, int line, String body) {
         log.info("Posting inline review comment on PR #{} in {}/{} at {}:{}", pullNumber, owner, repo, filePath, line);
@@ -308,13 +533,15 @@ public class GiteaApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for PR #{} in {}/{}", pullNumber, owner, repo);
-        List<Map<String, Object>> commits = giteaRestClient.get()
+        List<GiteaCommit> commits = giteaRestClient.get()
                 .uri("/api/v1/repos/{owner}/{repo}/pulls/{index}/commits", owner, repo, pullNumber)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
-        return commits != null ? commits : List.of();
+        return commits != null
+                ? commits.stream().map(GiteaCommit::toPullRequestCommit).toList()
+                : List.of();
     }
 
     @Override
@@ -357,17 +584,16 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         log.info("Fetching repository tree for {}/{} at ref={}", owner, repo, ref);
-        Map<String, Object> result = giteaRestClient.get()
+        GiteaTree result = giteaRestClient.get()
                 .uri("/api/v1/repos/{owner}/{repo}/git/trees/{ref}?recursive=true", owner, repo, ref)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        if (result != null && result.containsKey("tree")) {
-            return (List<Map<String, Object>>) result.get("tree");
+                .body(GiteaTree.class);
+        if (result == null || result.getTree() == null) {
+            return List.of();
         }
-        return List.of();
+        return result.getTree().stream().map(GiteaTree.Entry::toRepositoryTreeEntry).toList();
     }
 
     @Override
@@ -387,34 +613,6 @@ public class GiteaApiClient implements RepositoryApiClient {
     }
 
 
-
-    @Override
-    public void createOrUpdateFile(String owner, String repo, String path, String content,
-                                   String message, String branch, String sha) {
-        log.info("Creating/updating file {} on branch '{}' in {}/{}", path, branch, owner, repo);
-        String base64Content = Base64.getEncoder().encodeToString(content.getBytes());
-
-        if (sha != null) {
-            giteaRestClient.put()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/api/v1/repos/{owner}/{repo}/contents/")
-                            .path(path)
-                            .build(owner, repo))
-                    .body(new UpdateFileRequest(base64Content, message, branch, sha))
-                    .retrieve()
-                    .toBodilessEntity();
-        } else {
-            giteaRestClient.post()
-                    .uri(uriBuilder -> uriBuilder
-                            .path("/api/v1/repos/{owner}/{repo}/contents/")
-                            .path(path)
-                            .build(owner, repo))
-                    .body(new CreateFileRequest(base64Content, message, branch))
-                    .retrieve()
-                    .toBodilessEntity();
-        }
-        log.info("File {} committed successfully", path);
-    }
 
 
     @Override
@@ -601,8 +799,6 @@ public class GiteaApiClient implements RepositoryApiClient {
     record ReactionRequest(String content) {}
     record InlineReviewRequest(String body, String event, List<InlineReviewComment> comments) {}
     record InlineReviewComment(String body, @com.fasterxml.jackson.annotation.JsonProperty("new_position") int newPosition, String path) {}
-    record CreateFileRequest(String content, String message, String branch) {}
-    record UpdateFileRequest(String content, String message, String branch, String sha) {}
     record CreatePullRequest(String title, String body, String head, String base) {}
     record CreateIssue(String title, String body) {}
     record EditIssueAssigneesRequest(List<String> assignees) {}

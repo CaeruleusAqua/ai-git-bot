@@ -7,12 +7,13 @@ import org.remus.giteabot.admin.AiClientFactory;
 import org.remus.giteabot.admin.AiIntegration;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.ai.AiClient;
 import org.remus.giteabot.config.AgentConfigProperties;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.E2eTestFramework;
 import org.remus.giteabot.prworkflow.e2e.PrTestCase;
 import org.remus.giteabot.prworkflow.e2e.PrTestCaseRepository;
@@ -27,6 +28,7 @@ import org.remus.giteabot.repository.RepositoryApiClient;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -43,14 +45,9 @@ class PlaywrightTestSuiteRunnerTest {
     @TempDir Path workspace;
 
     private AiClientFactory aiClientFactory;
-    private GiteaClientFactory giteaClientFactory;
-    private RepositoryApiClient apiClient;
     private PrTestCaseRepository caseRepository;
     private PrWorkflowToolExecutor toolExecutor;
 
-    private TestPlannerAgent plannerAgent;
-    private TestAuthorAgent authorAgent;
-    private TestRunnerAgent runnerAgent;
     private PlaywrightTestSuiteRunner suiteRunner;
 
     private Bot bot;
@@ -58,26 +55,27 @@ class PlaywrightTestSuiteRunnerTest {
     @BeforeEach
     void setUp() {
         aiClientFactory = mock(AiClientFactory.class);
-        giteaClientFactory = mock(GiteaClientFactory.class);
-        apiClient = mock(RepositoryApiClient.class);
+        RepositoryApiClientFactory repositoryApiClientFactory = mock(RepositoryApiClientFactory.class);
+        RepositoryApiClient apiClient = mock(RepositoryApiClient.class);
         caseRepository = mock(PrTestCaseRepository.class);
         toolExecutor = mock(PrWorkflowToolExecutor.class);
         ToolCatalog catalog = new ToolCatalog(new AgentConfigProperties());
 
-        plannerAgent = new TestPlannerAgent(toolExecutor);
-        authorAgent = new TestAuthorAgent(catalog, toolExecutor);
-        runnerAgent = new TestRunnerAgent(catalog, toolExecutor);
+        TestPlannerAgent plannerAgent = new TestPlannerAgent(toolExecutor);
+        TestAuthorAgent authorAgent = new TestAuthorAgent(catalog, toolExecutor);
+        TestRunnerAgent runnerAgent = new TestRunnerAgent(catalog, toolExecutor);
 
         suiteRunner = new PlaywrightTestSuiteRunner(
-                aiClientFactory, giteaClientFactory,
-                plannerAgent, authorAgent, runnerAgent, caseRepository, toolExecutor);
+                aiClientFactory, repositoryApiClientFactory,
+                plannerAgent, authorAgent, runnerAgent, caseRepository, toolExecutor,
+                mock(WorkflowToolSurfaceFactory.class));
 
         bot = new Bot();
         bot.setName("acme-bot");
         bot.setAiIntegration(new AiIntegration());
         bot.setGitIntegration(new GitIntegration());
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(apiClient);
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(apiClient);
         when(apiClient.getPullRequestDiff(any(), any(), any()))
                 .thenReturn("diff --git a/srv.js b/srv.js\n+console.log('hi');\n");
     }
@@ -294,6 +292,6 @@ class PlaywrightTestSuiteRunnerTest {
     }
 
     @SuppressWarnings("unused") // retained for future test scenarios
-    private static Iterator<AiClient> dummy() { return new ArrayList<AiClient>().iterator(); }
+    private static Iterator<AiClient> dummy() { return Collections.emptyIterator(); }
 }
 

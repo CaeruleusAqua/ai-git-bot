@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.remus.giteabot.agent.AgentCollaborators;
 import org.remus.giteabot.agent.IssueImplementationContext;
 import org.remus.giteabot.agent.IssueImplementationService;
+import org.remus.giteabot.agent.codeexecution.PythonExecutionService;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.agent.tools.ToolCatalog;
 import org.remus.giteabot.agent.validation.ToolExecutionService;
@@ -36,7 +37,7 @@ import org.springframework.stereotype.Component;
 public class AgentServiceFactory {
 
     private final AiClientFactory aiClientFactory;
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final PromptService promptService;
     private final AgentConfigProperties agentConfig;
     private final AgentSessionService agentSessionService;
@@ -46,20 +47,21 @@ public class AgentServiceFactory {
     private final McpOrchestrationService mcpOrchestrationService;
     private final McpToolSelectionService mcpToolSelectionService;
     private final BotToolSelectionService botToolSelectionService;
+    private final PythonExecutionService pythonExecution;
 
     /**
      * Creates a per-bot {@link IssueImplementationService} using the bot's AI and Git integrations.
      */
     public IssueImplementationService createIssueImplementationService(Bot bot) {
         AiClient aiClient = getAiClient(bot);
-        RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
+        RepositoryApiClient repoClient = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         McpToolCatalog mcpToolCatalog = discoverMcpToolCatalog(bot);
         requireSystemPrompt(bot);
         IssueImplementationContext context = new IssueImplementationContext(
                 repoClient,
                 aiClient,
                 bot.getSystemPrompt().getIssueAgentSystemPrompt(),
-                bot.getUsername(),
+                bot.getGitIntegration().getUsername(),
                 mcpOrchestrationService,
                 bot.getMcpConfiguration(),
                 mcpToolCatalog,
@@ -70,7 +72,7 @@ public class AgentServiceFactory {
 
     private AgentCollaborators collaborators() {
         return new AgentCollaborators(promptService, agentConfig, agentSessionService,
-                toolExecutionService, toolCatalog, workspaceService);
+                toolExecutionService, toolCatalog, workspaceService, pythonExecution);
     }
 
     /**
@@ -78,15 +80,15 @@ public class AgentServiceFactory {
      */
     public WriterAgentService createWriterAgentService(Bot bot) {
         AiClient aiClient = getAiClient(bot);
-        RepositoryApiClient repoClient = giteaClientFactory.getApiClient(bot.getGitIntegration());
+        RepositoryApiClient repoClient = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
         McpToolCatalog mcpToolCatalog = discoverMcpToolCatalog(bot);
         requireSystemPrompt(bot);
         return new WriterAgentService(repoClient, aiClient, promptService, agentConfig,
                 agentSessionService, toolExecutionService, toolCatalog, workspaceService,
-                bot.getSystemPrompt().getWriterAgentSystemPrompt(), bot.getUsername(),
+                bot.getSystemPrompt().getWriterAgentSystemPrompt(), bot.getGitIntegration().getUsername(),
                 mcpOrchestrationService, bot.getMcpConfiguration(), mcpToolCatalog,
                 botToolSelectionService.allowedBuiltinTools(bot.getToolConfiguration()),
-                getContextWindowTokens(bot));
+                getContextWindowTokens(bot), pythonExecution);
     }
 
     private McpToolCatalog discoverMcpToolCatalog(Bot bot) {

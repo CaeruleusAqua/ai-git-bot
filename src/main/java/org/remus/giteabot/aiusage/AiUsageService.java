@@ -30,14 +30,17 @@ public class AiUsageService {
     /** Page size of the tables on the "Usage" page. */
     public static final int PAGE_SIZE = 20;
 
+    /** Upper bound for user-requested page sizes — keeps a single page query bounded. */
+    public static final int MAX_PAGE_SIZE = 100;
+
     /** Page size for streaming exports — keeps heap bounded (~10 MB worst case). */
     private static final int EXPORT_PAGE_SIZE = 100;
 
     private static final int MAX_ERROR_MESSAGE_LENGTH = 2000;
     private static final int MAX_STACK_TRACE_LENGTH = 100_000;
     private static final Set<String> USAGE_SORT_COLUMNS =
-            Set.of("timestamp", "aiIntegrationName", "sessionId", "inputTokens", "outputTokens",
-                    "cacheCreationInputTokens", "cacheReadInputTokens");
+            Set.of("timestamp", "aiIntegrationName", "sessionId", "round", "inputTokens",
+                    "outputTokens", "cacheCreationInputTokens", "cacheReadInputTokens");
     private static final Set<String> ERROR_SORT_COLUMNS =
             Set.of("timestamp", "aiIntegrationName", "sessionId", "errorMessage");
 
@@ -53,9 +56,12 @@ public class AiUsageService {
      * <p>{@code inputTokens} is the total processed input (for cache-capable
      * providers: uncached + cache write + cache read); the two cache fields
      * carry the breakdown so cache activity is visible on the Usage page.</p>
+     *
+     * <p>{@code round} is the agent-loop round that produced the call, or
+     * {@code null} when the call was not made inside an agent loop.</p>
      */
     @Transactional
-    public void recordUsage(String aiIntegrationName, String sessionId,
+    public void recordUsage(String aiIntegrationName, String sessionId, Integer round,
                             long inputTokens, long outputTokens,
                             long cacheCreationInputTokens, long cacheReadInputTokens,
                             String rawRequest, String rawResponse) {
@@ -64,6 +70,7 @@ public class AiUsageService {
             entry.setTimestamp(Instant.now());
             entry.setAiIntegrationName(aiIntegrationName);
             entry.setSessionId(sessionId);
+            entry.setRound(round);
             entry.setInputTokens(inputTokens);
             entry.setOutputTokens(outputTokens);
             entry.setCacheCreationInputTokens(cacheCreationInputTokens);
@@ -105,19 +112,29 @@ public class AiUsageService {
     }
 
     @Transactional(readOnly = true)
-    public Page<AiUsageLog> findUsage(Instant from, Instant to, int page,
+    public Page<AiUsageLog> findUsage(Instant from, Instant to, int page, int pageSize,
                                       String sortColumn, boolean ascending) {
         String column = USAGE_SORT_COLUMNS.contains(sortColumn) ? sortColumn : "timestamp";
         return usageRepository.findByTimestampBetween(effectiveFrom(from), effectiveTo(to),
-                PageRequest.of(page, PAGE_SIZE, sortOf(column, ascending)));
+                PageRequest.of(page, effectivePageSize(pageSize), sortOf(column, ascending)));
     }
 
     @Transactional(readOnly = true)
-    public Page<AiErrorLog> findErrors(Instant from, Instant to, int page,
+    public Page<AiErrorLog> findErrors(Instant from, Instant to, int page, int pageSize,
                                        String sortColumn, boolean ascending) {
         String column = ERROR_SORT_COLUMNS.contains(sortColumn) ? sortColumn : "timestamp";
         return errorRepository.findByTimestampBetween(effectiveFrom(from), effectiveTo(to),
-                PageRequest.of(page, PAGE_SIZE, sortOf(column, ascending)));
+                PageRequest.of(page, effectivePageSize(pageSize), sortOf(column, ascending)));
+    }
+
+    /**
+     * Normalizes a user-requested page size: non-positive values fall back to
+     * {@link #PAGE_SIZE}, oversized values are clamped to {@link #MAX_PAGE_SIZE}
+     * (the largest size the rows-per-page select offers) so a single request can
+     * never force an unbounded page query.
+     */
+    private static int effectivePageSize(int pageSize) {
+        return pageSize > 0 ? Math.min(pageSize, MAX_PAGE_SIZE) : PAGE_SIZE;
     }
 
     /**

@@ -2,8 +2,6 @@ package org.remus.giteabot.admin;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -34,9 +32,6 @@ public class Bot {
 
     @Column(nullable = false, unique = true)
     private String name;
-
-    @Column(nullable = false)
-    private String username;
 
     @ManyToOne(optional = false)
     @JoinColumn(name = "system_prompt_id", nullable = false)
@@ -102,16 +97,16 @@ public class Bot {
     private boolean runOnIssueCreation = false;
 
     /**
-     * @deprecated Issue behaviour is no longer dispatched via the bot type.
-     * It is resolved from {@link #getIssueWorkflowConfiguration()} (see the
-     * {@code issueworkflow} package); PR behaviour from
-     * {@link #getWorkflowConfiguration()}. The column is retained for one
-     * release as migration safety and is scheduled for removal.
+     * Glob pattern (comma-separated list) that allowlists which PR
+     * <em>target</em> branches (base refs) may start a PR workflow — e.g.
+     * {@code releases/*} in a git-flow setup. Empty (the default) or {@code *}
+     * allows every branch/tag. Matching uses gobwas/glob semantics
+     * ({@code *}, {@code ?}, {@code [..]}, {@code {a,b}}, {@code **}) and may use
+     * full ref names such as {@code refs/heads/develop}. See
+     * {@link org.remus.giteabot.util.BranchFilter}.
      */
-    @Deprecated
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private BotType botType = BotType.CODING;
+    @Column(name = "branch_filter", length = 1000)
+    private String branchFilter = "";
 
     @Column(nullable = false)
     private long webhookCallCount = 0;

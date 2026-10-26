@@ -4,11 +4,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
+import org.remus.giteabot.prworkflow.WorkflowToolSurfaceFactory;
 import org.remus.giteabot.prworkflow.e2e.SuiteLifecycleMode;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.systemsettings.SystemPrompt;
@@ -18,7 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -45,7 +47,8 @@ class I18nCoverageServiceTest {
         agent = mock(I18nCoverageAgent.class);
         AiClient aiClient = mock(AiClient.class);
         SystemPrompt systemPrompt = new SystemPrompt();
-        service = new I18nCoverageService(repoClient, aiClient, systemPrompt, workspaceService, agent);
+        service = new I18nCoverageService(repoClient, aiClient, systemPrompt, workspaceService, agent,
+                mock(WorkflowToolSurfaceFactory.class));
     }
 
     private I18nCoverageService.Request request(WebhookPayload payload, SuiteLifecycleMode mode) {
@@ -76,27 +79,33 @@ class I18nCoverageServiceTest {
 
     @Test
     void missingHeadRef_andApiCannotResolve_skipsWithoutCloning() {
-        when(repoClient.getPullRequestDetails("acme", "my-repo", 42L)).thenReturn(Map.of());
+        when(repoClient.getPullRequestDetails("acme", "my-repo", 42L)).thenReturn(Optional.empty());
 
         I18nCoverageService.Result result = service.run(
                 request(payloadWithHead(null), SuiteLifecycleMode.COMMIT_TO_PR));
 
         assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.SKIPPED);
         verify(workspaceService, never()).prepareWorkspace(
-                anyString(), anyString(), anyString(), any(), any(), anyLong());
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).preparePullRequestWorkspace(
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK));
         verify(repoClient, never()).getDefaultBranch(anyString(), anyString());
     }
 
     @Test
     void headRefInPayload_isUsedForClone() {
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(), any(), any(), anyLong()))
+        when(workspaceService.preparePullRequestWorkspace(
+                eq(repoClient), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK)))
                 .thenReturn(WorkspaceResult.failure("stop here"));
 
         service.run(request(payloadWithHead("feature/login"), SuiteLifecycleMode.COMMIT_TO_PR));
 
         ArgumentCaptor<String> branch = ArgumentCaptor.forClass(String.class);
-        verify(workspaceService).prepareWorkspace(
-                eq("acme"), eq("my-repo"), branch.capture(), any(), any(), eq(42L));
+        verify(workspaceService).preparePullRequestWorkspace(
+                eq(repoClient), eq("acme"), eq("my-repo"), branch.capture(), eq(42L),
+                eq(PullRequestWorkspaceMode.PUSH_BACK));
         assertThat(branch.getValue()).isEqualTo("feature/login");
     }
 
@@ -105,14 +114,16 @@ class I18nCoverageServiceTest {
         Files.createDirectories(ws.resolve("i18n"));
         Files.writeString(ws.resolve("i18n/messages_en.properties"), "a=1", StandardCharsets.UTF_8);
         Files.writeString(ws.resolve("i18n/messages_de.properties"), "a=1", StandardCharsets.UTF_8);
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(), any(), any(), anyLong()))
+        when(workspaceService.preparePullRequestWorkspace(
+                eq(repoClient), anyString(), anyString(), anyString(), anyLong(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK)))
                 .thenReturn(WorkspaceResult.success(ws));
 
         I18nCoverageService.Result result = service.run(
                 request(payloadWithHead("feature/x"), SuiteLifecycleMode.COMMIT_TO_PR));
 
         assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.SUCCESS);
-        verify(agent, never()).generate(any(), any(), anyString(), any(), any(), anyString(),
+        verify(agent, never()).generate(any(), any(), any(), anyString(), any(), any(), anyString(),
                 org.mockito.ArgumentMatchers.anyInt());
         verify(workspaceService, never()).commitAndPush(
                 any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
@@ -130,7 +141,51 @@ class I18nCoverageServiceTest {
 
         assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.SKIPPED);
         verify(workspaceService, never()).prepareWorkspace(
-                anyString(), anyString(), anyString(), any(), any(), anyLong());
+                any(RepositoryApiClient.class), anyString(), anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void offerAsPr_onAuthoritativeFork_failsBeforePreparingWorkspace() {
+        when(workspaceService.isAuthoritativePullRequestFromFork(
+                repoClient, "acme", "my-repo", "main", 42L)).thenReturn(true);
+
+        I18nCoverageService.Result result = service.run(
+                request(payloadWithHead("main"), SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), anyString(), anyString(), anyString(), anyLong());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void offerAsPr_followUpCreationFailure_isWorkflowFailure(@TempDir Path workspace) throws Exception {
+        Files.createDirectories(workspace.resolve("i18n"));
+        Files.writeString(workspace.resolve("i18n/messages_en.properties"), "a=1\nb=2");
+        Files.writeString(workspace.resolve("i18n/messages_de.properties"), "a=1");
+        when(workspaceService.prepareWorkspace(
+                repoClient, "acme", "my-repo", "feature/i18n", 42L))
+                .thenReturn(WorkspaceResult.success(workspace));
+        when(repoClient.getPullRequestDiff("acme", "my-repo", 42L)).thenReturn("diff");
+        when(agent.generate(any(), any(), any(), anyString(), any(), any(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation -> {
+                    I18nCoverageToolContext toolContext = invocation.getArgument(2);
+                    Files.writeString(workspace.resolve("i18n/messages_de.properties"), "a=1\nb=2");
+                    toolContext.recordUpdated("i18n/messages_de.properties");
+                    return new I18nCoverageAgent.Result(1, "updated", false);
+                });
+        when(workspaceService.listChangedFiles(workspace))
+                .thenReturn(List.of("i18n/messages_de.properties"));
+        when(workspaceService.commitAndPush(eq(workspace), anyString(), anyString(),
+                anyString(), anyString(), eq(true))).thenReturn(true);
+        when(repoClient.createPullRequest(eq("acme"), eq("my-repo"), anyString(), anyString(),
+                anyString(), eq("feature/i18n"))).thenReturn(null);
+
+        I18nCoverageService.Result result = service.run(
+                request(payloadWithHead("feature/i18n"), SuiteLifecycleMode.OFFER_AS_PR));
+
+        assertThat(result.status()).isEqualTo(I18nCoverageService.Result.Status.FAILED);
+        assertThat(result.summary()).contains("follow-up PR creation failed");
     }
 
     /**

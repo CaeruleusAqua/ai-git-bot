@@ -6,7 +6,7 @@ Welcome! The documentation is organized by **who you are**. Pick your role and s
 
 ## 👤 Users — *I work with the Git platform, a bot is already set up for me*
 
-You interact with AI-Git-Bot entirely through Gitea / GitHub / GitLab / Bitbucket — assigning issues, requesting reviews, and mentioning the bot in comments.
+You interact with AI-Git-Bot entirely through Gitea / GitHub / GitLab / Bitbucket / Azure DevOps — assigning issues, requesting reviews, and mentioning the bot in comments.
 
 | Document | What it covers |
 |---|---|
@@ -23,6 +23,7 @@ You run the software, connect it to your Git hosts and AI providers, and configu
 | Document | What it covers |
 |---|---|
 | [Deployment](DEPLOYMENT.md) | Docker Compose deployment, environment variables, production setup |
+| [Secret References](SECRET_REFERENCES.md) | Keeping credentials out of configuration with `${env:NAME}` references: syntax, resolution, whitelist and reserved names |
 | [Admin Guide](USER_GUIDE.md) | The admin web UI: creating bots, AI integrations, Git integrations, workflow configurations, interface language |
 | [Migration 1.0 → 1.1](MIGRATION_1.0_TO_1.1.md) · [Migration 1.6 → 1.7](MIGRATION_1.6_TO_1.7.md) · [Migration 1.12 → 1.13](MIGRATION_1.12_TO_1.13.md) | Upgrade notes between releases |
 
@@ -34,6 +35,7 @@ You run the software, connect it to your Git hosts and AI providers, and configu
 | [GitHub Setup](GITHUB_SETUP.md) | Bot user, permissions, PAT tokens, webhooks for GitHub / GitHub Enterprise |
 | [GitLab Setup](GITLAB_SETUP.md) | Bot user, permissions, PAT tokens, webhooks for GitLab |
 | [Bitbucket Setup](BITBUCKET_SETUP.md) | API tokens and webhook configuration for Bitbucket Cloud |
+| [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md) | PATs, the organization/project/repository address format, and Service Hook configuration for Azure DevOps |
 
 ### Connect an AI provider
 

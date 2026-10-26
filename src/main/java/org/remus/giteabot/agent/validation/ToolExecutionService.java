@@ -47,10 +47,12 @@ public class ToolExecutionService {
 
     private final AgentConfigProperties agentConfig;
     private final ToolCatalog catalog;
+    private final WorkspaceService workspaceService;
 
     /**
-     * Executes a configured validation tool (mvn, gradle, …) in the given
-     * workspace directory. Rejects tools not in
+     * Executes a configured validation tool in the given workspace directory:
+     * either a binary from {@code PATH} (mvn, gradle, …) or, for {@code execute},
+     * a script committed inside the repository. Rejects tools not in
      * {@link ToolCatalog#validationToolNames()}.
      */
     public ToolResult executeTool(Path workspaceDir, String tool, List<String> arguments) {
@@ -62,18 +64,108 @@ public class ToolExecutionService {
                     "");
         }
 
-        String[] command = new String[1 + (arguments != null ? arguments.size() : 0)];
-        command[0] = tool;
+        return switch (tool) {
+            case "execute" -> executeScriptTool(workspaceDir, arguments);
+            default -> executePathTool(workspaceDir, tool, arguments);
+        };
+    }
+
+    /**
+     * Runs a binary from {@code PATH} with the supplied arguments.
+     */
+    private ToolResult executePathTool(Path workspaceDir, String tool, List<String> arguments) {
+        List<String> command = new ArrayList<>();
+        command.add(tool);
         if (arguments != null) {
-            for (int i = 0; i < arguments.size(); i++) {
-                command[i + 1] = arguments.get(i);
-            }
+            command.addAll(arguments);
         }
 
         log.info("Executing tool: {} {}", tool,
                 arguments != null ? String.join(" ", arguments) : "");
 
-        return executeCommand(workspaceDir, command);
+        return executeCommand(workspaceDir, command.toArray(String[]::new));
+    }
+
+    /**
+     * Runs the validation script committed inside the repository (the {@code execute}
+     * tool), addressed by its repository-relative path. The path must resolve to an
+     * executable regular file inside the workspace and is executed directly — never
+     * through a shell — so the argument cannot smuggle additional commands. Arguments
+     * after the path are forwarded verbatim; exit code {@code 0} means passed.
+     */
+    private ToolResult executeScriptTool(Path workspaceDir, List<String> arguments) {
+        if (arguments == null || arguments.isEmpty()
+                || arguments.getFirst() == null || arguments.getFirst().isBlank()) {
+            return new ToolResult(false, -1, "",
+                    "execute requires the repository-relative path to a validation script "
+                            + "(for example scripts/validate.sh).");
+        }
+
+        String relativePath = arguments.getFirst().strip();
+        Path script;
+        try {
+            script = resolveWorkspacePath(workspaceDir, relativePath);
+        } catch (IOException e) {
+            return new ToolResult(false, -1, "", "Validation script rejected: " + e.getMessage());
+        }
+        if (!Files.isRegularFile(script)) {
+            return new ToolResult(false, -1, "",
+                    "Validation script not found inside the repository: " + relativePath);
+        }
+        if (!Files.isExecutable(script)) {
+            return new ToolResult(false, -1, "",
+                    "Validation script is not executable: " + relativePath
+                            + ". Commit the executable bit (chmod +x / git update-index --chmod=+x) — "
+                            + "the tool never falls back to a shell interpreter.");
+        }
+
+        String status = scriptStatus(workspaceDir, relativePath);
+        if (status == null) {
+            return new ToolResult(false, -1, "",
+                    "Validation script could not be verified against the repository: " + relativePath
+                            + " (git status failed — is the workspace a git checkout?)");
+        }
+        if (!status.isEmpty()) {
+            return new ToolResult(false, -1, "",
+                    "Validation script must be the committed version: " + relativePath
+                            + " differs from HEAD (" + status + "). Editing the script cannot"
+                            + " change the validation result.");
+        }
+
+        List<String> command = new ArrayList<>(arguments.size());
+        command.add(script.toAbsolutePath().toString());
+        command.addAll(arguments.subList(1, arguments.size()));
+
+        log.info("Executing repository validation script: {}", relativePath);
+        // Pre-flight checks and the launch are not atomic: the file could be swapped in
+        // between, but only by something already inside the workspace — accepted.
+        return executeCommand(workspaceDir, command.toArray(String[]::new));
+    }
+
+    /**
+     * Porcelain status of the script: {@code ""} when it matches HEAD, non-empty when it is
+     * modified, staged, untracked, deleted or ignored, {@code null} when git could not be
+     * asked. {@code --ignored} matters because an ignored script never appears in a plain
+     * status, yet it is just as editable by the agent.
+     */
+    private String scriptStatus(Path workspaceDir, String relativePath) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "git", "status", "--porcelain", "--ignored", "--", relativePath);
+            pb.directory(workspaceDir.toFile());
+            pb.redirectErrorStream(true);
+            ProcessSupport.scrubEnvironment(pb);
+
+            ProcessSupport.CommandResult result = ProcessSupport.run(pb,
+                    agentConfig.getValidation().getToolTimeoutSeconds(), TimeUnit.SECONDS, 1_000);
+            return result.finished() && result.exitCode() == 0 ? result.output().strip() : null;
+        } catch (IOException e) {
+            log.warn("Could not read the git status of {}: {}", relativePath, e.getMessage());
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 
     /**
@@ -125,11 +217,9 @@ public class ToolExecutionService {
                     "Invalid branch name for git: " + branch);
         }
 
-        ToolResult fetch = executeCommand(workspaceDir,
-                new String[]{"git", "fetch", "origin",
-                        "refs/heads/" + branch + ":refs/remotes/origin/" + branch});
+        CommandResult fetch = workspaceService.fetchBranch(workspaceDir, branch);
         if (!fetch.success()) {
-            return new ToolResult(false, fetch.exitCode(), "",
+            return new ToolResult(false, -1, "",
                     "Failed to fetch branch '" + branch + "' from origin: "
                             + normalizeToolMessage(fetch.output()));
         }
@@ -552,7 +642,7 @@ public class ToolExecutionService {
         String output = matches.isEmpty()
                 ? "No matches found for pattern: " + patternText
                 : String.join("\n", matches);
-        return new ToolResult(true, 0, truncateOutput(output), "");
+        return outputResult(true, 0, output, false);
     }
 
     private Pattern compileSearchPattern(String patternText, SearchRequest searchRequest) {
@@ -699,7 +789,7 @@ public class ToolExecutionService {
             String output = matches.isEmpty()
                     ? "No files found for pattern: " + globPattern
                     : String.join("\n", matches);
-            return new ToolResult(true, 0, truncateOutput(output), "");
+            return outputResult(true, 0, output, false);
         } catch (IOException e) {
             return new ToolResult(false, -1, "", "find failed: " + e.getMessage());
         }
@@ -779,10 +869,12 @@ public class ToolExecutionService {
         int startLine = 1;
         int endLine = Integer.MAX_VALUE;
         try {
-            if (arguments.size() > 1) {
+            // A blank slot is a property the caller did not send: ToolArguments keeps the declared
+            // positions, so cat's {"path": "…", "endLine": 50} must not arrive as startLine=50.
+            if (arguments.size() > 1 && arguments.get(1) != null && !arguments.get(1).isBlank()) {
                 startLine = Integer.parseInt(arguments.get(1));
             }
-            if (arguments.size() > 2) {
+            if (arguments.size() > 2 && arguments.get(2) != null && !arguments.get(2).isBlank()) {
                 endLine = Integer.parseInt(arguments.get(2));
             }
         } catch (NumberFormatException e) {
@@ -814,7 +906,7 @@ public class ToolExecutionService {
             if (output.isEmpty()) {
                 output.append("No content in requested line range.");
             }
-            return new ToolResult(true, 0, truncateOutput(output.toString().stripTrailing()), "");
+            return outputResult(true, 0, output.toString().stripTrailing(), false);
         } catch (IOException e) {
             return new ToolResult(false, -1, "", "cat failed: " + e.getMessage());
         }
@@ -902,7 +994,7 @@ public class ToolExecutionService {
                     .sorted(Comparator.naturalOrder())
                     .map(path -> formatTreeEntry(basePath, path))
                     .toList();
-            return new ToolResult(true, 0, truncateOutput(String.join("\n", lines)), "");
+            return outputResult(true, 0, String.join("\n", lines), false);
         } catch (IOException e) {
             return new ToolResult(false, -1, "", "tree failed: " + e.getMessage());
         }
@@ -1004,7 +1096,7 @@ public class ToolExecutionService {
         }
 
         String formatted = formatCtagsSignatures(relativePath, raw.output(), limit);
-        return new ToolResult(true, 0, formatted, "");
+        return outputResult(true, 0, formatted, raw.outputTruncated());
     }
 
     /**
@@ -1188,7 +1280,7 @@ public class ToolExecutionService {
         }
 
         String json = formatCtagsDependencies(new File(relativePath).getName(), raw.output());
-        return new ToolResult(true, 0, json, "");
+        return outputResult(true, 0, json, raw.outputTruncated());
     }
 
     /**
@@ -1305,7 +1397,7 @@ public class ToolExecutionService {
             log.info("Tool {} with exit code {}",
                     success ? "succeeded" : "failed", exitCode);
 
-            return new ToolResult(success, exitCode, truncateOutput(result.output()), "");
+            return outputResult(success, exitCode, result.output(), result.outputTruncated());
 
         } catch (IOException e) {
             log.error("Failed to execute tool: {}", e.getMessage());
@@ -1326,5 +1418,10 @@ public class ToolExecutionService {
             return output;
         }
         return output.substring(0, MAX_TOOL_OUTPUT_CHARS) + "\n... (output truncated)";
+    }
+
+    private ToolResult outputResult(boolean success, int exitCode, String output, boolean alreadyTruncated) {
+        boolean truncated = alreadyTruncated || output != null && output.length() > MAX_TOOL_OUTPUT_CHARS;
+        return new ToolResult(success, exitCode, truncateOutput(output), "", truncated);
     }
 }

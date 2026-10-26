@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.config.AgentConfigProperties;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 
 import java.util.List;
 import java.util.Map;
@@ -22,10 +23,10 @@ class AgentPromptBuilderTest {
 
     @Test
     void buildTreeContext_withFiles_formatsTree() {
-        List<Map<String, Object>> tree = List.of(
-                Map.of("type", "blob", "path", "src/Main.java"),
-                Map.of("type", "blob", "path", "README.md"),
-                Map.of("type", "tree", "path", "src")
+        List<RepositoryTreeEntry> tree = List.of(
+                new RepositoryTreeEntry("src/Main.java", RepositoryTreeEntry.Type.FILE),
+                new RepositoryTreeEntry("README.md", RepositoryTreeEntry.Type.FILE),
+                new RepositoryTreeEntry("src", RepositoryTreeEntry.Type.DIRECTORY)
         );
 
         String context = builder.buildTreeContext(tree);
@@ -55,8 +56,8 @@ class AgentPromptBuilderTest {
         AgentPromptBuilder limitedBuilder = new AgentPromptBuilder(contextConfig);
 
         String context = limitedBuilder.buildTreeContext(List.of(
-                Map.of("type", "blob", "path", "src/Main.java"),
-                Map.of("type", "blob", "path", "src/Other.java")
+                new RepositoryTreeEntry("src/Main.java", RepositoryTreeEntry.Type.FILE),
+                new RepositoryTreeEntry("src/Other.java", RepositoryTreeEntry.Type.FILE)
         ));
 
         assertThat(context).contains("src/Main.java");
@@ -176,6 +177,25 @@ class AgentPromptBuilderTest {
         assertThat(result).contains("Missing Tool Requests");
         assertThat(result).contains("runTools");
         assertThat(result).contains("write-file");
+    }
+
+    @Test
+    void buildNativeNoToolCallFeedback_namesBothExits_andDropsTheJsonProtocol() {
+        String result = builder.buildNativeNoToolCallFeedback();
+
+        // Exit 1: do the work through the function-calling API.
+        assertThat(result).contains("call the tools");
+        assertThat(result).contains("build or test tool");
+        // Exit 2: a task that needs no change ends with a plain-text answer.
+        assertThat(result).contains("no repository change");
+        assertThat(result).contains("plain text");
+        assertThat(result).contains("no pull request is opened");
+        // The earlier reply is not published on its own: the model is told to restate the
+        // whole answer instead of referring back to it.
+        assertThat(result).contains("Write that answer out in full");
+        assertThat(result).contains("do not refer back to an earlier message");
+        // The legacy JSON envelope instruction must not leak into NATIVE mode.
+        assertThat(result).doesNotContain("runTools");
     }
 
     // ---- buildMultiToolFeedback tests ----

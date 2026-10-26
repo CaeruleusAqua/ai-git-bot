@@ -1,11 +1,19 @@
 package org.remus.giteabot.repository;
 
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
+import org.remus.giteabot.repository.model.PullRequestCommit;
+import org.remus.giteabot.repository.model.PullRequestDetails;
+import org.remus.giteabot.repository.model.PullRequestState;
+import org.remus.giteabot.repository.model.PullRequestHead;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 
+import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Provider-agnostic interface for repository operations (pull requests, reviews,
@@ -21,7 +29,11 @@ import java.util.Map;
  */
 public interface RepositoryApiClient {
 
-    /** Returns the credentials used by this client (base URL, clone URL, username, token). */
+    /**
+     * Returns the credentials used by this client: API base URL, credential-free
+     * HTTP clone base URL, username, and token, plus the selected Git transport
+     * and its SSH material (private key, {@code known_hosts}) when SSH is active.
+     */
     RepositoryCredentials getCredentials();
 
     /** Returns the API base URL of the repository provider (e.g. {@code https://api.github.com}). */
@@ -29,14 +41,94 @@ public interface RepositoryApiClient {
         return getCredentials().baseUrl();
     }
 
-    /** Returns the web/clone URL of the repository provider (e.g. {@code https://github.com}). */
+    /**
+     * Returns the credential-free HTTP clone base URL (e.g. {@code https://github.com}).
+     * This is the HTTP-transport base only; the actual Git remote for clone, fetch,
+     * and push operations is resolved per repository by {@link #getRepositoryRemote},
+     * which providers may override to select SSH.
+     */
     default String getCloneUrl() {
         return getCredentials().cloneUrl();
+    }
+
+    /**
+     * Validates an HTTP clone base URL and returns it normalized: lower-case scheme, no
+     * trailing slash.
+     * <p>
+     * The remote this feeds is handed to {@code git} as a command-line argument and is
+     * echoed back in git's own error output, so it must never carry a secret. A base URL
+     * with userinfo would both leak the credential there and corrupt the credential-store
+     * host {@code WorkspaceService} derives from the remote. Query and fragment are
+     * rejected for the same reason: neither is meaningful in a Git remote, and both would
+     * survive into the concatenated URL.
+     * <p>
+     * Exposed as a static helper rather than being inlined into
+     * {@link #getRepositoryRemote} so that providers overriding that method to build a
+     * provider-specific path — Azure DevOps addresses repositories as
+     * {@code /{org}/{project}/_git/{name}} — keep the same guarantee instead of
+     * reimplementing (and quietly dropping) it.
+     *
+     * @throws IllegalStateException when the URL is missing, unparseable, not HTTP(S), or
+     *                               carries userinfo, a query or a fragment
+     */
+    static String validatedCloneBaseUrl(String cloneBaseUrl) {
+        if (cloneBaseUrl == null || cloneBaseUrl.isBlank()) {
+            throw new IllegalStateException("Repository remote cannot be resolved");
+        }
+        String normalized;
+        try {
+            URI base = URI.create(cloneBaseUrl);
+            if (!("http".equalsIgnoreCase(base.getScheme()) || "https".equalsIgnoreCase(base.getScheme()))
+                    || base.getHost() == null || base.getUserInfo() != null
+                    || base.getRawQuery() != null || base.getRawFragment() != null) {
+                throw new IllegalStateException("HTTP clone base URL must be credential-free");
+            }
+            normalized = base.getScheme().toLowerCase(Locale.ROOT)
+                    + cloneBaseUrl.substring(base.getScheme().length());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException("HTTP clone base URL is invalid", e);
+        }
+        while (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    /**
+     * Resolves the complete, credential-free Git remote for one repository.
+     * Providers may override this to select a repository-specific transport; an override
+     * that still builds an HTTP remote must run its base URL through
+     * {@link #validatedCloneBaseUrl}.
+     */
+    default String getRepositoryRemote(String owner, String repo) {
+        if (owner == null || owner.isBlank() || repo == null || repo.isBlank()) {
+            throw new IllegalStateException("Repository remote cannot be resolved");
+        }
+        return validatedCloneBaseUrl(getCloneUrl()) + "/" + owner + "/" + repo + ".git";
+    }
+
+    /**
+     * Returns whether HTTP Git operations must authenticate with a pre-emptive
+     * {@code Authorization: Basic} header instead of a credential helper.
+     * Needed for providers (e.g. Azure DevOps) whose remotes reject the
+     * credential-store challenge/response flow.
+     */
+    default boolean usesGitAuthorizationHeader() {
+        return false;
     }
 
     /** Returns the authentication token used by this client. */
     default String getToken() {
         return getCredentials().token();
+    }
+
+    /**
+     * Returns the name users type after {@code @} to address the bot, for providers that
+     * derive the bot's identity from the integration credentials rather than from the
+     * bot's configured username (e.g. Bitbucket). Empty means "use the bot username".
+     */
+    default Optional<String> getBotMentionName() {
+        return Optional.empty();
     }
 
     /**
@@ -74,8 +166,25 @@ public interface RepositoryApiClient {
      * <p>
      * Providers like GitHub and Gitea can often reuse the same underlying endpoint as issue comments,
      * while GitLab requires a merge-request-specific endpoint.
+     *
+     * @return the positive integral comment ID, or {@code null} if the response has no usable ID;
+     *         callers that only need to publish a comment can ignore the return value
      */
-    void postPullRequestComment(String owner, String repo, Long pullNumber, String body);
+    Long postPullRequestComment(String owner, String repo, Long pullNumber, String body);
+
+    /** Updates a top-level PR comment owned by the authenticated account. */
+    default void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        throw new UnsupportedOperationException("Updating PR comments is not supported");
+    }
+
+    /** Returns the positive integral ID from a comment response, or {@code null} if unavailable. */
+    static Long commentId(Map<?, ?> response) {
+        Object id = response == null ? null : response.get("id");
+        if ((id instanceof Integer || id instanceof Long) && ((Number) id).longValue() > 0) {
+            return ((Number) id).longValue();
+        }
+        return null;
+    }
 
     /**
      * Attaches an artifact (test screenshot, trace, log file, …) to a pull
@@ -123,6 +232,22 @@ public interface RepositoryApiClient {
 
     void addReaction(String owner, String repo, Long commentId, String reaction);
 
+    /**
+     * Adds a reaction to a pull request itself, rather than to a comment.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
+    /**
+     * Adds a reaction to an issue itself.
+     * Default implementation is a no-op for providers without support.
+     */
+    default void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        // no-op by default; override where the provider supports it
+    }
+
     void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                  String filePath, int line, String body);
 
@@ -132,11 +257,15 @@ public interface RepositoryApiClient {
                                                      Long pullNumber, Long reviewId);
 
     /**
-     * Returns the list of commits in a pull request.
-     * Each map contains at minimum "message" (commit message) and "sha" keys.
+     * Returns the commits of a pull request in the order the provider reports them.
      * Default implementation returns an empty list.
+     *
+     * @return the commits; never {@code null}, empty when the pull request has no
+     *         commits or the provider does not support this lookup. Individual
+     *         {@link PullRequestCommit#sha()} / {@link PullRequestCommit#message()}
+     *         values may be {@code null}.
      */
-    default List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    default List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         return List.of();
     }
 
@@ -170,26 +299,66 @@ public interface RepositoryApiClient {
     }
 
     /**
-     * Fetches the full pull-request payload (head / base refs, SHAs, title, …)
-     * from the provider. Used to "hydrate" webhook payloads that lack the
-     * pull-request object — most notably GitHub {@code issue_comment} events
-     * which carry only the issue, not the PR.
+     * Fetches the pull-request title, body, state and head / base ref and SHA from the provider.
+     * Used to "hydrate" webhook payloads that lack the pull-request object —
+     * most notably GitHub {@code issue_comment} events which carry only the
+     * issue, not the PR.
+     *
+     * @return the details, or empty when the provider does not support this lookup
      */
-    default Map<String, Object> getPullRequestDetails(String owner, String repo, Long pullNumber) {
-        return Map.of();
+    default Optional<PullRequestDetails> getPullRequestDetails(String owner, String repo, Long pullNumber) {
+        return Optional.empty();
+    }
+
+    /**
+     * Re-fetches whether a PR is open for workflow writes. The default relies on the
+     * state mapped by {@link #getPullRequestDetails}; other providers override it. Missing state denies
+     * writes, and API failures propagate to the workflow.
+     */
+    default boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
+        return getPullRequestDetails(owner, repo, pullNumber)
+                .map(PullRequestDetails::state)
+                .filter(PullRequestState.OPEN::equals)
+                .isPresent();
+    }
+
+    /**
+     * Returns whether writable PR workspaces must resolve the provider's
+     * authoritative head repository before cloning. Providers returning
+     * {@code true} must implement {@link #getPullRequestHead} and fail closed
+     * when the source repository cannot be determined.
+     */
+    default boolean requiresAuthoritativePullRequestHead() {
+        return false;
+    }
+
+    /**
+     * Resolves the repository and branch that own a pull request head.
+     * Called only when {@link #requiresAuthoritativePullRequestHead()} is true.
+     */
+    default PullRequestHead getPullRequestHead(String owner, String repo, Long pullNumber,
+                                               String expectedBranch) {
+        throw new UnsupportedOperationException(
+                "Authoritative pull-request head resolution is not supported by this provider");
     }
 
     // ---- Repository operations ----
 
     String getDefaultBranch(String owner, String repo);
 
-    List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref);
+    /**
+     * Returns the recursive tree of {@code repo} at {@code ref}: files, directories
+     * and other entries such as submodules (see {@link RepositoryTreeEntry.Type}).
+     * Providers with paginated listings may return only the first page, so large
+     * repositories can be truncated.
+     *
+     * @return the tree entries; never {@code null}, empty when the provider returns
+     *         no tree
+     */
+    List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref);
 
     String getFileContent(String owner, String repo, String path, String ref);
 
-
-    void createOrUpdateFile(String owner, String repo, String path, String content,
-                            String message, String branch, String sha);
 
     Long createPullRequest(String owner, String repo, String title, String body,
                            String head, String base);

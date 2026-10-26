@@ -5,7 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.GitIntegration;
-import org.remus.giteabot.admin.GiteaClientFactory;
+import org.remus.giteabot.agent.validation.PullRequestWorkspaceMode;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
 import org.remus.giteabot.agent.validation.WorkspaceResult;
 import org.remus.giteabot.agent.validation.WorkspaceService;
 import org.remus.giteabot.prworkflow.PrWorkflowRun;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -50,23 +52,25 @@ class SuitePromotionServiceTest {
     void setUp(@TempDir Path tmp) throws IOException {
         workspace = Files.createDirectories(tmp.resolve("ws"));
         workspaceService = mock(WorkspaceService.class);
-        GiteaClientFactory giteaClientFactory = mock(GiteaClientFactory.class);
+        RepositoryApiClientFactory repositoryApiClientFactory = mock(RepositoryApiClientFactory.class);
         PrWorkflowRunRepository runRepository = mock(PrWorkflowRunRepository.class);
         repoClient = mock(RepositoryApiClient.class);
 
-        when(giteaClientFactory.getApiClient(any())).thenReturn(repoClient);
-        when(repoClient.getCloneUrl()).thenReturn("http://git.local");
-        when(repoClient.getToken()).thenReturn("tok");
+        when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repoClient);
         when(repoClient.getDefaultBranch(anyString(), anyString())).thenReturn("main");
-        when(workspaceService.prepareWorkspace(anyString(), anyString(), anyString(),
-                anyString(), anyString(), any()))
+        when(workspaceService.prepareWorkspace(any(RepositoryApiClient.class),
+                anyString(), anyString(), anyString(), any()))
+                .thenReturn(WorkspaceResult.success(workspace));
+        when(workspaceService.preparePullRequestWorkspace(any(RepositoryApiClient.class),
+                anyString(), anyString(), anyString(), any(),
+                eq(PullRequestWorkspaceMode.PUSH_BACK)))
                 .thenReturn(WorkspaceResult.success(workspace));
         lenient().when(workspaceService.commitAndPush(any(), anyString(), anyString(),
                 anyString(), anyString(), anyBoolean()))
                 .thenReturn(true);
         lenient().when(runRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service = new SuitePromotionService(workspaceService, giteaClientFactory, runRepository);
+        service = new SuitePromotionService(workspaceService, repositoryApiClientFactory, runRepository);
     }
 
     @Test
@@ -79,7 +83,7 @@ class SuitePromotionServiceTest {
                 "acme", "web", "feature/login");
 
         assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.SKIPPED);
-        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any(), any());
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -101,6 +105,8 @@ class SuitePromotionServiceTest {
         assertThat(run.getFollowUpPrNumber()).isEqualTo(4242L);
         // File actually written.
         assertThat(workspace.resolve("tests/e2e/pr-7/login.spec.ts")).exists();
+        verify(workspaceService).prepareWorkspace(
+                repoClient, "acme", "web", "feature/login", 7L);
         verify(workspaceService).commitAndPush(eq(workspace), eq(expectedBranch),
                 anyString(), anyString(), anyString(), eq(true));
     }
@@ -120,6 +126,8 @@ class SuitePromotionServiceTest {
         assertThat(out.writtenPaths()).containsExactly("tests/e2e/checkout.spec.ts");
         assertThat(workspace.resolve("tests/e2e/checkout.spec.ts")).exists();
         assertThat(run.getFollowUpPrNumber()).isEqualTo(5050L);
+        verify(workspaceService).prepareWorkspace(
+                eq(repoClient), eq("acme"), eq("web"), eq("main"), isNull());
     }
 
     @Test
@@ -161,6 +169,9 @@ class SuitePromotionServiceTest {
         assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.COMMITTED);
         assertThat(out.branch()).isEqualTo("feature/x");
         assertThat(workspace.resolve("tests/e2e/pr-3/smoke.spec.ts")).exists();
+        verify(workspaceService).preparePullRequestWorkspace(
+                repoClient, "acme", "web", "feature/x", 3L,
+                PullRequestWorkspaceMode.PUSH_BACK);
         verify(workspaceService).commitAndPush(eq(workspace), eq("feature/x"),
                 anyString(), anyString(), anyString(), eq(false));
         verify(repoClient, never()).createPullRequest(any(), any(), any(), any(), any(), any());
@@ -180,8 +191,24 @@ class SuitePromotionServiceTest {
 
         assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.ALREADY_PROMOTED);
         assertThat(out.followUpPrNumber()).isEqualTo(123L);
-        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any(), any());
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
         verify(repoClient, never()).createPullRequest(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void offerAsPr_onAuthoritativeFork_failsBeforePreparingWorkspace() {
+        when(workspaceService.isAuthoritativePullRequestFromFork(
+                repoClient, "acme", "web", "main", 7L)).thenReturn(true);
+        PrTestSuite suite = suite(SuiteLifecycleMode.OFFER_AS_PR, 7L,
+                caseAt("login.spec.ts", "// hi"));
+
+        SuitePromotionService.Outcome out = service.promote(
+                bot(), run(99L), suite, "acme", "web", "main");
+
+        assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        verify(workspaceService, never()).prepareWorkspace(any(), any(), any(), any(), any());
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
     }
 
     @Test
@@ -223,7 +250,7 @@ class SuitePromotionServiceTest {
 
     @Test
     void workspaceFailure_surfacesAsOutcomeFailure() {
-        when(workspaceService.prepareWorkspace(any(), any(), any(), any(), any(), any()))
+        when(workspaceService.prepareWorkspace(any(), any(), any(), any(), any()))
                 .thenReturn(WorkspaceResult.failure("network down"));
 
         PrTestSuite suite = suite(SuiteLifecycleMode.OFFER_AS_PR, 7L,
@@ -248,6 +275,52 @@ class SuitePromotionServiceTest {
 
         assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
         verify(repoClient, never()).createPullRequest(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void targetDirectoryWriteFailure_surfacesAsOutcomeFailure_withoutPush() throws IOException {
+        Files.writeString(workspace.resolve("tests"), "blocks directory creation");
+
+        SuitePromotionService.Outcome out = service.promote(bot(), run(1L),
+                suite(SuiteLifecycleMode.COMMIT_TO_PR, 7L,
+                        caseAt("login.spec.ts", "// hi")),
+                "acme", "web", "feature/x");
+
+        assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        assertThat(out.message()).contains("write");
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void partialCaseWriteFailure_surfacesAsOutcomeFailure_withoutPush() throws IOException {
+        Path target = Files.createDirectories(workspace.resolve("tests/e2e/pr-7"));
+        Files.writeString(target.resolve("blocked"), "blocks child creation");
+
+        SuitePromotionService.Outcome out = service.promote(bot(), run(1L),
+                suite(SuiteLifecycleMode.COMMIT_TO_PR, 7L,
+                        caseAt("login.spec.ts", "// first"),
+                        caseAt("blocked/checkout.spec.ts", "// second")),
+                "acme", "web", "feature/x");
+
+        assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        assertThat(out.message()).contains("write");
+        verify(workspaceService, never()).commitAndPush(
+                any(), anyString(), anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void unexpectedRuntimeException_surfacesAsOutcomeFailure() {
+        when(repoClient.getDefaultBranch("acme", "web"))
+                .thenThrow(new IllegalStateException("provider unavailable"));
+
+        SuitePromotionService.Outcome out = service.promote(bot(), run(1L),
+                suite(SuiteLifecycleMode.PROMOTE_ON_MERGE, 7L,
+                        caseAt("login.spec.ts", "// hi")),
+                "acme", "web", "feature/x");
+
+        assertThat(out.kind()).isEqualTo(SuitePromotionService.Outcome.Kind.FAILED);
+        assertThat(out.message()).contains("provider unavailable");
     }
 
     @Test

@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.session.AgentSessionService;
 import org.remus.giteabot.ai.AiAuditContext;
 import org.remus.giteabot.ai.AiClient;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.issueworkflow.IssueWorkflowOrchestrator;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.PrWorkflowOrchestrator;
@@ -19,8 +19,11 @@ import org.remus.giteabot.prworkflow.readmesync.ReadmeSyncSlashCommandHandler;
 import org.remus.giteabot.prworkflow.review.ReviewWorkflow;
 import org.remus.giteabot.prworkflow.unittest.UnitTestSlashCommandHandler;
 import org.remus.giteabot.prworkflow.unittest.UnitTestWorkflow;
+import org.remus.giteabot.repository.Reactions;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.review.CodeReviewService;
+import org.remus.giteabot.util.BotMention;
+import org.remus.giteabot.util.BranchFilter;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -33,7 +36,7 @@ import java.util.Set;
  * <p>
  * This is the bridge between the admin data model and the code-review / agent
  * services.  Each bot gets its own {@link AiClient} (via {@link AiClientFactory})
- * and its own {@link RepositoryApiClient} (via {@link GiteaClientFactory}).
+ * and its own {@link RepositoryApiClient} (via {@link RepositoryApiClientFactory}).
  * <p>
  * PR events are delegated to the {@link PrWorkflowOrchestrator}, issue events
  * (assignments and comments, including follow-ups on agent-created PRs) to the
@@ -44,7 +47,7 @@ import java.util.Set;
 @Service
 public class BotWebhookService {
 
-    private final GiteaClientFactory giteaClientFactory;
+    private final RepositoryApiClientFactory repositoryApiClientFactory;
     private final AgentSessionService agentSessionService;
     private final BotService botService;
     private final PrWorkflowOrchestrator prWorkflowOrchestrator;
@@ -57,7 +60,7 @@ public class BotWebhookService {
     private final WorkflowSelectionService workflowSelectionService;
     private final IssueWorkflowOrchestrator issueWorkflowOrchestrator;
 
-    public BotWebhookService(GiteaClientFactory giteaClientFactory,
+    public BotWebhookService(RepositoryApiClientFactory repositoryApiClientFactory,
                              AgentSessionService agentSessionService,
                              BotService botService,
                              PrWorkflowOrchestrator prWorkflowOrchestrator,
@@ -69,7 +72,7 @@ public class BotWebhookService {
                              I18nCoverageSlashCommandHandler i18nCoverageSlashCommandHandler,
                              WorkflowSelectionService workflowSelectionService,
                              IssueWorkflowOrchestrator issueWorkflowOrchestrator) {
-        this.giteaClientFactory = giteaClientFactory;
+        this.repositoryApiClientFactory = repositoryApiClientFactory;
         this.agentSessionService = agentSessionService;
         this.botService = botService;
         this.prWorkflowOrchestrator = prWorkflowOrchestrator;
@@ -90,16 +93,119 @@ public class BotWebhookService {
      */
     @Async
     public void reviewPullRequest(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isCallerAllowed(bot, payload)) {
+        try {
+            AiAuditContext.setSessionId(auditSessionId(payload));
+
+            if (!prWorkflowAllowedForBranch(bot, payload)) {
+                return;
+            }
+            if (!isCallerAllowed(bot, payload)) {
+                return;
+            }
+            acknowledgePullRequest(bot, payload);
+            try {
+                prWorkflowOrchestrator.runAll(bot, payload);
+            } catch (Exception e) {
+                log.error("[Bot '{}'] Failed to run PR workflows: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
+        }
+    }
+
+    private void acknowledgeAssignedIssue(Bot bot, WebhookPayload payload) {
+        if (payload.getIssue() == null
+                || payload.getIssue().getNumber() == null
+                || payload.getRepository() == null) {
             return;
         }
-        try {
-            prWorkflowOrchestrator.runAll(bot, payload);
-        } catch (Exception e) {
-            log.error("[Bot '{}'] Failed to run PR workflows: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+        String owner = payload.getRepository().getOwner() != null
+                ? payload.getRepository().getOwner().getLogin() : null;
+        String repo = payload.getRepository().getName();
+        if (owner == null || repo == null) {
+            return;
         }
+        Long issueNumber = payload.getIssue().getNumber();
+        try {
+            if (IssueWorkflowOrchestrator.enabledWorkflowKeys(bot, workflowSelectionService).isEmpty()) {
+                return;
+            }
+            repositoryApiClientFactory.getApiClient(bot.getGitIntegration())
+                    .addIssueReaction(owner, repo, issueNumber, Reactions.EYES);
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Failed to add 👀 reaction to issue #{}: {}: {}",
+                    bot.getName(), issueNumber, e.getClass().getSimpleName(), e.getMessage());
+            log.debug("[Bot '{}'] 👀 reaction failure details", bot.getName(), e);
+        }
+    }
+
+    private void acknowledgePullRequest(Bot bot, WebhookPayload payload) {
+        if (!"opened".equals(payload.getAction())
+                && !"review_requested".equals(payload.getAction())) {
+            return;
+        }
+        if (payload.getRepository() == null
+                || payload.getPullRequest() == null
+                || payload.getPullRequest().getNumber() == null) {
+            return;
+        }
+        String owner = payload.getRepository().getOwner() != null
+                ? payload.getRepository().getOwner().getLogin() : null;
+        String repo = payload.getRepository().getName();
+        if (owner == null || repo == null) {
+            return;
+        }
+        Long pullNumber = payload.getPullRequest().getNumber();
+        try {
+            if (PrWorkflowOrchestrator.enabledWorkflowKeys(bot, workflowSelectionService).isEmpty()) {
+                return;
+            }
+            repositoryApiClientFactory.getApiClient(bot.getGitIntegration())
+                    .addPullRequestReaction(owner, repo, pullNumber, Reactions.EYES);
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Failed to add 👀 reaction to PR #{}: {}: {}",
+                    bot.getName(), pullNumber, e.getClass().getSimpleName(), e.getMessage());
+            log.debug("[Bot '{}'] 👀 reaction failure details", bot.getName(), e);
+        }
+    }
+
+    /**
+     * Returns {@code true} when the incoming PR's branch/ref is allowed to start a
+     * PR workflow under the bot's configured {@code branchFilter}.
+     *
+     * <p>The ref is taken from the PR's <em>base</em> (the target branch the PR
+     * merges into — e.g. {@code releases/1.2} in a git-flow setup), falling back
+     * to the <em>head</em> source branch when no base ref is present. Full ref
+     * names such as {@code refs/heads/develop} are supported by
+     * {@link BranchFilter}.
+     */
+    private boolean prWorkflowAllowedForBranch(Bot bot, WebhookPayload payload) {
+        String branch = prBranchForFilter(payload);
+        if (BranchFilter.matches(bot.getBranchFilter(), branch)) {
+            return true;
+        }
+        log.info("Ignoring PR workflow for bot '{}': branch '{}' does not match branch filter '{}'",
+                bot.getName(), branch, bot.getBranchFilter());
+        return false;
+    }
+
+    /**
+     * Resolves the branch/ref a PR workflow should be filtered on: the PR base
+     * (target branch) when present, otherwise the head (source) branch.
+     */
+    private String prBranchForFilter(WebhookPayload payload) {
+        if (payload.getPullRequest() == null) {
+            return null;
+        }
+        if (payload.getPullRequest().getBase() != null
+                && payload.getPullRequest().getBase().getRef() != null) {
+            return payload.getPullRequest().getBase().getRef();
+        }
+        if (payload.getPullRequest().getHead() != null) {
+            return payload.getPullRequest().getHead().getRef();
+        }
+        return null;
     }
 
     /**
@@ -120,95 +226,19 @@ public class BotWebhookService {
      */
     @Async
     public void handleBotCommand(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isPullRequestAuthor(payload)) {
-            log.debug("[Bot '{}'] Ignoring pull request command from non-author", bot.getName());
-            return;
-        }
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
-        if (hasNoEnabledPrWorkflows(bot)) {
-            log.debug("[Bot '{}'] No PR workflows enabled, ignoring pull request command", bot.getName());
-            return;
-        }
         try {
-            if (e2eTestSlashCommandHandler.tryHandle(bot, payload)) {
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isPullRequestAuthor(payload)) {
+                log.debug("[Bot '{}'] Ignoring pull request command from non-author", bot.getName());
                 return;
             }
-            if (unitTestSlashCommandHandler.tryHandle(bot, payload)) {
+            if (!isCallerAllowed(bot, payload)) {
                 return;
             }
-            if (agentReviewSlashCommandHandler.tryHandle(bot, payload)) {
-                return;
-            }
-            if (readmeSyncSlashCommandHandler.tryHandle(bot, payload)) {
-                return;
-            }
-            if (i18nCoverageSlashCommandHandler.tryHandle(bot, payload)) {
-                return;
-            }
-            if (isWorkflowEnabled(bot, ReviewWorkflow.KEY)) {
-                // Route through the PrWorkflow orchestrator for uniform lifecycle management.
-                var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_BOT_COMMAND);
-                prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
-                return;
-            }
-            log.info("[Bot '{}'] Comment mentions bot but no slash command matched and review workflow is not enabled — replying with unrecognised-command notice",
-                    bot.getName());
-            postUnrecognisedCommandComment(bot, payload);
-        } catch (Exception e) {
-            log.error("[Bot '{}'] Failed to handle command: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
-        }
-    }
-
-    /**
-     * Handles a comment on a PR discussion thread.
-     * <p>
-     * Access control: if the bot has no {@code userWhitelist}, any user mentioning the bot
-     * may interact.  If a whitelist is configured, only the PR author <em>or</em> users listed
-     * in the whitelist may interact — all other commenters are ignored.
-     * <p>
-     * Routes to the configured issue-assigned workflow(s) when an agent session exists for the
-     * PR (i.e. the PR was created by the issue workflow and can be continued — the comment is a
-     * follow-up in the same flow lifecycle).  For manually created PRs (no active session), the
-     * comment is routed to the code-review handler.
-     */
-    @Async
-    public void handlePrComment(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isPrCommenterAllowed(bot, payload)) {
-            return;
-        }
-        String owner = payload.getRepository().getOwner().getLogin();
-        String repo = payload.getRepository().getName();
-        Long prNumber = payload.getPullRequest().getNumber();
-        Long issueNumber = payload.getIssue().getNumber(); // equals prNumber for PRs in Gitea
-
-        boolean hasAgentSession =
-                agentSessionService.getSessionByIssue(owner, repo, issueNumber).isPresent()
-                || agentSessionService.getSessionByPr(owner, repo, prNumber).isPresent();
-
-        if (hasAgentSession) {
-            // The PR was created by the bot's issue workflow (an agent session
-            // exists): the comment continues that same flow, so it routes
-            // through the configured issue-workflow resolution exactly like a
-            // comment on the original issue would.
-            log.debug("[Bot '{}'] Agent session found for PR #{}, routing to issue workflow", bot.getName(), prNumber);
-            try {
-                issueWorkflowOrchestrator.runComment(bot, payload);
-            } catch (Exception e) {
-                log.error("[Bot '{}'] Failed to handle PR comment via issue workflow: {}", bot.getName(), e.getMessage(), e);
-                botService.recordError(bot, e.getMessage());
-            }
-        } else {
             if (hasNoEnabledPrWorkflows(bot)) {
-                log.debug("[Bot '{}'] No PR workflows enabled, ignoring pull request comment", bot.getName());
+                log.debug("[Bot '{}'] No PR workflows enabled, ignoring pull request command", bot.getName());
                 return;
             }
-            log.debug("[Bot '{}'] No agent session for PR #{}, routing to code-review handler",
-                    bot.getName(), prNumber);
             try {
                 if (e2eTestSlashCommandHandler.tryHandle(bot, payload)) {
                     return;
@@ -235,9 +265,93 @@ public class BotWebhookService {
                         bot.getName());
                 postUnrecognisedCommandComment(bot, payload);
             } catch (Exception e) {
-                log.error("[Bot '{}'] Failed to handle PR comment via review handler: {}", bot.getName(), e.getMessage(), e);
+                log.error("[Bot '{}'] Failed to handle command: {}", bot.getName(), e.getMessage(), e);
                 botService.recordError(bot, e.getMessage());
             }
+        } finally {
+            AiAuditContext.clear();
+        }
+    }
+
+    /**
+     * Handles a comment on a PR discussion thread.
+     * <p>
+     * Access control: if the bot has no {@code userWhitelist}, any user mentioning the bot
+     * may interact.  If a whitelist is configured, only the PR author <em>or</em> users listed
+     * in the whitelist may interact — all other commenters are ignored.
+     * <p>
+     * Routes to the configured issue-assigned workflow(s) when an agent session exists for the
+     * PR (i.e. the PR was created by the issue workflow and can be continued — the comment is a
+     * follow-up in the same flow lifecycle).  For manually created PRs (no active session), the
+     * comment is routed to the code-review handler.
+     */
+    @Async
+    public void handlePrComment(Bot bot, WebhookPayload payload) {
+        try {
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isPrCommenterAllowed(bot, payload)) {
+                return;
+            }
+            String owner = payload.getRepository().getOwner().getLogin();
+            String repo = payload.getRepository().getName();
+            Long prNumber = payload.getPullRequest().getNumber();
+            Long issueNumber = payload.getIssue().getNumber(); // equals prNumber for PRs in Gitea
+
+            boolean hasAgentSession =
+                    agentSessionService.getSessionByIssue(owner, repo, issueNumber).isPresent()
+                    || agentSessionService.getSessionByPr(owner, repo, prNumber).isPresent();
+
+            if (hasAgentSession) {
+                // The PR was created by the bot's issue workflow (an agent session
+                // exists): the comment continues that same flow, so it routes
+                // through the configured issue-workflow resolution exactly like a
+                // comment on the original issue would.
+                log.debug("[Bot '{}'] Agent session found for PR #{}, routing to issue workflow", bot.getName(), prNumber);
+                try {
+                    issueWorkflowOrchestrator.runComment(bot, payload);
+                } catch (Exception e) {
+                    log.error("[Bot '{}'] Failed to handle PR comment via issue workflow: {}", bot.getName(), e.getMessage(), e);
+                    botService.recordError(bot, e.getMessage());
+                }
+            } else {
+                if (hasNoEnabledPrWorkflows(bot)) {
+                    log.debug("[Bot '{}'] No PR workflows enabled, ignoring pull request comment", bot.getName());
+                    return;
+                }
+                log.debug("[Bot '{}'] No agent session for PR #{}, routing to code-review handler",
+                        bot.getName(), prNumber);
+                try {
+                    if (e2eTestSlashCommandHandler.tryHandle(bot, payload)) {
+                        return;
+                    }
+                    if (unitTestSlashCommandHandler.tryHandle(bot, payload)) {
+                        return;
+                    }
+                    if (agentReviewSlashCommandHandler.tryHandle(bot, payload)) {
+                        return;
+                    }
+                    if (readmeSyncSlashCommandHandler.tryHandle(bot, payload)) {
+                        return;
+                    }
+                    if (i18nCoverageSlashCommandHandler.tryHandle(bot, payload)) {
+                        return;
+                    }
+                    if (isWorkflowEnabled(bot, ReviewWorkflow.KEY)) {
+                        // Route through the PrWorkflow orchestrator for uniform lifecycle management.
+                        var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_BOT_COMMAND);
+                        prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
+                        return;
+                    }
+                    log.info("[Bot '{}'] Comment mentions bot but no slash command matched and review workflow is not enabled — replying with unrecognised-command notice",
+                            bot.getName());
+                    postUnrecognisedCommandComment(bot, payload);
+                } catch (Exception e) {
+                    log.error("[Bot '{}'] Failed to handle PR comment via review handler: {}", bot.getName(), e.getMessage(), e);
+                    botService.recordError(bot, e.getMessage());
+                }
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -247,33 +361,37 @@ public class BotWebhookService {
      */
     @Async
     public void handleInlineComment(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isPullRequestAuthor(payload)) {
-            log.debug("[Bot '{}'] Ignoring inline review comment from non-author", bot.getName());
-            return;
-        }
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
-        boolean agenticEnabled = isWorkflowEnabled(bot, AgentReviewWorkflow.KEY);
-        boolean reviewEnabled  = isWorkflowEnabled(bot, ReviewWorkflow.KEY);
-        if (!agenticEnabled && !reviewEnabled) {
-            log.debug("[Bot '{}'] Neither review nor agentic-review enabled — ignoring inline review comment", bot.getName());
-            return;
-        }
         try {
-            if (agenticEnabled) {
-                String question = extractInlineCommentBody(payload);
-                var hints = Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION,
-                        question != null ? question : "");
-                prWorkflowOrchestrator.run(bot, payload, AgentReviewWorkflow.KEY, hints);
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isPullRequestAuthor(payload)) {
+                log.debug("[Bot '{}'] Ignoring inline review comment from non-author", bot.getName());
                 return;
             }
-            var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_INLINE_COMMENT);
-            prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
-        } catch (Exception e) {
-            log.error("[Bot '{}'] Failed to handle inline comment via workflow: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+            if (!isCallerAllowed(bot, payload)) {
+                return;
+            }
+            boolean agenticEnabled = isWorkflowEnabled(bot, AgentReviewWorkflow.KEY);
+            boolean reviewEnabled  = isWorkflowEnabled(bot, ReviewWorkflow.KEY);
+            if (!agenticEnabled && !reviewEnabled) {
+                log.debug("[Bot '{}'] Neither review nor agentic-review enabled — ignoring inline review comment", bot.getName());
+                return;
+            }
+            try {
+                if (agenticEnabled) {
+                    String question = extractInlineCommentBody(payload);
+                    var hints = Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION,
+                            question != null ? question : "");
+                    prWorkflowOrchestrator.run(bot, payload, AgentReviewWorkflow.KEY, hints);
+                    return;
+                }
+                var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_INLINE_COMMENT);
+                prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
+            } catch (Exception e) {
+                log.error("[Bot '{}'] Failed to handle inline comment via workflow: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -283,33 +401,37 @@ public class BotWebhookService {
      */
     @Async
     public void handleReviewSubmitted(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
-        boolean agenticEnabled = isWorkflowEnabled(bot, AgentReviewWorkflow.KEY);
-        boolean reviewEnabled  = isWorkflowEnabled(bot, ReviewWorkflow.KEY);
-        if (!agenticEnabled && !reviewEnabled) {
-            log.debug("[Bot '{}'] Neither review nor agentic-review enabled — ignoring submitted review", bot.getName());
-            return;
-        }
         try {
-            if (agenticEnabled) {
-                String question = extractReviewBody(payload);
-                if (!mentionsBot(bot, question)) {
-                    log.debug("[Bot '{}'] Submitted review does not mention the bot — ignoring (agentic-review only responds when addressed)",
-                            bot.getName());
-                    return;
-                }
-                var hints = Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION, question);
-                prWorkflowOrchestrator.run(bot, payload, AgentReviewWorkflow.KEY, hints);
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isCallerAllowed(bot, payload)) {
                 return;
             }
-            var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_REVIEW_SUBMITTED);
-            prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
-        } catch (Exception e) {
-            log.error("[Bot '{}'] Failed to handle review submitted via workflow: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+            boolean agenticEnabled = isWorkflowEnabled(bot, AgentReviewWorkflow.KEY);
+            boolean reviewEnabled  = isWorkflowEnabled(bot, ReviewWorkflow.KEY);
+            if (!agenticEnabled && !reviewEnabled) {
+                log.debug("[Bot '{}'] Neither review nor agentic-review enabled — ignoring submitted review", bot.getName());
+                return;
+            }
+            try {
+                if (agenticEnabled) {
+                    String question = extractReviewBody(payload);
+                    if (!BotMention.isMentioned(question, getBotAlias(bot))) {
+                        log.debug("[Bot '{}'] Submitted review does not mention the bot — ignoring (agentic-review only responds when addressed)",
+                                bot.getName());
+                        return;
+                    }
+                    var hints = Map.of(PrWorkflowContext.HINT_AGENTIC_REVIEW_CLARIFICATION, question);
+                    prWorkflowOrchestrator.run(bot, payload, AgentReviewWorkflow.KEY, hints);
+                    return;
+                }
+                var hints = Map.of(ReviewWorkflow.HINT_REVIEW_ACTION, ReviewWorkflow.ACTION_REVIEW_SUBMITTED);
+                prWorkflowOrchestrator.run(bot, payload, ReviewWorkflow.KEY, hints);
+            } catch (Exception e) {
+                log.error("[Bot '{}'] Failed to handle review submitted via workflow: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -367,16 +489,21 @@ public class BotWebhookService {
      */
     @Async
     public void handleIssueAssigned(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
         try {
-            issueWorkflowOrchestrator.runAssigned(bot, payload);
-        } catch (Exception e) {
-            // Defense-in-depth: the orchestrator already records errors per workflow.
-            log.error("[Bot '{}'] Failed to handle issue assignment: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isCallerAllowed(bot, payload)) {
+                return;
+            }
+            acknowledgeAssignedIssue(bot, payload);
+            try {
+                issueWorkflowOrchestrator.runAssigned(bot, payload);
+            } catch (Exception e) {
+                // Defense-in-depth: the orchestrator already records errors per workflow.
+                log.error("[Bot '{}'] Failed to handle issue assignment: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -388,29 +515,33 @@ public class BotWebhookService {
      */
     @Async
     public void handleIssueCreated(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!bot.isRunOnIssueCreation()) {
-            log.debug("[Bot '{}'] Ignoring issue creation — runOnIssueCreation is disabled", bot.getName());
-            return;
-        }
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
-        // Issue creation is handled by reusing the issue-assigned workflow. The
-        // individual workflow implementations check that the issue is assigned to
-        // the bot, so treat this creation event as a virtual assignment to this bot.
-        WebhookPayload.Issue issue = payload.getIssue();
-        if (issue != null && bot.getUsername() != null && !bot.getUsername().isBlank()) {
-            WebhookPayload.Owner assignee = new WebhookPayload.Owner();
-            assignee.setLogin(bot.getUsername());
-            issue.setAssignee(assignee);
-        }
         try {
-            issueWorkflowOrchestrator.runAssigned(bot, payload);
-        } catch (Exception e) {
-            // Defense-in-depth: the orchestrator already records errors per workflow.
-            log.error("[Bot '{}'] Failed to handle issue creation: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!bot.isRunOnIssueCreation()) {
+                log.debug("[Bot '{}'] Ignoring issue creation — runOnIssueCreation is disabled", bot.getName());
+                return;
+            }
+            if (!isCallerAllowed(bot, payload)) {
+                return;
+            }
+            // Issue creation is handled by reusing the issue-assigned workflow. The
+            // individual workflow implementations check that the issue is assigned to
+            // the bot, so treat this creation event as a virtual assignment to this bot.
+            WebhookPayload.Issue issue = payload.getIssue();
+            if (issue != null) {
+                WebhookPayload.Owner assignee = new WebhookPayload.Owner();
+                assignee.setLogin(bot.getGitIntegration().getUsername());
+                issue.setAssignee(assignee);
+            }
+            try {
+                issueWorkflowOrchestrator.runAssigned(bot, payload);
+            } catch (Exception e) {
+                // Defense-in-depth: the orchestrator already records errors per workflow.
+                log.error("[Bot '{}'] Failed to handle issue creation: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -421,16 +552,20 @@ public class BotWebhookService {
      */
     @Async
     public void handleIssueComment(Bot bot, WebhookPayload payload) {
-        AiAuditContext.setSessionId(auditSessionId(payload));
-        if (!isCallerAllowed(bot, payload)) {
-            return;
-        }
         try {
-            issueWorkflowOrchestrator.runComment(bot, payload);
-        } catch (Exception e) {
-            // Defense-in-depth: the orchestrator already records errors per workflow.
-            log.error("[Bot '{}'] Failed to handle issue comment: {}", bot.getName(), e.getMessage(), e);
-            botService.recordError(bot, e.getMessage());
+            AiAuditContext.setSessionId(auditSessionId(payload));
+            if (!isCallerAllowed(bot, payload)) {
+                return;
+            }
+            try {
+                issueWorkflowOrchestrator.runComment(bot, payload);
+            } catch (Exception e) {
+                // Defense-in-depth: the orchestrator already records errors per workflow.
+                log.error("[Bot '{}'] Failed to handle issue comment: {}", bot.getName(), e.getMessage(), e);
+                botService.recordError(bot, e.getMessage());
+            }
+        } finally {
+            AiAuditContext.clear();
         }
     }
 
@@ -509,18 +644,36 @@ public class BotWebhookService {
         }
         String owner = payload.getRepository().getOwner().getLogin();
         String repo = payload.getRepository().getName();
-        String body = buildUnrecognisedCommandReply(bot);
         try {
-            RepositoryApiClient client = giteaClientFactory.getApiClient(bot.getGitIntegration());
-            client.postIssueComment(owner, repo, prNumber, body);
+            RepositoryApiClient client = repositoryApiClientFactory.getApiClient(bot.getGitIntegration());
+            String body = buildUnrecognisedCommandReply(bot, resolveMentionName(bot, client));
+            client.postPullRequestComment(owner, repo, prNumber, body);
         } catch (RuntimeException e) {
             log.warn("[Bot '{}'] Failed to post unrecognised-command reply on PR #{}: {}",
                     bot.getName(), prNumber, e.getMessage());
         }
     }
 
-    private String buildUnrecognisedCommandReply(Bot bot) {
-        String mention = bot.getUsername() == null ? "bot" : bot.getUsername();
+    /**
+     * Name to show after {@code @} in replies: the provider's mention name if it has one,
+     * otherwise the bot username. Falls back to "bot" when the provider lookup fails, since
+     * the bot username may not identify the bot on that provider (e.g. Bitbucket).
+     */
+    private String resolveMentionName(Bot bot, RepositoryApiClient client) {
+        try {
+            var providerName = client.getBotMentionName();
+            if (providerName.isPresent()) {
+                return providerName.get();
+            }
+        } catch (RuntimeException e) {
+            log.warn("[Bot '{}'] Could not resolve the bot's mention name from the Git provider: {}",
+                    bot.getName(), e.getMessage());
+            return "bot";
+        }
+        return bot.getGitIntegration().getUsername();
+    }
+
+    private String buildUnrecognisedCommandReply(Bot bot, String mention) {
         StringBuilder sb = new StringBuilder();
         sb.append("🤖 Sorry, I did not understand that command.\n\n");
         sb.append("This bot is not configured to run code reviews, so I can only respond ");
@@ -668,10 +821,7 @@ public class BotWebhookService {
      * Checks whether the webhook event was triggered by this bot's own user.
      */
     public boolean isBotUser(Bot bot, WebhookPayload payload) {
-        String botUsername = bot.getUsername();
-        if (botUsername == null || botUsername.isBlank()) {
-            return false;
-        }
+        String botUsername = bot.getGitIntegration().getUsername();
 
         if (payload.getSender() != null && botUsername.equalsIgnoreCase(payload.getSender().getLogin())) {
             return true;
@@ -683,28 +833,11 @@ public class BotWebhookService {
     }
 
     /**
-     * Returns the bot alias used for @-mention detection,
-     * or an empty string if the bot has no username configured.
+     * Returns the bot alias used for @-mention detection, i.e. {@code @} followed by
+     * the username configured on the bot's Git integration.
      */
     public String getBotAlias(Bot bot) {
-        String username = bot.getUsername();
-        if (username == null || username.isBlank()) {
-            return "";
-        }
-        return "@" + username;
-    }
-
-    /**
-     * Returns {@code true} when {@code text} @-mentions the bot. Used to gate
-     * agentic responses so the bot only reacts when it is explicitly addressed,
-     * never on unrelated activity (e.g. another reviewer's approval or comment).
-     */
-    private boolean mentionsBot(Bot bot, String text) {
-        if (text == null || text.isBlank()) {
-            return false;
-        }
-        String alias = getBotAlias(bot);
-        return !alias.isEmpty() && text.contains(alias);
+        return "@" + bot.getGitIntegration().getUsername();
     }
 
     public boolean isPullRequestAuthor(WebhookPayload payload) {
@@ -725,19 +858,13 @@ public class BotWebhookService {
         return author != null && author.equalsIgnoreCase(commenter);
     }
 
-    public boolean isReviewAgainRequestFromPullRequestAuthor(WebhookPayload payload, String botAlias) {
-        if (!isPullRequestAuthor(payload)) {
-            return false;
-        }
-        return isReviewAgainRequest(payload, botAlias);
-    }
-
     public boolean isReviewAgainRequest(WebhookPayload payload, String botAlias) {
         String body = payload.getComment() != null ? payload.getComment().getBody() : null;
-        if (body == null || botAlias == null || !body.contains(botAlias)) {
+        if (!BotMention.isMentioned(body, botAlias)) {
             return false;
         }
-        String normalized = body.toLowerCase();
+        // Ignore the alias itself, so a bot named e.g. @reviewbot does not count as asking for a review
+        String normalized = BotMention.replaceMention(body, botAlias, " ").toLowerCase();
         return normalized.contains("review")
                 && (normalized.contains("again") || normalized.contains("re-review") || normalized.contains("repeat"));
     }

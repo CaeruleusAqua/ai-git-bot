@@ -1,31 +1,41 @@
 package org.remus.giteabot.issueworkflow;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.remus.giteabot.admin.AiIntegration;
+import org.remus.giteabot.admin.AiIntegrationConcurrencyLimiter;
 import org.remus.giteabot.admin.Bot;
 import org.remus.giteabot.admin.BotService;
-import org.remus.giteabot.admin.GiteaClientFactory;
-import org.remus.giteabot.repository.RepositoryApiClient;
+import org.remus.giteabot.ai.AiRetryContext;
 import org.remus.giteabot.eventhook.EventHookEventType;
 import org.remus.giteabot.eventhook.EventHookPublisher;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.event.model.WebhookPayload;
+import org.remus.giteabot.notification.IssueCommentAcknowledgement;
+import org.remus.giteabot.notification.WorkflowRetryNotices;
 import org.remus.giteabot.prworkflow.config.WorkflowConfiguration;
 import org.remus.giteabot.prworkflow.config.WorkflowSelectionService;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -38,8 +48,8 @@ class IssueWorkflowOrchestratorTest {
     @Mock private WorkflowSelectionService workflowSelectionService;
     @Mock private BotService botService;
     @Mock private EventHookPublisher eventHookPublisher;
-    @Mock private GiteaClientFactory giteaClientFactory;
-    @Mock private RepositoryApiClient repositoryApiClient;
+    @Mock private WorkflowRetryNotices retryNotices;
+    @Mock private IssueCommentAcknowledgement commentAcknowledgement;
 
     private IssueWorkflowOrchestrator orchestrator;
     private RecordingWorkflow recording;
@@ -73,8 +83,8 @@ class IssueWorkflowOrchestratorTest {
         recording = new RecordingWorkflow();
         orchestrator = new IssueWorkflowOrchestrator(
                 new IssueWorkflowRegistry(List.of(recording)),
-                workflowSelectionService, botService, eventHookPublisher, giteaClientFactory);
-        lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repositoryApiClient);
+                workflowSelectionService, botService, eventHookPublisher,
+                retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
         bot = new Bot();
         bot.setName("test-bot");
         WorkflowConfiguration configuration = new WorkflowConfiguration();
@@ -85,6 +95,49 @@ class IssueWorkflowOrchestratorTest {
                 .thenReturn(List.of("issue-x"));
         lenient().when(workflowSelectionService.resolveParams(5L, "issue-x"))
                 .thenReturn(Map.of("k", "v"));
+    }
+
+    @Test
+    void runAssigned_doesNotReportACancelledWaitAsAFailure() throws Exception {
+        AiIntegration integration = new AiIntegration();
+        integration.setId(3L);
+        integration.setParallelWorkerLimit(1);
+        bot.setAiIntegration(integration);
+        AiIntegrationConcurrencyLimiter limiter = new AiIntegrationConcurrencyLimiter();
+        IssueWorkflowOrchestrator limitedOrchestrator = new IssueWorkflowOrchestrator(
+                new IssueWorkflowRegistry(List.of(recording)), workflowSelectionService, botService,
+                eventHookPublisher, retryNotices, commentAcknowledgement, limiter);
+
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = new Thread(() -> limiter.runWithPermit(integration, () -> {
+            holding.countDown();
+            try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }));
+        holder.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS), "the first job must hold the only slot");
+
+        Thread waiting = new Thread(() -> limitedOrchestrator.runAssigned(bot, issuePayload()));
+        waiting.start();
+        Thread.sleep(150);
+        waiting.interrupt();
+        waiting.join(5000);
+        assertFalse(waiting.isAlive());
+
+        release.countDown();
+        holder.join(5000);
+        assertFalse(holder.isAlive(), "the slot holder must have finished");
+
+        // A cancelled wait is not a workflow failure: the workflow never ran, no
+        // STARTED/FAILED event went out and no error is recorded against the bot.
+        assertEquals(0, recording.assigned.size(), "the workflow must not run without a slot");
+        verify(botService, never()).recordError(any(), any());
+        verify(eventHookPublisher, never()).publish(any(), any(), any(), any(), any(), any(), anyMap());
+    }
+
+    @AfterEach
+    void clearRetryContext() {
+        AiRetryContext.clear();
     }
 
     private static WebhookPayload issuePayload() {
@@ -187,29 +240,21 @@ class IssueWorkflowOrchestratorTest {
     }
 
     @Test
-    void runComment_acknowledgesCommentWithEyesReaction() {
-        orchestrator.runComment(bot, issuePayload());
+    void runComment_acknowledgesTheTriggeringComment() {
+        WebhookPayload payload = issuePayload();
 
-        verify(repositoryApiClient).addReaction("Test", "my-repo", 77L, "eyes");
+        orchestrator.runComment(bot, payload);
+
+        verify(commentAcknowledgement).acknowledge(bot, payload);
     }
 
     @Test
-    void runComment_reactionFailure_isSwallowedAndWorkflowStillRuns() {
-        org.mockito.Mockito.doThrow(new RuntimeException("reaction api down"))
-                .when(repositoryApiClient).addReaction(any(), any(), any(), any());
-
-        orchestrator.runComment(bot, issuePayload());
-
-        assertEquals(1, recording.comments.size());
-    }
-
-    @Test
-    void runComment_noWorkflowsResolved_noReaction() {
+    void runComment_noWorkflowsResolved_noAcknowledgement() {
         when(workflowSelectionService.enabledWorkflowKeys(5L)).thenReturn(List.of());
 
         orchestrator.runComment(bot, issuePayload());
 
-        verify(repositoryApiClient, never()).addReaction(any(), any(), any(), any());
+        verify(commentAcknowledgement, never()).acknowledge(any(), any());
     }
 
     @Test
@@ -221,11 +266,56 @@ class IssueWorkflowOrchestratorTest {
         };
         orchestrator = new IssueWorkflowOrchestrator(
                 new IssueWorkflowRegistry(List.of(failing)),
-                workflowSelectionService, botService, eventHookPublisher, giteaClientFactory);
+                workflowSelectionService, botService, eventHookPublisher,
+                retryNotices, commentAcknowledgement, new AiIntegrationConcurrencyLimiter());
 
         orchestrator.runComment(bot, issuePayload());
 
         verify(botService).recordError(bot, "comment boom");
         verify(eventHookPublisher, never()).publish(any(), any(), any(), any(), any(), any(), anyMap());
+    }
+
+    @Test
+    void runComment_pointsRetryNoticesAtTheIssueAndClearsThemAfterwards() {
+        doAnswer(invocation -> {
+            AiRetryContext.install(new AiRetryContext.Notice("issue-x", body -> { }));
+            return null;
+        }).when(retryNotices).installForIssue(any(), any(), any(), any(), any());
+
+        orchestrator.runComment(bot, issuePayload());
+
+        verify(retryNotices).installForIssue(bot, "issue-x", "Test", "my-repo", 12L);
+        assertNull(AiRetryContext.notice(), "retry-notice context must not leak into the next task");
+    }
+
+    @Test
+    void runComment_noticeInstallationFailure_stillClearsTheRetryContext() {
+        doAnswer(invocation -> {
+            AiRetryContext.install(new AiRetryContext.Notice("issue-x", body -> { }));
+            throw new IllegalStateException("notice target blew up");
+        }).when(retryNotices).installForIssue(any(), any(), any(), any(), any());
+
+        orchestrator.runComment(bot, issuePayload());
+
+        verify(botService).recordError(bot, "notice target blew up");
+        assertNull(AiRetryContext.notice(), "retry-notice context must not leak into the next task");
+    }
+
+    @Test
+    void runAssigned_pointsRetryNoticesAtTheIssue() {
+        orchestrator.runAssigned(bot, issuePayload());
+
+        verify(retryNotices).installForIssue(bot, "issue-x", "Test", "my-repo", 12L);
+    }
+
+    @Test
+    void runAssigned_payloadWithoutIssueIdentity_forwardsIncompleteTarget() {
+        WebhookPayload payload = issuePayload();
+        payload.setIssue(null);
+
+        orchestrator.runAssigned(bot, payload);
+
+        assertEquals(1, recording.assigned.size());
+        verify(retryNotices).installForIssue(bot, "issue-x", "Test", "my-repo", null);
     }
 }

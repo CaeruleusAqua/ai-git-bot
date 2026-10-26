@@ -27,6 +27,7 @@ Supported Git platforms include:
 - GitHub Enterprise
 - GitLab
 - Bitbucket Cloud
+- Azure DevOps
 
 Supported AI/provider styles include:
 
@@ -84,7 +85,7 @@ Supported AI/provider styles include:
 
 10. Self-hosted AI governance and observability
     - Teams can run the gateway in their own infrastructure.
-    - Credentials are centrally configured and encrypted at rest.
+    - Credentials are centrally configured and encrypted at rest when `APP_ENCRYPTION_KEY` is configured.
     - Local LLM setups via Ollama or llama.cpp help with compliance and data residency requirements.
     - Built-in Prometheus metrics expose reviews, findings, AI usage, errors, tool calls, and outgoing webhooks.
     - Signed, durable outgoing webhooks push workflow-run and issue-assignment events to external systems.
@@ -122,6 +123,7 @@ Supported AI/provider styles include:
 - `doc/ISSUE_WORKFLOWS.md`: issue-assigned workflow configurations that replace the legacy bot-type selector.
 - `doc/BOT_TOOL_CONFIGURATIONS.md`: per-bot built-in tool whitelists for agent execution.
 - `doc/MCP_SERVER_HANDLING.md`: MCP server JSON configuration, selected-tool persistence, bot details UI, transparency, and deployment strategy integration.
+- `doc/SECRET_REFERENCES.md`: the `${type:key}` secret-reference mechanism, late resolution, the `env` source with its whitelist and reserved names, and the `SecretSource` extension point.
 - `doc/TOOL_CALLING.md`: troubleshooting native vs legacy tool-calling mode for agentic workflows.
 - `doc/CONTEXT_WINDOW_MANAGEMENT.md`: four-layer strategy for managing long agent-session context windows.
 
@@ -130,7 +132,8 @@ Supported AI/provider styles include:
 - `doc/GITEA_SETUP.md`: Gitea bot account, access token, permissions, webhook setup, and troubleshooting.
 - `doc/GITHUB_SETUP.md`: GitHub bot/PAT setup, permissions, webhook setup, and troubleshooting.
 - `doc/GITLAB_SETUP.md`: GitLab token and webhook setup.
-- `doc/BITBUCKET_SETUP.md`: Bitbucket Cloud app password and webhook setup.
+- `doc/BITBUCKET_SETUP.md`: Bitbucket Cloud API token and webhook setup.
+- `doc/AZURE_DEVOPS_SETUP.md`: Azure DevOps PAT, repository addressing, and Service Hook setup.
 
 ### Local LLM setup
 
@@ -168,10 +171,11 @@ Supported AI/provider styles include:
 Typical source locations:
 
 - `src/main/java/org/remus/giteabot/admin/`: admin UI controllers/services/entities for bots, integrations, dashboard, and setup.
-- `src/main/java/org/remus/giteabot/ai/`: AI abstraction and provider implementations.
+- `src/main/java/org/remus/giteabot/ai/`: AI provider abstraction, provider clients, and automatic backoff retries of provider-overload (HTTP 503/529) responses.
 - `src/main/java/org/remus/giteabot/agent/`: agent tools, tool catalog, prompt building, validation, and notification behavior.
 - `src/main/java/org/remus/giteabot/aiusage/`: AI usage and error logging.
 - `src/main/java/org/remus/giteabot/audit/`: tamper-evident workflow audit events.
+- `src/main/java/org/remus/giteabot/azuredevops/`: Azure DevOps webhook/controller/API support.
 - `src/main/java/org/remus/giteabot/bitbucket/`: Bitbucket integration support.
 - `src/main/java/org/remus/giteabot/config/`: application configuration and prompt-related services.
 - `src/main/java/org/remus/giteabot/eventhook/`: outgoing webhook endpoints, delivery, retry, and garbage collection.
@@ -181,6 +185,7 @@ Typical source locations:
 - `src/main/java/org/remus/giteabot/issueworkflow/`: issue-assigned workflow orchestration and coding/writer implementations.
 - `src/main/java/org/remus/giteabot/mcp/`: MCP server discovery, tool catalog, and integration.
 - `src/main/java/org/remus/giteabot/metrics/`: Prometheus metrics registration.
+- `src/main/java/org/remus/giteabot/notification/`: repository-side notifications for workflow runs (provider-overload retry notices, comment acknowledgement).
 - `src/main/java/org/remus/giteabot/prworkflow/`: PR workflow orchestration, registry, runs, and shared configuration.
 - `src/main/java/org/remus/giteabot/prworkflow/review/`: default PR review workflow.
 - `src/main/java/org/remus/giteabot/prworkflow/agentreview/`: agentic PR review workflow.
@@ -243,7 +248,7 @@ After startup, open `http://localhost:8080`, create the initial admin account, c
 ## Security and privacy model
 
 - AI-Git-Bot is designed for self-hosting.
-- Secrets such as API keys, tokens, webhook secrets, and outgoing webhook credentials are encrypted at rest with AES-256-GCM.
+- Secrets such as API keys, tokens, webhook secrets, and outgoing webhook credentials are encrypted at rest with AES-256-GCM when `APP_ENCRYPTION_KEY` is configured; otherwise they are stored in plain text.
 - Local LLM providers can be used to keep code and prompts inside controlled infrastructure.
 - Per-bot user whitelists can restrict token-spending interactions to trusted Git usernames.
 - Per-bot tool configurations and MCP whitelists limit the tools an agent can invoke.
@@ -253,7 +258,7 @@ After startup, open `http://localhost:8080`, create the initial admin account, c
 
 ## Search and classification keywords
 
-AI-Git-Bot, AI Git Bot, ai-git-bot, self-hosted AI code review, AI pull request review, pull request automation, AI unit tests, unit-test-author, white-box test generation, code review bot, Git bot, Gitea bot, GitHub bot, GitLab bot, Bitbucket bot, GitHub Enterprise AI review, coding agent, issue implementation agent, autonomous software agent, technical writer agent, AI issue triage, issue refinement, acceptance criteria generator, repository automation, webhook gateway, AI gateway, LLM gateway, Anthropic Claude, OpenAI, Gemini, Google AI, Ollama, llama.cpp, local LLM, Model Context Protocol, MCP server, MCP tool whitelist, Java, Spring Boot, PostgreSQL, Docker Compose, encrypted secrets, on-premise AI, compliance-friendly AI automation, Prometheus metrics, outgoing webhooks, audit trail, i18n coverage, README sync.
+AI-Git-Bot, AI Git Bot, ai-git-bot, self-hosted AI code review, AI pull request review, pull request automation, AI unit tests, unit-test-author, white-box test generation, code review bot, Git bot, Gitea bot, GitHub bot, GitLab bot, Bitbucket bot, Azure DevOps bot, GitHub Enterprise AI review, coding agent, issue implementation agent, autonomous software agent, technical writer agent, AI issue triage, issue refinement, acceptance criteria generator, repository automation, webhook gateway, AI gateway, LLM gateway, Anthropic Claude, OpenAI, Gemini, Google AI, Ollama, llama.cpp, local LLM, Model Context Protocol, MCP server, MCP tool whitelist, Java, Spring Boot, PostgreSQL, Docker Compose, encrypted secrets, on-premise AI, compliance-friendly AI automation, Prometheus metrics, outgoing webhooks, audit trail, i18n coverage, README sync.
 
 ## Guidance for LLMs and code agents
 
@@ -265,6 +270,7 @@ AI-Git-Bot, AI Git Bot, ai-git-bot, self-hosted AI code review, AI pull request 
 - Use `doc/TOOL_CALLING.md` when investigating agent tool-call failures or provider-specific function-calling quirks.
 - Use `doc/CONTEXT_WINDOW_MANAGEMENT.md` when working on long-session agent context compaction.
 - Use `doc/BOT_TOOL_CONFIGURATIONS.md` and `doc/MCP_SERVER_HANDLING.md` before changing tool exposure or MCP integration.
+- Use `doc/SECRET_REFERENCES.md` before changing secret resolution or adding a secret source type.
 - Use `doc/OUTGOING_WEBHOOKS.md` before changing event delivery or webhook payload behavior.
 - Use the platform-specific setup guides before changing webhook payload or token permission logic.
 - Use `pom.xml` for Java/Spring Boot dependency and build metadata.

@@ -8,8 +8,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.remus.giteabot.admin.Bot;
-import org.remus.giteabot.admin.GiteaClientFactory;
-import org.remus.giteabot.gitea.model.WebhookPayload;
+import org.remus.giteabot.admin.RepositoryApiClientFactory;
+import org.remus.giteabot.event.model.WebhookPayload;
 import org.remus.giteabot.prworkflow.PrWorkflowCategory;
 import org.remus.giteabot.prworkflow.PrWorkflowContext;
 import org.remus.giteabot.prworkflow.WorkflowResult;
@@ -53,7 +53,7 @@ class E2ETestWorkflowTest {
 
     @Mock private DeploymentOrchestrator deploymentOrchestrator;
     @Mock private WorkflowSelectionService selectionService;
-    @Mock private GiteaClientFactory giteaClientFactory;
+    @Mock private RepositoryApiClientFactory repositoryApiClientFactory;
     @Mock private RepositoryApiClient repoClient;
     @Mock private org.remus.giteabot.prworkflow.e2e.promotion.SuitePromotionService suitePromotionService;
     @Mock private org.remus.giteabot.prworkflow.PrWorkflowRunRepository runRepository;
@@ -68,9 +68,9 @@ class E2ETestWorkflowTest {
         workspaceManager = PrTestWorkspaceManager.rootedAt(tmp);
         TestSuiteRunnerRegistry runners = new TestSuiteRunnerRegistry(List.of(new NoopTestSuiteRunner()));
         workflow = new E2ETestWorkflow(deploymentOrchestrator, suiteRepository,
-                workspaceManager, runners, selectionService, giteaClientFactory,
+                workspaceManager, runners, selectionService, repositoryApiClientFactory,
                 suitePromotionService, runRepository);
-        lenient().when(giteaClientFactory.getApiClient(any())).thenReturn(repoClient);
+        lenient().when(repositoryApiClientFactory.getApiClient(any())).thenReturn(repoClient);
     }
 
     @Test
@@ -165,7 +165,7 @@ class E2ETestWorkflowTest {
         };
         E2ETestWorkflow w = new E2ETestWorkflow(deploymentOrchestrator, suiteRepository,
                 workspaceManager, new TestSuiteRunnerRegistry(List.of(crashing)),
-                selectionService, giteaClientFactory,
+                selectionService, repositoryApiClientFactory,
                 suitePromotionService, runRepository);
 
         Bot bot = bot(new DeploymentTarget());
@@ -196,7 +196,7 @@ class E2ETestWorkflowTest {
         };
         E2ETestWorkflow w = new E2ETestWorkflow(deploymentOrchestrator, suiteRepository,
                 workspaceManager, new TestSuiteRunnerRegistry(List.of(capturing)),
-                selectionService, giteaClientFactory,
+                selectionService, repositoryApiClientFactory,
                 suitePromotionService, runRepository);
 
         Bot bot = bot(new DeploymentTarget());
@@ -244,7 +244,7 @@ class E2ETestWorkflowTest {
         };
         E2ETestWorkflow w = new E2ETestWorkflow(deploymentOrchestrator, suiteRepository,
                 workspaceManager, new TestSuiteRunnerRegistry(List.of(passing)),
-                selectionService, giteaClientFactory,
+                selectionService, repositoryApiClientFactory,
                 suitePromotionService, runRepository);
 
         Bot bot = bot(new DeploymentTarget());
@@ -270,6 +270,40 @@ class E2ETestWorkflowTest {
         assertThat(bodies.getAllValues())
                 .anyMatch(b -> b.contains("Suite promotion") && b.contains("#4242"));
         verify(suitePromotionService).promote(any(), any(), any(), eq("acme"), eq("web"), eq("feature/x"));
+    }
+
+    @Test
+    void promotionFailure_changesSuccessfulTestRunToWorkflowFailure() {
+        TestSuiteRunner passing = new TestSuiteRunner() {
+            @Override public E2eTestFramework framework() { return E2eTestFramework.PLAYWRIGHT; }
+            @Override public TestSuiteOutcome run(TestSuiteRequest request) {
+                return TestSuiteOutcome.passed("all green", 1);
+            }
+        };
+        E2ETestWorkflow w = new E2ETestWorkflow(deploymentOrchestrator, suiteRepository,
+                workspaceManager, new TestSuiteRunnerRegistry(List.of(passing)),
+                selectionService, repositoryApiClientFactory,
+                suitePromotionService, runRepository);
+
+        Bot bot = bot(new DeploymentTarget());
+        WebhookPayload payload = payload("acme", "web", 24L, "headAA");
+        payload.getPullRequest().getHead().setRef("feature/x");
+        when(deploymentOrchestrator.requestDeployment(any()))
+                .thenReturn(DeploymentResult.ready("https://x", "{}"));
+        when(selectionService.resolveParams(anyLong(), eq(E2ETestWorkflow.KEY)))
+                .thenReturn(Map.of("suiteLifecycle", "offer-as-pr"));
+        org.remus.giteabot.prworkflow.PrWorkflowRun runEntity =
+                new org.remus.giteabot.prworkflow.PrWorkflowRun();
+        runEntity.setId(42L);
+        when(runRepository.findById(42L)).thenReturn(java.util.Optional.of(runEntity));
+        when(suitePromotionService.promote(any(), any(), any(), eq("acme"), eq("web"), eq("feature/x")))
+                .thenReturn(org.remus.giteabot.prworkflow.e2e.promotion.SuitePromotionService.Outcome
+                        .failure("push failed"));
+
+        WorkflowResult result = w.run(ctx(bot, payload));
+
+        assertThat(result.status()).isEqualTo(WorkflowResultStatus.FAILED);
+        assertThat(result.summary()).contains("Suite promotion failed").contains("push failed");
     }
 
     @Test

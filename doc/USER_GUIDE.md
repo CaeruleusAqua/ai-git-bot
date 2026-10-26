@@ -2,7 +2,7 @@
 
 ## Overview
 
-AI-Git-Bot is a **Gateway application** that provides a web-based management interface for creating and managing AI-powered code review bots. Each bot connects an AI provider (Anthropic, OpenAI, Google AI, Ollama, or llama.cpp) with a Git provider (Gitea, GitHub, GitHub Enterprise, GitLab, or Bitbucket Cloud) and has its own unique webhook URL. The Gateway architecture allows you to manage multiple bots with different configurations across different Git platforms — all from a single dashboard.
+AI-Git-Bot is a **Gateway application** that provides a web-based management interface for creating and managing AI-powered code review bots. Each bot connects an AI provider (Anthropic, OpenAI, OpenRouter, Google AI, Ollama, or llama.cpp) with a Git provider (Gitea, GitHub, GitHub Enterprise, GitLab, Bitbucket Cloud, or Azure DevOps) and has its own unique webhook URL. The Gateway architecture allows you to manage multiple bots with different configurations across different Git platforms — all from a single dashboard.
 
 Besides classic pull-request review bots, AI-Git-Bot also supports **issue-based agent workflows** and **opt-in PR workflows**:
 
@@ -58,7 +58,7 @@ The Usage page (`/usage`) audits all AI provider interactions. It contains two c
 
 ### AI usage
 
-A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
+A paginated table (20 entries per page) of every AI interaction with the columns **Timestamp**, **AI-Integration**, **Session-ID**, **Round**, **Input tokens**, **Output tokens**, **Cache creation input tokens**, **Cache read input tokens**, and **Details**. The Session-ID has the form `owner/repo#number` and identifies the pull request or issue that triggered the interaction. The **Round** column shows which round of the agent loop produced the interaction — useful to see how deep into a loop a run got — and is **—** for single-shot calls that are not part of an agent loop (a plain code review or a triage classification, for example). Click a column header to sort ascending/descending. Use **Clear all** in the section header (a confirmation dialog is shown) to remove all recorded usage entries.
 
 Click the **Raw** button in the **Details** column to open a modal showing the raw JSON request sent to the AI provider and the raw JSON response received back. This is useful for debugging provider-specific behavior, token accounting discrepancies, or unexpected completions.
 
@@ -87,15 +87,18 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
      |----------|-----------------|------------------|
      | `anthropic` | `https://api.anthropic.com` | claude-opus-4-7, claude-sonnet-4-6, claude-haiku-4-5-20251001 |
      | `openai` | `https://api.openai.com` | gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex |
+     | `openrouter` | `https://openrouter.ai/api` | `openrouter/auto`, `deepseek/deepseek-v4.1-flash`, `z-ai/glm-5.3-flash`, `xiaomi/mimo-v2.6-flash` |
      | `google` | `https://generativelanguage.googleapis.com` | gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash |
      | `ollama` | `http://localhost:11434` | *(user-configured)* |
      | `llamacpp` | `http://localhost:8081` | *(user-configured)* |
      
-   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups
-   - **API Key**: Your API key (encrypted at rest; not needed for Ollama or llama.cpp)
+   - **API URL**: Pre-filled based on provider; customize for self-hosted or proxy setups. OpenRouter uses a read-only, region-derived official URL.
+   - **API Key**: Your API key (encrypted at rest when `APP_ENCRYPTION_KEY` is configured; not needed for Ollama or llama.cpp)
    - **API Version**: API version string (Anthropic only, e.g., `2023-06-01`)
    - **Model**: Select from the dropdown for suggested models, or type a custom model name
+   - **Model Flavor**: Available flavors are listed under the field. OpenRouter currently accepts only `standard` (provider default); see the OpenAI-compatible section for OpenAI flavors.
    - **Max Tokens**: Maximum tokens per AI response (default: 4096)
+   - **Parallel Worker Limit**: Maximum number of jobs that may run at the same time for this integration (`0` = unlimited, `1`–`20` = cap). See [Parallel worker limit](#parallel-worker-limit)
    - **Max Diff Chars Per Chunk**: Maximum characters per diff chunk (default: 120000)
    - **Max Diff Chunks**: Maximum number of diff chunks to process (default: 8)
    - **Retry Truncated Chunk Chars**: Truncated chunk size for retries (default: 60000)
@@ -112,9 +115,24 @@ AI Integrations define connections to AI providers. Navigate to **AI Integration
 - Requires an API key
 - Compatible with OpenAI API proxies by changing the API URL
 - Suggested models: gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex
+- **Model Flavor** (this provider only): `Standard` sends no extra request fields. `No reasoning effort` sends `reasoning_effort: "none"` — use it when a gateway in front of the model (e.g. for `gpt-5.6-sol`) injects a default `reasoning_effort` and the provider rejects function tools on `/v1/chat/completions`
+
+#### OpenRouter
+
+- Select **openrouter**, enter an **inference API key**, choose a suggested model or enter an exact model ID (usually `author/model`), and set your response/context limits. Suggestions are bundled examples, not a live catalog or availability guarantee; check the current [model catalog](https://openrouter.ai/models?order=most-popular) and enter another model ID when needed. Custom model IDs remain supported without changing configuration files or requesting the catalog during inference.
+- Configure **Routing and privacy**: Global (default), EU or US. EU/US are Enterprise in-region routes and require account eligibility. The API root is fixed by the selected region; custom proxies use the generic `openai` provider.
+- When entering or replacing a key, the server checks `/v1/key` at the selected official host, rejects management/provisioning keys, and verifies the region is allowed. Missing or invalid key-type flags fail closed. An omitted `allowed_data_regions` is accepted only for Global; EU/US require an explicit matching entitlement. Explicit restrictions must be an array containing the selected region. See the [OpenRouter key response schema](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-api-key). Validation runs outside database transactions. HTTP redirects are disabled for key checks and inference.
+- Leave the key blank on edit to keep it **only for the same provider**. A provider change requires a newly entered key or an explicit **Clear** for providers that allow keyless saves. Switching an existing generic OpenRouter integration from `openai` to `openrouter` therefore requires re-entering its key. Keys use the existing encrypted storage when `APP_ENCRYPTION_KEY` is configured.
+- Existing OpenRouter keys are not rechecked on ordinary settings edits. Changing the region rechecks the retained key against the new route; to recheck a key otherwise, enter it again. OpenRouter integrations cannot be saved without a key, including after using **Clear**; enter a replacement before saving.
+- **Provider data collection** defaults to **Deny**; **Require zero data retention (ZDR)** defaults to off. Requests always require the configured parameters and disable provider fallbacks. A missing compatible route fails explicitly rather than weakening the settings.
+- ZDR and data collection are independent routing filters. When ZDR is enabled, only ZDR endpoints are eligible even if data collection is set to **Allow**; **Allow** does not override ZDR. Both selections are preserved rather than silently normalised.
+- Requests explicitly disable the documented OpenRouter [plugins](https://openrouter.ai/docs/guides/features/plugins), including [automatic context compression](https://openrouter.ai/docs/guides/features/message-transforms) and the [Pareto Router](https://openrouter.ai/docs/guides/routing/routers/pareto-router). Account-level **Prevent overrides** settings can enforce plugins anyway; configure the OpenRouter account without forced plugins and select a concrete model ID for predictable review behavior.
+- Requests use `max_tokens`; the generic OpenAI integration continues to use `max_completion_tokens`. The `standard` flavor leaves reasoning at the provider default. Unsupported explicit flavors are rejected.
+- Native tool continuations preserve opaque `reasoning_details` in memory, separately from visible answers and session history. The existing, explicitly enabled `AI_USAGE_RAW_PAYLOADS_ENABLED` audit option also captures these provider payloads; it is off by default.
+- A key-check HTTP 401 means the key was rejected. Inference HTTP 402/429 indicates credit/rate limits; check the account. Inference HTTP 404 can indicate an unavailable model or route under the selected policy. Provider response bodies are not exposed in errors.
 
 #### Google AI
-- Requires a Gemini API key from Google AI Studio; the key is stored encrypted at rest
+- Requires a Gemini API key from Google AI Studio; the key is encrypted at rest when `APP_ENCRYPTION_KEY` is configured
 - Uses the Gemini REST API at `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
 - Suggested models: gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash
 - Enter model names without the `models/` prefix (for example, `gemini-2.5-flash`) or with the prefix if copied from Google documentation
@@ -145,13 +163,14 @@ Configure OpenAI-compatible providers in **AI Integrations → New Integration**
 | **API Key** | Enter the provider API key. For local tools that do not enforce authentication, enter a placeholder value such as `local` if the server accepts or ignores it. |
 | **API Version** | Leave blank. This field is only used for Anthropic integrations. |
 | **Model** | Enter the provider's exact model identifier, including any provider-specific prefix. |
+| **Model Flavor** | Keep the default `Standard` unless the selected model rejects function tools because of an injected `reasoning_effort` (see Troubleshooting). Select `No reasoning effort` for reasoning models such as `gpt-5.6-sol` used through a gateway that injects a default `reasoning_effort`. The field is only shown for providers that offer flavors. |
 | **Max Tokens** and chunk limits | Start with the defaults, then reduce chunk limits if the selected model has a smaller context window. |
 
 Documented examples:
 
 | Provider/tool | API URL | API key | Example model | Notes |
 |---------------|---------|---------|---------------|-------|
-| OpenRouter | `https://openrouter.ai/api` | OpenRouter API key | `openai/gpt-4o-mini` | OpenRouter's endpoint includes `/api/v1/chat/completions`; enter the base URL without the trailing `/v1/chat/completions`. Model names usually include a provider prefix. |
+| OpenRouter (existing generic setup) | `https://openrouter.ai/api` | OpenRouter API key | `openai/gpt-4o-mini` | For new setups, select the dedicated **OpenRouter** provider above, which uses OpenRouter's token-cap dialect and explicit routing policy. Existing `openai` configurations remain supported. |
 | LM Studio local server | `http://localhost:1234` | Placeholder such as `local` if authentication is disabled | Model name shown by LM Studio | Enable LM Studio's OpenAI-compatible local server before using the integration. |
 | vLLM OpenAI-compatible server | `http://localhost:8000` | The key configured for the server, or a placeholder if auth is disabled | Served model name, for example `meta-llama/Llama-3.1-8B-Instruct` | Ensure the vLLM server exposes `/v1/chat/completions` from this base URL. |
 
@@ -172,6 +191,9 @@ Troubleshooting:
 - **Model not found**: Copy the exact model identifier from the provider's model list.
 - **Empty or malformed responses**: The provider may not return the expected OpenAI chat completions response format for that model.
 - **Context length or token errors**: Reduce **Max Diff Chars/Chunk**, **Max Diff Chunks**, or **Max Tokens**, or choose a model with a larger context window.
+- **400 "Function tools with reasoning_effort are not supported"**: Your gateway injects a default `reasoning_effort`, which the selected model rejects when function tools are used on `/v1/chat/completions`. In the integration, set **Model Flavor** to `No reasoning effort` (sends `reasoning_effort: "none"`).
+- **400 "Unexpected reasoning effort ..."**: the model's chat template inside vLLM validates the value, and each template has its own vocabulary (Qwen templates accept `xhigh`, `medium`, `low`; others take a number or only a boolean). Correct `OPENAI_CHAT_TEMPLATE_KWARGS` (property `openai.chat-template-kwargs`) to a value the template lists, or clear it to use the server default.
+- **Reviews spend more tokens than expected on a self-hosted model**: a vLLM started with `--default-chat-template-kwargs '{"enable_thinking":true,...}'` applies that effort to every client. Set `OPENAI_CHAT_TEMPLATE_KWARGS` for the bot (e.g. `{"enable_thinking": true, "reasoning_effort": "low"}` or `{"enable_thinking": false}`); the request then carries `chat_template_kwargs` and overrides the server default for this bot only, because `--default-chat-template-kwargs` has no per-request opt-out of its own.
 
 #### Ollama
 - No API key required
@@ -180,12 +202,31 @@ Troubleshooting:
 
 #### llama.cpp
 - No API key required
-- Model is determined by the llama.cpp server configuration
+- For a server started with one model (`--model`), the Model field is ignored by llama.cpp
+- In router mode (no `--model`), the Model field must contain the exact model ID returned by `GET /v1/models`; llama.cpp uses it to route each request
+- Uses llama.cpp's OpenAI-compatible `/v1/completions` endpoint
 - Supports GBNF grammar constraints for reliable JSON output (agent feature)
+
+### Parallel worker limit
+
+Every AI integration has a **Parallel worker limit** that controls how many of its jobs may run at the same time:
+
+- **0** (default) — unlimited parallel execution. Jobs start immediately, exactly as before.
+- **1–20** — at most that many jobs run concurrently for the integration. Once the limit is reached, further jobs are **not dropped**: they stay queued and start as soon as a running job finishes.
+
+The value is validated when the integration is saved — the form and the server both accept only `0`–20. A job that is waiting for a free slot is not reported as running: its run row is created once the slot becomes available.
+
+The limit is applied per AI integration, so a busy integration never holds back jobs that use a different one, and every bot's jobs are bounded by the limit of the AI integration it is configured with. It is intended for self-hosted or resource-constrained providers (for example a local vLLM or llama.cpp backend) that become unstable or slow when several reviews run against them at once. The counter lives in the running application, so in a multi-instance deployment the limit applies per instance rather than globally.
 
 ### Editing an AI Integration
 
-Click the **Edit** button on the integration's row. When editing, leave the API Key field blank to keep the existing encrypted value.
+Click the **Edit** button on the integration's row. Leave the API Key field blank to keep the existing stored value **only when the provider stays the same**.
+
+Changing **any** provider requires a newly entered API key or an explicit **Clear** of the stored key. This also applies when switching to a keyless provider such as Ollama or llama.cpp: click **Clear** before saving so the previous provider's credential cannot be reused. OpenRouter still requires a replacement key and does not allow a keyless save.
+
+Every save requires a registered **Provider Type**. Missing, blank or unknown provider types are rejected, including requests sent outside the form.
+
+Empty, non-numeric or overflowing token/worker-limit fields show a validation flash message without saving the integration. Worker-limit-only errors keep the specific `0`–`20` message. Malformed OpenRouter region, data-collection or boolean values still return HTTP 400; submitted credentials are not included in these validation messages.
 
 ### Deleting an AI Integration
 
@@ -203,6 +244,7 @@ Git Integrations define connections to Git providers. Navigate to **Git Integrat
 | **GitHub** | github.com or GitHub Enterprise Server | [GitHub Setup](GITHUB_SETUP.md) |
 | **GitLab** | gitlab.com or self-managed GitLab CE/EE | [GitLab Setup](GITLAB_SETUP.md) |
 | **Bitbucket Cloud** | bitbucket.org | [Bitbucket Setup](BITBUCKET_SETUP.md) |
+| **Azure DevOps** | dev.azure.com, the legacy `*.visualstudio.com` hosts, and Azure DevOps Server (collection in the URL optional) | [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md) |
 
 ### Creating a Git Integration
 
@@ -216,15 +258,18 @@ Git Integrations define connections to Git providers. Navigate to **Git Integrat
      | `gitea` | `https://gitea.example.com` | API Token |
      | `github` | `https://github.com` | Personal Access Token (PAT) |
      | `gitlab` | `https://gitlab.com` | Personal Access Token (PAT) |
-     | `bitbucket` | `https://bitbucket.org` | App Password / API Token |
+     | `bitbucket` | `https://bitbucket.org` | Atlassian account email + API token |
+     | `azure_devops` | `https://dev.azure.com` | Personal Access Token (PAT) |
      
     - **URL**: The Git server URL:
      - For Gitea: `https://gitea.example.com`
      - For GitHub: `https://github.com` or `https://github.yourdomain.com` (Enterprise)
      - For GitLab: `https://gitlab.com` or `https://gitlab.yourdomain.com` (self-managed)
      - For Bitbucket: `https://bitbucket.org`
-    - **Token**: Your Git API token (encrypted at rest)
-    - **Post-review Action**: defaults to **None**. Currently GitLab can use it to approve the merge request or post a request-changes note after each bot review.
+     - For Azure DevOps: `https://dev.azure.com` (Services), `https://yourorg.visualstudio.com` (legacy) or `https://tfs.yourdomain.com/tfs` (Server; appending the collection, e.g. `/tfs/DefaultCollection`, is optional and pins the integration to that one collection)
+    - **Username**: The username of the Git account the bot acts as (e.g. `ai_bot`) — not an e-mail address or display name. It is used to detect and ignore the bot's own actions, to recognise the bot as reviewer or assignee, and as the mention alias (e.g. `@ai_bot`). It applies to every bot that uses this integration. For Bitbucket Cloud, enter the **Atlassian account email** instead (see below).
+    - **Token**: Your Git API token (encrypted at rest when `APP_ENCRYPTION_KEY` is configured)
+    - **Post-review Action**: defaults to **None**. Currently GitLab and Azure DevOps can use it to approve the pull/merge request or post a request-changes vote or note after each bot review.
 3. Click **Save**
 
 ### Provider-Specific Notes
@@ -260,10 +305,22 @@ Git Integrations define connections to Git providers. Navigate to **Git Integrat
 
 #### Bitbucket Cloud
 
-- Uses Basic authentication (`username:token`)
+- API calls use Basic authentication with the Atlassian account email and an API token (`email:api_token`); Git over HTTPS uses the fixed username `x-bitbucket-api-token-auth` with the same token.
+- Only Atlassian account API tokens are supported for now; workspace/project/repository access tokens are not.
+- The bot's identity (reviewer requests, mentions, own comments) is the account behind the configured email, resolved via the API. Use a dedicated Atlassian account: all events created by that account are ignored
 - API endpoint is at `api.bitbucket.org/2.0`
 - Issue-based agent workflows (coding and writer) are not available
 - See [Bitbucket Setup](BITBUCKET_SETUP.md) for token creation instructions
+
+#### Azure DevOps
+
+- Uses Basic authentication with an empty username and the PAT as the password
+- Repositories are addressed as organization + `Project/Repository`, because Azure DevOps has three
+  address levels where the other providers have two
+- Webhooks are Service Hooks, which carry no body signature; the bot verifies a shared secret in an
+  `X-AiGitBot-Token` header instead
+- Work Items and Azure Pipelines (and therefore the `CI_ACTION` deployment target) are not supported
+- See [Azure DevOps Setup](AZURE_DEVOPS_SETUP.md) for PAT and Service Hook instructions
 
 ### Managing Git Integrations
 
@@ -278,7 +335,6 @@ Bots are the core entities that connect an AI provider with a Git provider. Navi
 1. Click **New Bot**
 2. Fill in the form:
    - **Name**: A unique name for the bot (e.g., "Code Reviewer")
-   - **Username**: The Git username the bot uses (e.g., "ai_bot"). This is used to detect and ignore the bot's own actions, and as the mention alias (e.g., `@ai_bot`)
    - **Bot Type**: Choose **Coding bot** for pull-request reviews and issue implementation, or **Writer bot** for technical-writing assistance on issues.
    - **System Prompt**: Select one of the prompt entries configured under **System settings → System prompts**. Use **Preview** next to the dropdown to review the code-review, issue-agent, writer-agent, and the three E2E (planner / author / runner) instructions before saving. The preview opens as an expandable panel view so long prompts can be inspected section by section.
    - **MCP Configuration** *(optional)*: Select a saved MCP configuration. Use **Details** next to the dropdown to open a read-only list of the currently selected MCP tools.
@@ -286,6 +342,7 @@ Bots are the core entities that connect an AI provider with a Git provider. Navi
    - **Workflow Configuration** *(optional)*: Select which PR workflows should run for this bot. Leave empty to inherit the auto-bootstrapped default configuration, which is **review-only**. Use **Details** next to the dropdown to inspect the selected workflows and any persisted parameters.
    - **Deployment Target** *(optional)*: Select the per-PR preview environment used by workflows that need a live deployment, such as **Full-stack QA** / E2E tests.
    - **Run workflow when PR is opened** *(optional)*: When enabled, the bot executes its configured PR workflows whenever a pull request is created or opened — even if the bot is not assigned as a reviewer. Disabled by default. Useful for mandatory-review bots that must run on every PR. See [PR Workflows → Trigger conditions](PR_WORKFLOWS.md#trigger-conditions) for details.
+   - **Branch Filter** *(optional)*: A comma-separated list of glob patterns that restricts PR workflows to specific target branches/refs. When a PR's target (base) branch does not match the list, the workflow is **not** started and no PR comment is posted — only an ignore entry is logged. **Blank or `*` ⇒ all branches and tags are allowed** (the historical default). Patterns follow [gobwas/glob](https://pkg.go.dev/github.com/gobwas/glob#Compile) syntax: `*` (any run, including `/`), `?` (single character), `[abc]` / `[a-z]` (character classes), and `{a,b}` (alternation). Use a `refs/heads/` or `refs/tags/` prefix to match full ref names (e.g. `refs/heads/develop`). Useful for branch-based workflows (e.g. git-flow) that should only run on specific target branches — e.g. `releases/*` allows only PRs into a release branch. See [PR Workflows → Trigger conditions](PR_WORKFLOWS.md#trigger-conditions) for details.
    - **AI Integration**: Select an AI integration from the dropdown
    - **Git Integration**: Select a Git integration from the dropdown
    - **User Whitelist** *(optional)*: Restrict AI-spending interactions to a set of Git usernames. This is recommended for public repositories.
@@ -462,18 +519,20 @@ Configure this URL in your Git provider's webhook settings. See the provider-spe
 - **GitHub**: [GitHub Webhook Setup](GITHUB_SETUP.md#4-configure-webhooks)
 - **GitLab**: [GitLab Webhook Setup](GITLAB_SETUP.md#4-configure-webhooks)
 - **Bitbucket Cloud**: [Bitbucket Webhook Setup](BITBUCKET_SETUP.md#step-4-configure-the-webhook-in-bitbucket)
+- **Azure DevOps**: [Azure DevOps Service Hook Setup](AZURE_DEVOPS_SETUP.md#step-4-create-service-hook-subscriptions)
 
 ### Webhook Events
 
 Select the following events in your Git provider's webhook configuration:
 
-| Event | Gitea | GitHub | GitLab | Bitbucket | Description |
-|-------|-------|--------|--------|-----------|-------------|
-| Pull Request | ✅ Pull Request | ✅ Pull requests | ✅ Merge request events | ✅ PR: Created/Updated | PR/MR open/close and reviewer request events |
-| Comments | ✅ Issue Comment | ✅ Issue comments | ✅ Comments | ✅ PR: Comment created | Bot mentions in comments; Bitbucket re-review requests |
-| PR Review | ✅ Pull Request (`reviewed` action) | ✅ Pull request reviews | — | — | Review submissions |
-| PR Comment | ✅ Pull Request Comment | ✅ Pull request review comments | — | — | Inline code comments |
-| Issues | ✅ Issues | ✅ Issues | ✅ Issues events | — | Issue-based agent workflows (optional) |
+| Event | Gitea | GitHub | GitLab | Bitbucket | Azure DevOps | Description |
+|-------|-------|--------|--------|-----------|--------------|-------------|
+| Pull Request | ✅ Pull Request | ✅ Pull requests | ✅ Merge request events | ✅ PR: Created/Updated | ✅ Pull request created + Pull request updated | PR/MR open/close and reviewer request events |
+| Comments | ✅ Issue Comment | ✅ Issue comments | ✅ Comments | ✅ PR: Comment created | ✅ Pull request commented on | Bot mentions in comments; Bitbucket and Azure DevOps re-review requests |
+| PR Review | ✅ Pull Request (`reviewed` action) | ✅ Pull request reviews | — | — | — | Review submissions |
+| PR Comment | ✅ Pull Request Comment | ✅ Pull request review comments | — | — | ✅ Pull request commented on (same subscription) | Inline code comments |
+| Issues | ✅ Issues | ✅ Issues | ✅ Issues events | — | — | Issue-based agent workflows (optional) |
+
 
 ### Bot Statistics
 
@@ -488,7 +547,7 @@ The dashboard and bot list show per-bot statistics:
 
 Coding bots use an explicit-request review workflow:
 
-- Review pull requests only when the PR/MR is created with the bot as reviewer, the bot is added/re-requested as reviewer, or (Bitbucket) the PR author comments a request such as `@ai_bot - Review the Pull-Request again`.
+- Review pull requests only when the PR/MR is created with the bot as reviewer, the bot is added/re-requested as reviewer, or (Bitbucket, Azure DevOps) the PR author comments a request such as `@ai_bot - Review the Pull-Request again`.
 - Do not automatically re-review when new commits are pushed.
 - Respond to bot mentions in PR comments and inline review comments from the PR/MR author.
 - Start the issue implementation workflow when the bot is assigned to an issue.
@@ -637,7 +696,7 @@ The migration that adds .NET validation support overwrites the **Default** codin
 
 ### Data Encryption
 
-Sensitive data (API keys, Git tokens) is encrypted at rest using AES-256-GCM encryption. Set the `APP_ENCRYPTION_KEY` environment variable to a secure value for production deployments. If not set, a random key is generated at startup (data won't survive restarts).
+When `APP_ENCRYPTION_KEY` is configured, sensitive data is encrypted at rest using AES-256-GCM. Without it, API keys and Git tokens are stored in plain text, and SSH private keys cannot be stored. Set a stable, secure value before entering production credentials.
 
 ### Authentication
 
@@ -660,7 +719,7 @@ The whitelist is the recommended defence for bots installed on **public reposito
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `APP_ENCRYPTION_KEY` | *(random)* | Encryption key for sensitive data. Set to a fixed value for persistence across restarts. |
+| `APP_ENCRYPTION_KEY` | *(none)* | Encryption key for sensitive data. Without it, credentials use plain-text storage and SSH private keys are rejected. |
 | `APP_PUBLIC_URL` | `http://localhost:8080` | Public base URL of the bot instance. Used as callback URL for CI deployment workflows and preview environments. Set to the externally reachable URL when running behind a reverse proxy or in CI. |
 | `DATABASE_URL` | H2 in-memory | Database JDBC URL |
 | `DATABASE_USERNAME` | `sa` | Database username |
@@ -735,6 +794,28 @@ Set `GITEABOT_SECURITY_OAUTH_DEBUG_LOGGING_ENABLED=true` and configure the appli
 | `AGENT_MAX_TOKENS` | `32768` | Maximum tokens for AI responses in agent mode |
 | `AGENT_BRANCH_PREFIX` | `ai-agent/` | Prefix for branches created by the agent |
 | `AGENT_VALIDATION_ENABLED` | `true` | Enable syntax validation before commit |
+| `AGENT_VALIDATION_TOOL_TIMEOUT_SECONDS` | `300` | Timeout for each build/test/validation command the coding agent runs, including repository-provided `execute` scripts |
 | `AGENT_VALIDATION_MAX_RETRIES` | `3` | Max iterations for error correction |
+| `AGENT_WRITER_MAX_TOOL_ROUNDS` | `5` | Repository-context rounds the technical-writer agent may spend before it has to answer |
 
-See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows.
+See [Agent Documentation](AGENT.md) for full details on the coding and writer agent workflows. The writer agent's wrap-up round can no longer use tools and must answer from what it has already read, and the round that has to produce that answer keeps its tools declared — sending it without them made every provider fall back to a plain-text request that cannot carry the tool history (the calls and their results have to be rewritten as text), so the exit could be missed. Raise `AGENT_WRITER_MAX_TOOL_ROUNDS` for repositories where the model needs to read more files before it can draft the improved issue.
+
+### AI Provider Overload Retries
+
+Providers occasionally refuse a request because they are overloaded — Google answers with HTTP `503` `{"status": "UNAVAILABLE"}` ("This model is currently experiencing high demand"), Anthropic with HTTP `529` `overloaded_error`, OpenAI-compatible gateways with `503`/`overloaded`. These spikes are temporary, so the bot retries the call instead of failing the workflow.
+
+* **Exponential backoff with jitter.** Defaults: `10s → 20s → 40s → 60s` (±20%) for 5 attempts in total, i.e. roughly two minutes before giving up. A single wait is capped at `AI_RETRY_MAX_DELAY`.
+* **The affected PR or issue is told.** As soon as the first wait starts, the bot posts a comment naming the next attempt ("Next attempt **2 of 5** at 2026-09-18 11:14:21 UTC"). At most one such comment is posted per `AI_RETRY_NOTICE_COOLDOWN` (default 5 minutes) and run, so a long outage never floods the conversation.
+* **Giving up is reported too.** When the attempt budget is exhausted, a second comment states how many attempts ran, the backoff used, the last provider error, and that the next retry only happens when the workflow is triggered again (push an update or mention the bot).
+* **Only provider overloads are retried.** Overload wording in a response body counts only on HTTP `5xx` (`overloaded`, `high demand`, `over capacity`, `temporarily unavailable`, or Google's `"status": "UNAVAILABLE"`); a `4xx` is never retried, even when its body mentions availability — at that status the wording describes the request, the model or the account rather than the provider's capacity. A bare `unavailable` is not overload wording either, on any status. Rate limits (HTTP `429` / `RESOURCE_EXHAUSTED`), authentication failures and prompt-too-long errors are not retried — a quota refusal needs operator attention, and the other two are handled elsewhere (history compaction, error reporting). Transient network failures (read timeouts, connection resets) already have their own single retry inside the agent loop.
+* **Where it applies.** Every AI interaction goes through the same client, so PR reviews, agentic reviews, follow-up clarifications, unit-test generation, README sync, i18n coverage, issue coding/writer/triage and E2E test authoring all benefit without per-workflow configuration.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_RETRY_ENABLED` | `true` | Master switch for the provider-overload retry |
+| `AI_RETRY_MAX_ATTEMPTS` | `5` | Total attempts per AI call, including the first one |
+| `AI_RETRY_INITIAL_DELAY` | `10s` | Wait before the second attempt |
+| `AI_RETRY_MULTIPLIER` | `2.0` | Factor applied to the wait after each further failure |
+| `AI_RETRY_MAX_DELAY` | `60s` | Upper bound for a single wait |
+| `AI_RETRY_JITTER` | `0.2` | Relative random spread per wait (`0.2` = ±20%) |
+| `AI_RETRY_NOTICE_COOLDOWN` | `5m` | Minimum gap between two "retry scheduled" comments in one run |

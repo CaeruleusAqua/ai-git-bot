@@ -3,7 +3,6 @@ package org.remus.giteabot.ai.openai;
 import lombok.extern.slf4j.Slf4j;
 import org.remus.giteabot.agent.shared.AgentJackson;
 import org.remus.giteabot.ai.AbstractAiClient;
-import org.remus.giteabot.ai.AiClientDelegateSupport;
 import org.remus.giteabot.ai.AiMessage;
 import org.remus.giteabot.ai.ChatTurn;
 import org.remus.giteabot.ai.StopReason;
@@ -18,6 +17,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * AI client implementation for OpenAI-compatible APIs.
@@ -32,12 +32,24 @@ public class OpenAiClient extends AbstractAiClient {
 
     private final RestClient restClient;
     private final boolean nativeToolsEnabled;
+    private final OpenAiFlavor flavor;
+    /**
+     * Free-form switches sent as {@code chat_template_kwargs}; {@code null}
+     * when {@code openai.chat-template-kwargs} is unset, so the server's own
+     * defaults apply. The keys and value types are whatever the served
+     * model's chat template expects — the bot never interprets them.
+     */
+    private final Map<String, Object> chatTemplateKwargs;
     private final ObjectMapper jackson = AgentJackson.mapper();
 
-    public OpenAiClient(RestClient restClient, String model, int maxTokens, boolean nativeToolsEnabled) {
+    public OpenAiClient(RestClient restClient, String model, int maxTokens,
+                        boolean nativeToolsEnabled, OpenAiFlavor flavor,
+                        Map<String, Object> chatTemplateKwargs) {
         super(model, maxTokens);
         this.restClient = restClient;
         this.nativeToolsEnabled = nativeToolsEnabled;
+        this.flavor = flavor == null ? OpenAiFlavor.STANDARD : flavor;
+        this.chatTemplateKwargs = chatTemplateKwargs;
     }
 
     @Override
@@ -69,34 +81,36 @@ public class OpenAiClient extends AbstractAiClient {
                                   String systemPrompt,
                                   String modelOverride,
                                   Integer maxTokensOverride) {
-        if (!supportsNativeTools() || tools == null || tools.isEmpty()) {
-            return AiClientDelegateSupport.delegateToChat(this, conversationHistory,
-                    newUserMessage, systemPrompt, modelOverride, maxTokensOverride);
-        }
+        boolean useNativeTools = supportsNativeTools() && tools != null && !tools.isEmpty();
+        String effectivePrompt = useNativeTools ? systemPrompt : resolvePrompt(systemPrompt);
         String effectiveModel = (modelOverride != null && !modelOverride.isBlank())
                 ? modelOverride : getModel();
         int effectiveMaxTokens = (maxTokensOverride != null && maxTokensOverride > 0)
                 ? maxTokensOverride : getMaxTokens();
 
         List<AiMessage> fullHistory = new ArrayList<>(conversationHistory);
-        if (newUserMessage != null && !newUserMessage.isBlank()) {
-            fullHistory.add(AiMessage.builder().role("user").content(newUserMessage).build());
+        if (!useNativeTools || (newUserMessage != null && !newUserMessage.isBlank())) {
+            fullHistory.add(AiMessage.builder().role("user")
+                    .content(newUserMessage == null ? "" : newUserMessage).build());
         }
 
-        List<OpenAiRequest.Message> messages = buildMessages(systemPrompt, fullHistory);
-        List<OpenAiRequest.Tool> toolPayloads = tools.stream()
+        List<OpenAiRequest.Message> messages = buildMessages(effectivePrompt, fullHistory);
+        List<OpenAiRequest.Tool> toolPayloads = useNativeTools ? tools.stream()
                 .map(this::toToolPayload)
-                .toList();
+                .toList() : List.of();
 
         OpenAiRequest request = OpenAiRequest.builder()
                 .model(effectiveModel)
                 .maxTokens(effectiveMaxTokens)
+                .reasoningEffort(flavor.reasoningEffort())
+                .chatTemplateKwargs(chatTemplateKwargs)
                 .messages(messages)
-                .tools(toolPayloads)
+                .tools(useNativeTools ? toolPayloads : null)
                 .build();
 
-        log.info("OpenAI chat-with-tools request: model={}, tools={}, history={}",
-                effectiveModel, toolPayloads.size(), messages.size());
+        log.info("OpenAI chat turn request: model={}, flavor={}, chat_template_kwargs={}, tools={}, history={}",
+                effectiveModel, flavor.getId(), chatTemplateKwargs,
+                toolPayloads.size(), messages.size());
 
         OpenAiResponse response = executeRequest(request);
         return interpret(request, response);
@@ -105,6 +119,9 @@ public class OpenAiClient extends AbstractAiClient {
     @Override
     public boolean isPromptTooLongError(HttpClientErrorException e) {
         String body = e.getResponseBodyAsString();
+        if (body == null) {
+            return false;
+        }
         String normalized = body.toLowerCase(Locale.ROOT);
         return normalized.contains("maximum context length")
                 || normalized.contains("too many tokens")
@@ -167,14 +184,15 @@ public class OpenAiClient extends AbstractAiClient {
     }
 
     private ChatTurn interpret(OpenAiRequest request, OpenAiResponse response) {
-        if (response == null || response.getChoices() == null || response.getChoices().isEmpty()) {
+        if (response == null) {
             log.warn("Empty response from OpenAI tool-call request");
-            return ChatTurn.text("Unable to generate response - empty reply from AI.");
+            return new ChatTurn("", List.of(), StopReason.OTHER, 0L, 0L);
         }
-        OpenAiResponse.Choice choice = response.getChoices().getFirst();
-        OpenAiResponse.Message message = choice.getMessage();
+        OpenAiResponse.Choice choice = response.getChoices() == null || response.getChoices().isEmpty()
+                ? null : response.getChoices().getFirst();
+        OpenAiResponse.Message message = choice == null ? null : choice.getMessage();
         String text = message != null && message.getContent() != null ? message.getContent() : "";
-        StopReason reason = mapStopReason(choice.getFinishReason());
+        StopReason reason = mapStopReason(choice == null ? null : choice.getFinishReason());
 
         List<ToolCall> calls = new ArrayList<>();
         if (message != null && message.getToolCalls() != null) {
@@ -196,20 +214,25 @@ public class OpenAiClient extends AbstractAiClient {
                 calls.add(new ToolCall(tcr.getId(),
                         ToolNameSanitizer.desanitize(tcr.getFunction().getName()), args));
             }
-            if (!calls.isEmpty()) {
+            if (!calls.isEmpty() && reason == StopReason.END_TURN) {
                 reason = StopReason.TOOL_USE;
             }
         }
-        long inputTokens = 0L;
-        long outputTokens = 0L;
+        Integer inputTokens = null;
+        Integer outputTokens = null;
         if (response.getUsage() != null) {
             inputTokens = response.getUsage().getPromptTokens();
             outputTokens = response.getUsage().getCompletionTokens();
             log.info("OpenAI chat-with-tools: {} prompt tokens, {} completion tokens, {} tool_call(s)",
                     inputTokens, outputTokens, calls.size());
-            reportUsage(inputTokens, outputTokens, 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(validUsageCount(inputTokens), validUsageCount(outputTokens),
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
-        return new ChatTurn(text, calls, reason, inputTokens, outputTokens);
+        return ChatTurn.withReportedUsage(text, calls, reason,
+                inputTokens == null ? null : inputTokens.longValue(),
+                outputTokens == null ? null : outputTokens.longValue());
     }
 
     private StopReason mapStopReason(String finishReason) {
@@ -224,12 +247,19 @@ public class OpenAiClient extends AbstractAiClient {
         };
     }
 
+    private static Integer validUsageCount(Integer count) {
+        // The legacy audit stores unavailable counters as zero; ChatTurn retains separate presence flags.
+        return count == null || count < 0 ? null : count;
+    }
+
     private String doRequest(String model, int maxTokens,
                              List<OpenAiRequest.Message> messages,
                              List<OpenAiRequest.Tool> tools, String context) {
         OpenAiRequest request = OpenAiRequest.builder()
                 .model(model)
                 .maxTokens(maxTokens)
+                .reasoningEffort(flavor.reasoningEffort())
+                .chatTemplateKwargs(chatTemplateKwargs)
                 .messages(messages)
                 .tools(tools)
                 .build();
@@ -284,12 +314,13 @@ public class OpenAiClient extends AbstractAiClient {
                     context,
                     response.getUsage().getPromptTokens(),
                     response.getUsage().getCompletionTokens());
-            reportUsage(response.getUsage().getPromptTokens(),
-                    response.getUsage().getCompletionTokens(), 0L, 0L, request, response);
+            OpenAiResponse.PromptTokensDetails details = response.getUsage().getPromptTokensDetails();
+            reportUsage(validUsageCount(response.getUsage().getPromptTokens()),
+                    validUsageCount(response.getUsage().getCompletionTokens()),
+                    details != null ? details.getCacheWriteTokens() : null,
+                    details != null ? details.getCachedTokens() : null, request, response);
         }
 
         return content;
     }
 }
-
-

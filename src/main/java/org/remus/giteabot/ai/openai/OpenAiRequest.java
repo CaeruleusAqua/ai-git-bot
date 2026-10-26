@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Chat-Completions request payload (OpenAI flavour). Tool-related fields
@@ -20,6 +21,31 @@ public class OpenAiRequest {
 
     @JsonProperty("max_completion_tokens")
     private int maxTokens;
+
+    /**
+     * Sent only when the provider requires it. Some gateway front-ends inject
+     * a default {@code reasoning_effort} value; for models such as
+     * {@code gpt-5.6-sol} the Chat Completions API then rejects function tools
+     * unless {@code reasoning_effort} is explicitly {@code "none"}. Set via the
+     * integration's model flavor — see {@link OpenAiFlavor} — which is resolved
+     * in {@code OpenAiProviderMetadata#createClient} and handed to
+     * {@code OpenAiClient} so this field is populated only when the
+     * {@code no_reasoning} flavor is selected.
+     */
+    @JsonProperty("reasoning_effort")
+    private String reasoningEffort;
+
+    /**
+     * Provider-side chat template switches, sent verbatim as
+     * {@code chat_template_kwargs}. vLLM hands these to the model's Jinja chat
+     * template, so they override the server's
+     * {@code --default-chat-template-kwargs} for this one request — that is how
+     * a review bot asks for {@code enable_thinking=false} (or a lower
+     * {@code reasoning_effort}) on an endpoint another client uses as a
+     * full-effort code agent.
+     */
+    @JsonProperty("chat_template_kwargs")
+    private Map<String, Object> chatTemplateKwargs;
 
     private List<Message> messages;
 

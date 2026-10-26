@@ -3,6 +3,7 @@ package org.remus.giteabot.agent.issueimpl;
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.validation.ToolResult;
 import org.remus.giteabot.config.AgentConfigProperties;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 
 import java.util.List;
 import java.util.Map;
@@ -181,21 +182,19 @@ public class AgentPromptBuilder {
     /**
      * Builds a human-readable representation of the repository file tree.
      */
-    public String buildTreeContext(List<Map<String, Object>> tree) {
+    public String buildTreeContext(List<RepositoryTreeEntry> tree) {
         if (tree == null || tree.isEmpty()) {
             return "No files found in repository.";
         }
         StringBuilder sb = new StringBuilder("Repository file tree:\n");
         int count = 0;
-        for (Map<String, Object> entry : tree) {
+        for (RepositoryTreeEntry entry : tree) {
             if (count >= maxTreeFilesForContext) {
                 sb.append("... (truncated, ").append(tree.size() - count).append(" more files)\n");
                 break;
             }
-            String type = (String) entry.getOrDefault("type", "blob");
-            String path = (String) entry.getOrDefault("path", "");
-            if ("blob".equals(type)) {
-                sb.append("  ").append(path).append("\n");
+            if (entry.isFile()) {
+                sb.append("  ").append(entry.path()).append("\n");
             }
             count++;
         }
@@ -356,6 +355,37 @@ public class AgentPromptBuilder {
                 
                 Available file tools: `write-file`, `patch-file`, `mkdir`, `delete-file`
                 Available build tools (configured by admin): see system prompt.""";
+    }
+
+    /**
+     * Feedback message used by the native-tooling strategy when the model
+     * returned a plain-language turn without any tool call, and the workspace
+     * carries no changes yet.
+     *
+     * <p>{@link #buildMissingToolFeedback()} cannot be reused here: it asks for a
+     * JSON {@code runTools} envelope, which contradicts the function-calling
+     * protocol the NATIVE loop actually speaks, and it offers the model no way
+     * to complete a task that needs no repository change. Naming both exits is
+     * what lets a read-only issue finish with a posted answer instead of
+     * looping until the round cap (see
+     * {@code doc/development-archive/answer-only-completion-architecture.md}).</p>
+     */
+    public String buildNativeNoToolCallFeedback() {
+        return """
+                ## No Tool Calls Received
+
+                Your last reply contained no tool calls, so nothing was executed.
+
+                If this issue requires repository changes, call the tools for them now: write or \
+                patch the files, then run the project's build or test tool to validate the change.
+
+                If this issue requires no repository change (a question, an analysis, or an \
+                explicitly read-only request), do not call any tool — reply with your complete \
+                final answer as plain text. Write that answer out in full in that reply: do not \
+                refer back to an earlier message and do not reply with only a summary of one. It \
+                is posted as a comment on the issue and no pull request is opened.
+
+                A reply that neither calls tools nor answers the issue ends the run as a failure.""";
     }
 
     /**

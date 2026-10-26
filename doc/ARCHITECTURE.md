@@ -32,7 +32,7 @@ entity fields, or implementation methods.
 
 ```mermaid
 graph LR
-    Git["Git platform\nGitea / GitHub / GitLab / Bitbucket"]
+    Git["Git platform\nGitea / GitHub / GitLab / Bitbucket / Azure DevOps"]
     Gateway["AI-Git-Bot\nSpring Boot gateway"]
     AI["AI provider\nAnthropic / OpenAI / Gemini / Ollama / llama.cpp"]
     DB[("Database\nPostgreSQL in production")]
@@ -82,7 +82,7 @@ workflows where supported.
 
 Provider metadata creates configured clients from persisted Git integrations and
 keeps authentication and URL conventions provider-specific. The current
-provider types are Gitea, GitHub, GitLab, and Bitbucket Cloud.
+provider types are Gitea, GitHub, GitLab, Bitbucket Cloud, and Azure DevOps.
 
 Webhook handlers are the other side of this seam. Each provider has its own event
 shape and headers, so provider-specific webhook code translates events into the
@@ -179,9 +179,10 @@ uses file-backed H2 by default. Flyway migrations are split by database vendor
 under `src/main/resources/db/migration/` and JPA validates the resulting schema.
 
 Sensitive integration values are encrypted with AES-GCM when
-`APP_ENCRYPTION_KEY` is configured. Without that key, credentials are stored in
-plain text for development convenience; production deployments should always set
-it and preserve it across restarts so existing secrets remain decryptable.
+`APP_ENCRYPTION_KEY` is configured. Without that key, other credentials are
+stored in plain text for development convenience and SSH private keys are
+rejected. Production deployments should always set it and preserve it across
+restarts so existing secrets remain decryptable.
 
 ## MCP and tool integration
 

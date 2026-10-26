@@ -2,6 +2,7 @@ package org.remus.giteabot.agent.writerimpl;
 
 import org.remus.giteabot.agent.model.ImplementationPlan;
 import org.remus.giteabot.agent.validation.ToolResult;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 
 import java.util.List;
 
@@ -43,6 +44,28 @@ public class WriterPromptBuilder {
         }
         sb.append("Use these results to continue. If no critical questions remain, return the final revised issue draft.");
         return sb.toString();
+    }
+
+    /**
+     * Delivered as the follow-up of the wrap-up round, once the repository-context
+     * budget is spent: the model gets one final round to answer from what it has
+     * already read. Generated at runtime, so it cannot be clobbered by an edited
+     * {@code system_prompts} row.
+     */
+    public String buildWrapUpInstruction() {
+        return """
+                ## Context rounds exhausted
+
+                You have used all repository-context rounds for this run and cannot call tools any more.
+
+                Return your final JSON answer now, from what you have already read:
+                - If the issue can be improved with that information, set "readyToCreate": true and fill
+                  "revisedIssueDraft" (plus "assumptions" for anything you inferred).
+                - If a fact is still missing, put the specific question in "clarifyingQuestions" and name the file
+                  or behaviour you could not verify.
+
+                A further tool request ends this run and the author is asked for details instead.
+                """;
     }
 
     public String buildIssueBody(Long originatingIssueNumber, WriterPlan plan) {
@@ -96,21 +119,19 @@ public class WriterPromptBuilder {
         }
     }
 
-    public String buildTreeContext(List<java.util.Map<String, Object>> tree, int maxFiles) {
+    public String buildTreeContext(List<RepositoryTreeEntry> tree, int maxFiles) {
         if (tree == null || tree.isEmpty()) {
             return "No repository tree is available.";
         }
         StringBuilder sb = new StringBuilder();
         int count = 0;
-        for (java.util.Map<String, Object> entry : tree) {
+        for (RepositoryTreeEntry entry : tree) {
             if (count >= maxFiles) {
                 sb.append("... (truncated, ").append(tree.size() - count).append(" more entries)\n");
                 break;
             }
-            String type = String.valueOf(entry.getOrDefault("type", "blob"));
-            String path = String.valueOf(entry.getOrDefault("path", ""));
-            if ("blob".equals(type) && !path.isBlank()) {
-                sb.append("- ").append(path).append("\n");
+            if (entry.isFile() && entry.path() != null && !entry.path().isBlank()) {
+                sb.append("- ").append(entry.path()).append("\n");
                 count++;
             }
         }

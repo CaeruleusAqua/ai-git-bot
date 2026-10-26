@@ -1,15 +1,19 @@
 package org.remus.giteabot.gitlab;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.gitlab.model.GitLabCommit;
 import org.remus.giteabot.gitlab.model.GitLabReview;
 import org.remus.giteabot.gitlab.model.GitLabReviewComment;
+import org.remus.giteabot.gitlab.model.GitLabTreeEntry;
 import org.remus.giteabot.repository.ArtifactCommentRenderer;
 import org.remus.giteabot.repository.ArtifactUploadSupport;
 import org.remus.giteabot.repository.PostReviewAction;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.springframework.core.ParameterizedTypeReference;
@@ -20,7 +24,6 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,18 @@ public class GitLabApiClient implements RepositoryApiClient {
     @Override
     public String formatPullRequestReference(Long prNumber) {
         return "!" + prNumber;
+    }
+
+    @Override
+    public boolean isPullRequestOpen(String owner, String repo, Long pullNumber) {
+        Map<String, Object> mr = gitlabRestClient.get()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}",
+                        encodeProjectPath(owner, repo), pullNumber)
+                .retrieve()
+                .body(new ParameterizedTypeReference<>() {});
+        // The transitional "locked" state deliberately denies workflow writes;
+        // this does not mean the MR is closed. Only "opened" permits a write.
+        return mr != null && "opened".equals(mr.get("state"));
     }
 
     @Override
@@ -119,14 +134,22 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting merge request note on MR !{} in {}/{}", pullNumber, owner, repo);
         String projectPath = encodeProjectPath(owner, repo);
-        gitlabRestClient.post()
+        Map<?, ?> response = gitlabRestClient.post()
                 .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/notes", projectPath, pullNumber)
-                .body(Map.of("body", body))
-                .retrieve()
-                .toBodilessEntity();
+                .body(Map.of("body", body)).retrieve().body(Map.class);
+        return RepositoryApiClient.commentId(response);
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        String projectPath = encodeProjectPath(owner, repo);
+        gitlabRestClient.put()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/notes/{note_id}",
+                        projectPath, pullNumber, commentId)
+                .body(Map.of("body", body)).retrieve().toBodilessEntity();
     }
 
     /**
@@ -255,6 +278,30 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
+    public void addPullRequestReaction(String owner, String repo, Long pullNumber, String reaction) {
+        log.info("Adding '{}' award emoji to MR !{} in {}/{}", reaction, pullNumber, owner, repo);
+        String projectPath = encodeProjectPath(owner, repo);
+        gitlabRestClient.post()
+                .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/award_emoji",
+                        projectPath, pullNumber)
+                .body(Map.of("name", reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
+    public void addIssueReaction(String owner, String repo, Long issueNumber, String reaction) {
+        log.info("Adding '{}' award emoji to issue #{} in {}/{}", reaction, issueNumber, owner, repo);
+        String projectPath = encodeProjectPath(owner, repo);
+        gitlabRestClient.post()
+                .uri("/api/v4/projects/{projectPath}/issues/{iid}/award_emoji",
+                        projectPath, issueNumber)
+                .body(Map.of("name", reaction))
+                .retrieve()
+                .toBodilessEntity();
+    }
+
+    @Override
     public void postInlineReviewComment(String owner, String repo, Long pullNumber,
                                         String filePath, int line, String body) {
         log.info("Posting inline note on MR !{} in {}/{} at {}:{}", pullNumber, owner, repo, filePath, line);
@@ -345,15 +392,17 @@ public class GitLabApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for MR !{} in {}/{}", pullNumber, owner, repo);
         String projectPath = encodeProjectPath(owner, repo);
-        List<Map<String, Object>> commits = gitlabRestClient.get()
+        List<GitLabCommit> commits = gitlabRestClient.get()
                 .uri("/api/v4/projects/{projectPath}/merge_requests/{iid}/commits",
                         projectPath, pullNumber)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
-        return commits != null ? commits : List.of();
+        return commits != null
+                ? commits.stream().map(GitLabCommit::toPullRequestCommit).toList()
+                : List.of();
     }
 
     @Override
@@ -448,10 +497,10 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
     @Override
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         log.info("Fetching repository tree for {}/{} at ref={}", owner, repo, ref);
         String projectPath = encodeProjectPath(owner, repo);
-        List<Map<String, Object>> tree = gitlabRestClient.get()
+        List<GitLabTreeEntry> tree = gitlabRestClient.get()
                 .uri("/api/v4/projects/{projectPath}/repository/tree?recursive=true&ref={ref}&per_page=100",
                         projectPath, ref)
                 .retrieve()
@@ -459,11 +508,7 @@ public class GitLabApiClient implements RepositoryApiClient {
         if (tree == null) {
             return List.of();
         }
-        // Normalize to match the Gitea tree format (path, type fields)
-        return tree.stream().map(entry -> {
-            // GitLab uses "blob"/"tree", same as Gitea convention
-            return (Map<String, Object>) new LinkedHashMap<>(entry);
-        }).collect(Collectors.toList());
+        return tree.stream().map(GitLabTreeEntry::toRepositoryTreeEntry).toList();
     }
 
     @Override
@@ -481,42 +526,6 @@ public class GitLabApiClient implements RepositoryApiClient {
     }
 
 
-
-    @Override
-    public void createOrUpdateFile(String owner, String repo, String path, String content,
-                                   String message, String branch, String sha) {
-        log.info("Creating/updating file {} on branch '{}' in {}/{}", path, branch, owner, repo);
-        String projectPath = encodeProjectPath(owner, repo);
-        String base64Content = Base64.getEncoder().encodeToString(content.getBytes());
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("branch", branch);
-        body.put("content", base64Content);
-        body.put("commit_message", message);
-        body.put("encoding", "base64");
-        if (sha != null) {
-            body.put("last_commit_id", sha);
-        }
-
-        if (sha != null) {
-            // Update existing file
-            gitlabRestClient.put()
-                    .uri("/api/v4/projects/{projectPath}/repository/files/{filePath}",
-                            projectPath, path)
-                    .body(body)
-                    .retrieve()
-                    .toBodilessEntity();
-        } else {
-            // Create new file
-            gitlabRestClient.post()
-                    .uri("/api/v4/projects/{projectPath}/repository/files/{filePath}",
-                            projectPath, path)
-                    .body(body)
-                    .retrieve()
-                    .toBodilessEntity();
-        }
-        log.info("File {} committed successfully", path);
-    }
 
     @Override
     public Long createPullRequest(String owner, String repo, String title, String body,
