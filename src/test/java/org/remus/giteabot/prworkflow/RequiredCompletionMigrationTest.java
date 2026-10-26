@@ -15,7 +15,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** Provisional V58 -> V62 development check on H2, not a V60 upgrade or PostgreSQL qualification. */
+/** H2 upgrade smoke test; PostgreSQL SQL here does not qualify a PostgreSQL upgrade. */
 class RequiredCompletionMigrationTest {
 
     @ParameterizedTest
@@ -23,7 +23,7 @@ class RequiredCompletionMigrationTest {
     void nullableLegacyKeysAndPerEndpointRequiredKeys(String scriptDialect) throws Exception {
         String url = "jdbc:h2:mem:required-migration-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         Flyway.configure().dataSource(url, "sa", "")
-                .locations("filesystem:src/main/resources/db/migration/h2").target("58").load().migrate();
+                .locations("filesystem:src/main/resources/db/migration/h2").target("59").load().migrate();
         try (var connection = DriverManager.getConnection(url, "sa", "");
              var statement = connection.createStatement()) {
             statement.executeUpdate("""
@@ -37,7 +37,7 @@ class RequiredCompletionMigrationTest {
                            ('legacy-2', 1, 'prworkflow.completed', '{}', 'PENDING', CURRENT_TIMESTAMP)
                     """);
             ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/" + scriptDialect
-                    + "/V62__required_workflow_completion_event_keys.sql"));
+                    + "/V2026_10_18_1359__required_workflow_completion_event_keys.sql"));
             try (var column = connection.getMetaData().getColumns(null, null,
                     "PR_WORKFLOW_RUNS", "REQUIRED_COMPLETION_HASH")) {
                 assertThat(column.next()).isTrue();

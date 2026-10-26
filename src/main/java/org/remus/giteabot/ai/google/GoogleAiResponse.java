@@ -3,6 +3,8 @@ package org.remus.giteabot.ai.google;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+import org.remus.giteabot.ai.UsageCounterDeserializer;
+import tools.jackson.databind.annotation.JsonDeserialize;
 
 import java.util.List;
 import java.util.Map;
@@ -64,16 +66,30 @@ public class GoogleAiResponse {
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class UsageMetadata {
         @JsonProperty("promptTokenCount")
-        private int promptTokenCount;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer promptTokenCount;
 
         @JsonProperty("cachedContentTokenCount")
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
         private Integer cachedContentTokenCount;
 
         @JsonProperty("candidatesTokenCount")
-        private int candidatesTokenCount;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer candidatesTokenCount;
+
+        @JsonProperty("thoughtsTokenCount")
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer thoughtsTokenCount = 0;
+
+        /** Candidate output and thinking are disjoint Google counters. */
+        public Long outputTokens() {
+            if (candidatesTokenCount == null || candidatesTokenCount < 0
+                    || thoughtsTokenCount == null || thoughtsTokenCount < 0) return null;
+            return (long) candidatesTokenCount + thoughtsTokenCount;
+        }
 
         @JsonProperty("totalTokenCount")
-        private int totalTokenCount;
+        @JsonDeserialize(using = UsageCounterDeserializer.class)
+        private Integer totalTokenCount = 0;
     }
 }
-

@@ -1,13 +1,17 @@
 package org.remus.giteabot.bitbucket;
 
 import lombok.extern.slf4j.Slf4j;
+import org.remus.giteabot.bitbucket.model.BitbucketCommit;
 import org.remus.giteabot.bitbucket.model.BitbucketReviewComment;
+import org.remus.giteabot.bitbucket.model.BitbucketTreeEntry;
 import org.remus.giteabot.repository.ArtifactCommentRenderer;
 import org.remus.giteabot.repository.ArtifactUploadSupport;
 import org.remus.giteabot.repository.RepositoryApiClient;
 import org.remus.giteabot.repository.WorkflowDispatchRequest;
 import org.remus.giteabot.repository.WorkflowRunStatus;
+import org.remus.giteabot.repository.model.PullRequestCommit;
 import org.remus.giteabot.repository.model.RepositoryCredentials;
+import org.remus.giteabot.repository.model.RepositoryTreeEntry;
 import org.remus.giteabot.repository.model.Review;
 import org.remus.giteabot.repository.model.ReviewComment;
 import org.springframework.core.ParameterizedTypeReference;
@@ -22,6 +26,7 @@ import org.springframework.web.client.RestClient;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Bitbucket Cloud implementation of {@link RepositoryApiClient}.
@@ -34,6 +39,7 @@ public class BitbucketApiClient implements RepositoryApiClient {
 
     private final RestClient restClient;
     private final RepositoryCredentials credentials;
+    private volatile BitbucketAccount authenticatedAccount;
 
     /**
      * Creates a BitbucketApiClient with the given RestClient and credentials.
@@ -49,6 +55,36 @@ public class BitbucketApiClient implements RepositoryApiClient {
     @Override
     public RepositoryCredentials getCredentials() {
         return credentials;
+    }
+
+    /**
+     * Returns the Bitbucket account behind the configured e-mail/API-token pair.
+     * The result is memoized; clients are re-created whenever the integration changes.
+     *
+     * @throws IllegalStateException when Bitbucket returns neither an account id nor a uuid
+     */
+    public BitbucketAccount getAuthenticatedAccount() {
+        BitbucketAccount account = authenticatedAccount;
+        if (account == null) {
+            account = restClient.get()
+                    .uri("/user")
+                    .retrieve()
+                    .body(BitbucketAccount.class);
+            if (account == null || (account.accountId() == null && account.uuid() == null)) {
+                throw new IllegalStateException("Bitbucket /user returned neither account_id nor uuid");
+            }
+            authenticatedAccount = account;
+        }
+        return account;
+    }
+
+    /**
+     * Bitbucket mentions are picked via the {@code @} autocomplete, which searches by
+     * display name, so that name (or the nickname) is what users should type.
+     */
+    @Override
+    public Optional<String> getBotMentionName() {
+        return Optional.ofNullable(getAuthenticatedAccount().name());
     }
 
     // ---- Pull request operations ----
@@ -86,25 +122,31 @@ public class BitbucketApiClient implements RepositoryApiClient {
     @Override
     public void postReviewComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting review comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        restClient.post()
-                .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments",
-                        owner, repo, pullNumber)
-                .body(Map.of("content", Map.of("raw", body)))
-                .retrieve()
-                .toBodilessEntity();
+        commentCreationRequest(owner, repo, pullNumber, body).toBodilessEntity();
         log.info("Review comment posted successfully");
     }
 
     @Override
-    public void postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
+    public Long postPullRequestComment(String owner, String repo, Long pullNumber, String body) {
         log.info("Posting comment on PR #{} in {}/{}", pullNumber, owner, repo);
-        restClient.post()
+        Map<?, ?> response = commentCreationRequest(owner, repo, pullNumber, body).body(Map.class);
+        log.info("Comment posted successfully");
+        return RepositoryApiClient.commentId(response);
+    }
+
+    @Override
+    public void updatePullRequestComment(String owner, String repo, Long pullNumber, long commentId, String body) {
+        restClient.put()
+                .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments/{comment_id}",
+                        owner, repo, pullNumber, commentId)
+                .body(Map.of("content", Map.of("raw", body))).retrieve().toBodilessEntity();
+    }
+
+    private RestClient.ResponseSpec commentCreationRequest(String owner, String repo, Long pullNumber, String body) {
+        return restClient.post()
                 .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/comments",
                         owner, repo, pullNumber)
-                .body(Map.of("content", Map.of("raw", body)))
-                .retrieve()
-                .toBodilessEntity();
-        log.info("Comment posted successfully");
+                .body(Map.of("content", Map.of("raw", body))).retrieve();
     }
 
     /**
@@ -280,18 +322,17 @@ public class BitbucketApiClient implements RepositoryApiClient {
     // ---- PR context enrichment ----
 
     @Override
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> getPullRequestCommits(String owner, String repo, Long pullNumber) {
+    public List<PullRequestCommit> getPullRequestCommits(String owner, String repo, Long pullNumber) {
         log.info("Fetching commits for PR #{} in {}/{}", pullNumber, owner, repo);
-        Map<String, Object> result = restClient.get()
+        BitbucketCommit.Page page = restClient.get()
                 .uri("/repositories/{workspace}/{repo}/pullrequests/{pr_id}/commits",
                         owner, repo, pullNumber)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        if (result != null && result.containsKey("values")) {
-            return (List<Map<String, Object>>) result.get("values");
+                .body(BitbucketCommit.Page.class);
+        if (page == null || page.getValues() == null) {
+            return List.of();
         }
-        return List.of();
+        return page.getValues().stream().map(BitbucketCommit::toPullRequestCommit).toList();
     }
 
     @Override
@@ -321,18 +362,17 @@ public class BitbucketApiClient implements RepositoryApiClient {
     }
 
     @Override
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> getRepositoryTree(String owner, String repo, String ref) {
+    public List<RepositoryTreeEntry> getRepositoryTree(String owner, String repo, String ref) {
         log.info("Fetching repository tree for {}/{} at ref={}", owner, repo, ref);
-        Map<String, Object> result = restClient.get()
+        BitbucketTreeEntry.Page page = restClient.get()
                 .uri("/repositories/{workspace}/{repo}/src/{ref}/?max_depth=100&pagelen=100",
                         owner, repo, ref)
                 .retrieve()
-                .body(new ParameterizedTypeReference<>() {});
-        if (result != null && result.containsKey("values")) {
-            return (List<Map<String, Object>>) result.get("values");
+                .body(BitbucketTreeEntry.Page.class);
+        if (page == null || page.getValues() == null) {
+            return List.of();
         }
-        return List.of();
+        return page.getValues().stream().map(BitbucketTreeEntry::toRepositoryTreeEntry).toList();
     }
 
     @Override
@@ -399,7 +439,7 @@ public class BitbucketApiClient implements RepositoryApiClient {
             body.put("variables", variables);
         }
         Map<String, Object> response = restClient.post()
-                .uri("/2.0/repositories/{owner}/{repo}/pipelines/", request.owner(), request.repo())
+                .uri("/repositories/{owner}/{repo}/pipelines/", request.owner(), request.repo())
                 .body(body)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {});
@@ -419,7 +459,7 @@ public class BitbucketApiClient implements RepositoryApiClient {
     public WorkflowRunStatus getWorkflowRun(String owner, String repo, String runId) {
         try {
             Map<String, Object> pipeline = restClient.get()
-                    .uri("/2.0/repositories/{owner}/{repo}/pipelines/{uuid}", owner, repo, runId)
+                    .uri("/repositories/{owner}/{repo}/pipelines/{uuid}", owner, repo, runId)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {});
             if (pipeline == null) return WorkflowRunStatus.NOT_FOUND;

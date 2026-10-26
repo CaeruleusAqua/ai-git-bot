@@ -28,6 +28,8 @@ import java.util.stream.Collectors;
  *     thrown (errors for all fields are aggregated into a single exception).</li>
  *     <li>Type-checked values are normalised (e.g. {@code "On"} → {@code "true"},
  *     {@code "42 "} → {@code "42"}) so the persisted form is canonical.</li>
+ *     <li>Integer values, including defaults, must satisfy any declared
+ *     inclusive minimum/maximum bounds.</li>
  *     <li>Unknown keys (not declared in the schema) are silently dropped — the
  *     UI never submits them, but old rows after a workflow downgrade should
  *     not break.</li>
@@ -164,7 +166,16 @@ public class WorkflowParamsValidator {
             }
             case INTEGER -> {
                 try {
-                    yield Long.toString(Long.parseLong(text));
+                    long value = Long.parseLong(text);
+                    if (field.minimum() != null && value < field.minimum()) {
+                        errors.add("Parameter '" + field.label() + "' must be at least " + field.minimum());
+                        yield null;
+                    }
+                    if (field.maximum() != null && value > field.maximum()) {
+                        errors.add("Parameter '" + field.label() + "' must be at most " + field.maximum());
+                        yield null;
+                    }
+                    yield Long.toString(value);
                 } catch (NumberFormatException nfe) {
                     errors.add("Parameter '" + field.label() + "' must be an integer");
                     yield null;

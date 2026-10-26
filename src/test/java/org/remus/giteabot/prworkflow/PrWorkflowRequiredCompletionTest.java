@@ -118,10 +118,10 @@ class PrWorkflowRequiredCompletionTest {
         git.setName("required-git-" + suffix);
         git.setUrl("http://localhost");
         git.setToken("test");
+        git.setUsername("required-bot");
         gits.save(git);
         bot = new Bot();
         bot.setName("required-bot-" + suffix);
-        bot.setUsername("required-bot");
         bot.setAiIntegration(ai);
         bot.setGitIntegration(git);
         bot.setSystemPrompt(prompts.findAll().getFirst());

@@ -7,13 +7,13 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.5</version>
+        <version>4.0.9</version>
         <relativePath/>
     </parent>
 
     <groupId>org.remus</groupId>
     <artifactId>ai-git-bot</artifactId>
-    <version>1.28.0-SNAPSHOT</version>
+    <version>1.30.0-SNAPSHOT</version>
     <name>AI Git Bot</name>
     <description>The self-hosted AI workflow automation platform for Git repositories.</description>
     <url>https://github.com/tmseidel/ai-git-bot</url>
